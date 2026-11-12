@@ -6,14 +6,26 @@
 
 #![deny(missing_docs)]
 
+pub mod auth;
+pub mod authcap;
+pub mod authroutes;
 pub mod config;
 pub mod error;
 pub mod health;
 pub mod openapi;
+pub mod realtime;
 pub mod router;
+pub mod rpc;
 pub mod state;
+pub mod wire;
 
+pub use auth::AuthContext;
+pub use authcap::{AuthCapabilities, SsoProvider};
 pub use config::{HttpConfig, HttpConfigError};
 pub use error::{ApiError, ErrorBody, ErrorCode};
 pub use router::router;
 pub use state::AppState;
+pub use wire::{
+    BotReply, EventView, InvitationReply, MessageView, MessagesReply, RunView, RunsReply,
+    SendReply, SpaceReply,
+};

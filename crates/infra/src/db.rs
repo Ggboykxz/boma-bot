@@ -4,20 +4,27 @@
 //! binary with `sqlx::migrate!`, so `boma migrate` is one forward-only step in a deploy and never
 //! depends on a separate tool being installed.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use boma_app::ReadinessCheck;
 use sqlx::{
     PgPool,
     migrate::{MigrateError, Migrator},
-    postgres::PgPoolOptions,
+    postgres::{PgConnectOptions, PgPoolOptions},
 };
 
 use crate::config::DatabaseSettings;
 
 /// Migrations embedded at compile time; the directory is relative to this crate's `Cargo.toml`.
 static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
+
+/// The schema the product's tables live in.
+///
+/// The search path is pinned so a role that has a schema of its own (the default search path
+/// starts with `"$user"`) never receives the tables of the product in that schema: the migration
+/// pins the same path, so the migration and the product always agree on where a table is.
+const PUBLIC_SCHEMA: &str = "public";
 
 /// A pool of Postgres connections.
 #[derive(Clone)]
@@ -32,7 +39,9 @@ impl Postgres {
     ///
     /// Returns [`sqlx::Error`] when the pool cannot be created or the first connection fails.
     pub async fn connect(settings: &DatabaseSettings) -> Result<Self, sqlx::Error> {
-        let pool = pool_options(settings).connect(settings.url()).await?;
+        let pool = pool_options(settings)
+            .connect_with(connect_options(settings)?)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -45,7 +54,7 @@ impl Postgres {
     ///
     /// Returns [`sqlx::Error`] when the connection string cannot be parsed.
     pub fn connect_lazy(settings: &DatabaseSettings) -> Result<Self, sqlx::Error> {
-        let pool = pool_options(settings).connect_lazy(settings.url())?;
+        let pool = pool_options(settings).connect_lazy_with(connect_options(settings)?);
         Ok(Self { pool })
     }
 
@@ -78,6 +87,11 @@ fn pool_options(settings: &DatabaseSettings) -> PgPoolOptions {
     PgPoolOptions::new()
         .max_connections(settings.max_connections())
         .acquire_timeout(settings.acquire_timeout())
+}
+
+/// The connection options of the pool, with the search path pinned.
+fn connect_options(settings: &DatabaseSettings) -> Result<PgConnectOptions, sqlx::Error> {
+    Ok(PgConnectOptions::from_str(settings.url())?.options([("search_path", PUBLIC_SCHEMA)]))
 }
 
 impl fmt::Debug for Postgres {

@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use boma_api::{HttpConfig, HttpConfigError};
+use boma_api::{AuthCapabilities, HttpConfig, HttpConfigError};
 use boma_app::Capabilities;
 use boma_infra::{ConfigError as DatabaseConfigError, DatabaseSettings};
 
@@ -71,6 +71,8 @@ pub struct Config {
     pub telemetry: TelemetrySettings,
     /// What `/ready` reports.
     pub capabilities: Capabilities,
+    /// Which sign-in methods the deployment offers.
+    pub auth_capabilities: AuthCapabilities,
 }
 
 impl Config {
@@ -130,7 +132,13 @@ impl Config {
             )?),
             optional_parsed(&env, "BOMA_MAX_BODY_BYTES", 64 * 1024_usize)?,
             parse_ip_list(&env, "BOMA_TRUSTED_PROXIES")?,
-        )?;
+        )?
+        .with_session_ttl_seconds(optional_parsed(
+            &env,
+            "BOMA_SESSION_TTL_SECONDS",
+            HttpConfig::DEFAULT_SESSION_TTL_SECONDS,
+        )?)
+        .with_secure_cookies(optional_parsed(&env, "BOMA_SECURE_COOKIES", true)?);
 
         let format = match optional(&env, "BOMA_LOG_FORMAT").as_deref() {
             None | Some("pretty") => LogFormat::Pretty,
@@ -158,6 +166,13 @@ impl Config {
             revision: optional(&env, "BOMA_REVISION"),
         };
 
+        let web_origin =
+            optional(&env, "BOMA_WEB_ORIGIN").unwrap_or_else(|| "http://127.0.0.1:5173".to_owned());
+        let auth_capabilities = AuthCapabilities::password_only(
+            Some(format!("{web_origin}/reset-password")),
+            passkey_rp_id(&web_origin),
+        );
+
         Ok(Self {
             http,
             database,
@@ -166,6 +181,7 @@ impl Config {
                 format,
             },
             capabilities,
+            auth_capabilities,
         })
     }
 }
@@ -182,6 +198,16 @@ impl fmt::Display for Config {
             self.capabilities.version
         )
     }
+}
+
+/// The relying-party id passkeys are bound to: the host of the web origin.
+fn passkey_rp_id(web_origin: &str) -> Option<String> {
+    let without_scheme = web_origin
+        .split_once("://")
+        .map_or(web_origin, |(_, rest)| rest);
+    let host = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let host = host.rsplit_once(':').map_or(host, |(name, _port)| name);
+    (!host.is_empty()).then(|| host.to_owned())
 }
 
 fn required(env: &BTreeMap<String, String>, name: &'static str) -> Result<String, ConfigError> {

@@ -13,6 +13,7 @@ use boma_app::Capabilities;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    authcap::AuthCapabilities,
     error::{ApiError, ErrorBody},
     state::AppState,
 };
@@ -143,6 +144,23 @@ pub async fn internal_health() -> Json<InternalHealth> {
         ok: true,
         last_completed_at: None,
     })
+}
+
+/// `GET /api/auth/capabilities` — which sign-in methods exist (REQ-040).
+///
+/// The reply is unauthenticated: the sign-in screen must render before there is a session. A method
+/// that is absent is absent from the reply, so the client never renders a disabled button.
+#[utoipa::path(
+    get,
+    path = "/api/auth/capabilities",
+    tag = "auth",
+    operation_id = "authCapabilities",
+    responses(
+        (status = 200, description = "Which sign-in methods the deployment offers.", body = AuthCapabilities)
+    )
+)]
+pub async fn auth_capabilities(State(state): State<AppState>) -> Json<AuthCapabilities> {
+    Json(state.auth_capabilities().clone())
 }
 
 #[cfg(test)]

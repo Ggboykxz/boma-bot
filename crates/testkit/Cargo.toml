@@ -1,0 +1,24 @@
+[package]
+name = "boma-testkit"
+description = "In-memory implementation of the Boma Bot ports: the fakes a test drives the use cases with."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+time = { workspace = true, features = ["parsing"] }
+tokio = { workspace = true }
+
+boma-app = { workspace = true }
+boma-domain = { workspace = true }

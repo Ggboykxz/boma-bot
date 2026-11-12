@@ -20,7 +20,23 @@ const DEFAULT_LOCALE = "en";
  *
  * The locale does not change while the page lives, so the subscription never fires.
  */
-const subscribe = () => () => {};
+// A real subscription is the contract of useSyncExternalStore: without one, React never learns
+// that the document's locale differs from the server snapshot it hydrated with, and the page
+// stays in English forever. The mutation fires when the boot script (or a future locale switcher)
+// sets `lang` on the document.
+// The subscription lives at module scope: a new identity every render would make React
+// resubscribe forever. React calls it once per mount; the store itself is the document, which
+// is stable for the lifetime of the export.
+const subscribe = (listener: () => void) => {
+  // The document is already `he` when React mounts: the boot script ran before the bundle did.
+  // Asking React to re-read the source right after the subscription exists is what performs the
+  // switch from the hydrated `en` to the document's real locale; the observer then keeps the
+  // two in step if the attribute ever changes again.
+  queueMicrotask(listener);
+  const observer = new MutationObserver(listener);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+  return () => observer.disconnect();
+};
 
 const getClientSnapshot = () => document.documentElement.lang || DEFAULT_LOCALE;
 

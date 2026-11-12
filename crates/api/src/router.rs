@@ -13,7 +13,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{error::ApiError, health, state::AppState};
+use crate::{authroutes, error::ApiError, health, rpc, state::AppState};
 
 /// Builds the HTTP surface.
 ///
@@ -30,6 +30,20 @@ pub fn router(state: AppState) -> Router {
         .route("/ready", get(health::readiness))
         .route("/readyz", get(health::readiness))
         .route("/internal/health", get(health::internal_health))
+        .route("/api/auth/capabilities", get(health::auth_capabilities))
+        .route(
+            "/api/auth/sign-up",
+            axum::routing::post(authroutes::sign_up),
+        )
+        .route(
+            "/api/auth/sign-in",
+            axum::routing::post(authroutes::sign_in),
+        )
+        .route(
+            "/api/auth/sign-out",
+            axum::routing::post(authroutes::sign_out),
+        )
+        .merge(rpc::router())
         .fallback(not_found)
         .with_state(state)
         .layer(DefaultBodyLimit::max(http.body_limit_bytes()))

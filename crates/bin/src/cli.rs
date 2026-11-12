@@ -72,7 +72,7 @@ pub async fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Serve => commands::serve(load_config()?).await,
-        Command::Worker => commands::worker(load_config()?),
+        Command::Worker => commands::worker(load_config()?).await,
         Command::Migrate => commands::migrate(load_config()?).await,
     }
 }

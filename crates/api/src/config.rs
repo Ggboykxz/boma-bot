@@ -41,6 +41,8 @@ pub struct HttpConfig {
     readiness_timeout: Duration,
     body_limit_bytes: usize,
     trusted_proxies: Vec<IpAddr>,
+    session_ttl_seconds: i64,
+    secure_cookies: bool,
 }
 
 impl HttpConfig {
@@ -48,6 +50,10 @@ impl HttpConfig {
     pub const MIN_BODY_BYTES: usize = 4 * 1024;
     /// Largest accepted request body limit: 1 MiB, raised per route by an explicit decision.
     pub const MAX_BODY_BYTES: usize = 1024 * 1024;
+    /// How long a session lives when the operator does not say: 30 days.
+    pub const DEFAULT_SESSION_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
+    /// How long an invitation stays valid when the operator does not say: 7 days.
+    pub const DEFAULT_INVITATION_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 
     /// Validates the parts and builds the configuration.
     ///
@@ -90,7 +96,40 @@ impl HttpConfig {
             readiness_timeout,
             body_limit_bytes,
             trusted_proxies,
+            session_ttl_seconds: Self::DEFAULT_SESSION_TTL_SECONDS,
+            secure_cookies: true,
         })
+    }
+
+    /// Sets how long a session lives.
+    ///
+    /// A session is a credential, so its lifetime is a security setting, not a default to be
+    /// forgotten: the operator states it (D-08).
+    #[must_use]
+    pub const fn with_session_ttl_seconds(mut self, seconds: i64) -> Self {
+        self.session_ttl_seconds = seconds;
+        self
+    }
+
+    /// Sets whether the session cookie carries the `Secure` attribute.
+    ///
+    /// It is on unless the deployment is explicitly served over plain HTTP in development.
+    #[must_use]
+    pub const fn with_secure_cookies(mut self, secure: bool) -> Self {
+        self.secure_cookies = secure;
+        self
+    }
+
+    /// How long a session lives, in seconds.
+    #[must_use]
+    pub const fn session_ttl_seconds(&self) -> i64 {
+        self.session_ttl_seconds
+    }
+
+    /// Whether the session cookie carries the `Secure` attribute.
+    #[must_use]
+    pub const fn secure_cookies(&self) -> bool {
+        self.secure_cookies
     }
 
     /// Address the listener binds to; loopback by default.

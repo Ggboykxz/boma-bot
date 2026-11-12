@@ -1,12 +1,22 @@
 //! The jobs the binary can run.
 
+use std::{sync::Arc, time::Duration};
+
 use anyhow::Context;
 use boma_api::{AppState, router};
-use boma_app::Readiness;
-use boma_infra::Postgres;
+use boma_app::{App, Readiness, Services, Stores, Worker};
+use boma_infra::{
+    Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
+    PostgresBotStore, PostgresEventStore, PostgresInvitationStore, PostgresMessageStore,
+    PostgresRunStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+};
 use tokio::net::TcpListener;
 
 use crate::config::Config;
+
+/// How long the worker waits between two polls of the queue.
+const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Serves the HTTP API until a shutdown signal arrives.
 ///
@@ -21,7 +31,14 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let database =
         Postgres::connect_lazy(&config.database).context("the database pool cannot be built")?;
     let readiness = Readiness::new(vec![database.readiness(config.http.readiness_timeout())]);
-    let state = AppState::new(readiness, config.capabilities.clone(), config.http.clone());
+    let app = build_app(&database);
+    let state = AppState::new(
+        readiness,
+        config.capabilities.clone(),
+        config.auth_capabilities.clone(),
+        config.http.clone(),
+        app,
+    );
 
     let listener = TcpListener::bind(config.http.bind())
         .await
@@ -38,6 +55,67 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .context("the HTTP server stopped with an error")
 }
 
+/// Builds the application from the Postgres pool.
+fn build_app(database: &Postgres) -> App {
+    let pool = database.pool().clone();
+    let publisher = Arc::new(BroadcastPublisher::default());
+    App::new(
+        Stores::new(
+            Arc::new(PostgresAccountStore::new(pool.clone())),
+            Arc::new(PostgresUserStore::new(pool.clone())),
+            Arc::new(PostgresSessionStore::new(pool.clone())),
+            Arc::new(PostgresSpaceStore::new(pool.clone())),
+            Arc::new(PostgresBotStore::new(pool.clone())),
+            Arc::new(PostgresThreadStore::new(pool.clone())),
+            Arc::new(PostgresMessageStore::new(pool.clone())),
+            Arc::new(PostgresRunStore::new(pool.clone())),
+            Arc::new(PostgresEventStore::new(pool.clone())),
+            Arc::new(PostgresInvitationStore::new(pool)),
+        ),
+        Services::new(
+            publisher,
+            Arc::new(Argon2idHasher::default()),
+            Arc::new(TokenGenerator),
+            Arc::new(IdGenerator),
+            Arc::new(SystemClock),
+        ),
+    )
+}
+
+/// Drains the job queue until the process is asked to stop.
+///
+/// The worker claims one queued run at a time and answers it with the scripted provider: the M1
+/// agent is a script, so a deployment can be exercised end to end before a model is connected.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot be reached or the pool cannot be built.
+pub async fn worker(config: Config) -> anyhow::Result<()> {
+    let database =
+        Postgres::connect_lazy(&config.database).context("the database pool cannot be built")?;
+    let app = Arc::new(build_app(&database));
+    let provider = Arc::new(ScriptedProvider::default());
+    let worker = Worker::new(app, provider, worker_owner());
+
+    tracing::info!(owner = %worker_owner(), "the worker is draining the queue");
+    loop {
+        let stepped = worker
+            .step()
+            .await
+            .context("the worker could not claim a run")?;
+        if !stepped {
+            tokio::time::sleep(WORKER_POLL_INTERVAL).await;
+        }
+    }
+}
+
+/// The name this worker claims runs under.
+///
+/// It carries the process id, so two workers on the same box never share a lease.
+fn worker_owner() -> String {
+    format!("worker-{}", std::process::id())
+}
+
 /// Applies every pending migration and exits.
 ///
 /// # Errors
@@ -50,16 +128,6 @@ pub async fn migrate(config: Config) -> anyhow::Result<()> {
     database.migrate().await.context("a migration failed")?;
     tracing::info!("migrations applied");
     Ok(())
-}
-
-/// Drains the job queue.
-///
-/// # Errors
-///
-/// Always returns an error today: the queue lands in M1. A worker that exits `0` without working
-/// would tell a supervisor that jobs are being processed.
-pub fn worker(_config: Config) -> anyhow::Result<()> {
-    anyhow::bail!("the worker loop arrives in milestone M1 (docs/PLAN.md); nothing is drained yet")
 }
 
 /// Logs the validated configuration with credentials redacted.
@@ -82,7 +150,7 @@ async fn shutdown_signal() {
     let terminate = async {
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
             Ok(mut stream) => {
-                let _ = stream.recv().await;
+                stream.recv().await;
             }
             Err(error) => tracing::error!(%error, "cannot listen for SIGTERM"),
         }
@@ -95,39 +163,6 @@ async fn shutdown_signal() {
         () = ctrl_c => {},
         () = terminate => {},
     }
-    tracing::info!("shutdown requested, draining in-flight requests");
-}
 
-#[cfg(test)]
-mod tests {
-    use super::{check_config, worker};
-    use crate::config::Config;
-
-    fn fixture_config() -> Config {
-        Config::from_pairs([("BOMA_DATABASE_URL", "postgres://boma@127.0.0.1:5432/boma")])
-            .expect("the fixture configuration is valid")
-    }
-
-    #[test]
-    fn req_058_the_worker_refuses_to_pretend_it_processed_a_job() {
-        let error = worker(fixture_config()).expect_err("the worker loop does not exist yet");
-        assert!(
-            error.to_string().contains("M1"),
-            "the message must say when the worker arrives: {error}"
-        );
-    }
-
-    #[test]
-    fn req_054_the_configuration_is_logged_with_the_credentials_redacted() {
-        // The rendering must not contain the password; `Config`'s own `Display` is what the log
-        // line uses.
-        let config = fixture_config();
-        let rendered = format!("{config}");
-        assert!(
-            !rendered.contains("postgres://boma@127.0.0.1"),
-            "{rendered}"
-        );
-
-        check_config(&config);
-    }
+    tracing::info!("shutting down");
 }

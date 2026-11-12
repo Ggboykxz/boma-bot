@@ -73,7 +73,36 @@ fn state(healthy: bool) -> AppState {
     AppState::new(
         Readiness::new(vec![Arc::new(Probe { healthy })]),
         capabilities(),
+        auth_capabilities(),
         http_config(),
+        boma_app::App::new(
+            boma_app::Stores::new(
+                std::sync::Arc::new(boma_testkit::MemoryAccountStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryUserStore::default()),
+                std::sync::Arc::new(boma_testkit::MemorySessionStore::default()),
+                std::sync::Arc::new(boma_testkit::MemorySpaceStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryBotStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryThreadStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryMessageStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryRunStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryEventStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryInvitationStore::default()),
+            ),
+            boma_app::Services::new(
+                std::sync::Arc::new(boma_testkit::MemoryEventPublisher::default()),
+                std::sync::Arc::new(boma_testkit::FixedHasher),
+                std::sync::Arc::new(boma_testkit::ScriptedTokens::default()),
+                std::sync::Arc::new(boma_testkit::ScriptedIds::counter()),
+                std::sync::Arc::new(boma_testkit::ScriptedClock::fixed("2026-01-01T00:00:00Z")),
+            ),
+        ),
+    )
+}
+
+fn auth_capabilities() -> boma_api::AuthCapabilities {
+    boma_api::AuthCapabilities::password_only(
+        Some("http://127.0.0.1:5173/reset-password".to_owned()),
+        Some("127.0.0.1".to_owned()),
     )
 }
 

@@ -2,18 +2,68 @@
 
 ## Current milestone
 
-**M0 — closed, and `/ui-kit` done.** The scaffold is written, compiled, linted, tested and
-exercised against a real Postgres and a real browser. `make check` and `make ui-test` are green on
-this machine (commands and results under "Verified here").
+**M1 — walking skeleton implemented and committed.** Sign-up → space → bot → send → run → streamed
+reply with a scripted provider; RLS and the tenant context proved against a real Postgres; the 13
+M1 API goldens replay byte for byte; the two M1 UI goldens (`REQ-001-send-message`,
+`REQ-012-run-statuses`) pass in Playwright. The thread and activity screens render with the new
+BoardUI shell (`/app/<botId>`, `/app/activity`).
 
-The BoardUI design system is installed and the shell uses it. **opencode must be restarted** for
-the BoardUI agent skill (`.claude/skills/boardui/`) and the always-on rules to load.
+Next command: `/implement M2` — runs and tools milestone (steering REQ-003, cards, recovery of
+orphaned runs, the approvals gate), followed by closing the remaining UI goldens.
 
-Next command: `/implement M1` — walking skeleton: space, bot, thread, send message, SSE, tenant
-context and RLS.
+**opencode must be restarted** for the BoardUI agent skill (`.claude/skills/boardui/`) and the always-on
+rules to load.
 
 ## Done
 
+- 2026-11-12 — **M1 walking skeleton implemented and committed** (`feat(app,api,infra,bin,conformance): M1 walking skeleton`).
+  - `boma-domain`: runs gained lease fields (`lease_owner`, `lease_fence`, `lease_expires_at`) and
+    `holds_lease`; tenancy, ids, password validation, cursor helpers, event and message models,
+    run state wire values.
+  - `boma-app`: ports for every store/service (accounts, users, sessions, spaces, bots, threads,
+    messages, runs with atomic `claim_next_queued`, events, invitations, ids/tokens/clock/hasher)
+    and the use cases (sign-up/sign-in, create space/bot, send message with nonce idempotency,
+    messages page, subscribe, activity list, claim, fenced status writes with the legible failure
+    recorded, worker loop streaming message-update deltas). Sign-in failures are uniform
+    (`AppError::InvalidCredentials`, dummy-hash branch, same shape for unknown address and wrong
+    password).
+  - `boma-api`: `/rpc/{namespace}/{procedure}` dispatcher with `deny_unknown_fields` DTOs, the
+    `/api/auth/*` surface (capabilities, sign-up, sign-in, sign-out), session cookie `HttpOnly;
+    SameSite=Lax; Secure` (config-gated), `x-space-id` header for tenants, stable
+    `{code, error}` envelope, `x-request-id`/`no-store`/`nosniff`/`referrer-policy` headers; 12 RPC
+    integration tests.
+  - `boma-infra`: `0002_m1.sql` (12 tables, RLS on the eight tenant tables, `boma.current_space_id()`,
+    `boma.is_system()`, `boma.rfc3339()`), `with_tenant`/`as_system` with transaction-scoped
+    `set_config`, and the SQL adapters. The **lease reclaim** fix: a worker that disappeared
+    mid-turn is handed out again once its lease expires (REQ-013, REQ-014), with the fence grown.
+    `EventRow` decode matches the `type` column. **Integration tests run against a real Postgres
+    with a fresh database per claim-dependent test** (`common::fresh_database`): the cross-tenant
+    queue is global by design, so no two tests may claim from the same queue. The RLS probe
+    connects as a non-superuser role because Postgres never applies policies to a superuser.
+    The M1 adapters have 8 integration tests (`crates/infra/tests/m1.rs`); `m1.rs` cleans up after
+    itself (the rows fall with the organization).
+  - `boma-conformance`: the golden replay world (`golden_world.rs` — seeded space/bot/thread with
+    fixed ids and a fixed clock); SSE fixtures compare their `data:` frames up to the fixture's
+    frame count; body fixtures replay the nonce double-send. **13 API goldens replay byte for
+    byte**; `golden-status.json` marks them implemented.
+  - `boma-testkit`: in-memory stores (same rules: sequences, nonce idempotency, atomic claim,
+    stale-fence refusal) and scripted ids/clock/tokens.
+  - Failures are legible (REQ-021): when a run fails, the run carries a short, safe reason the chat
+    can show — never a driver's internals, never the value that broke the rule.
+  - **Web**: `/app/<botId>` thread screen (transcript as a log, live SSE with reconnect, composer)
+    and `/app/activity` (one row per run, retry only on failed rows, states written in words), built
+    on BoardUI semantic tokens and the i18n catalogue (en/fr/he). `lib/api/rpc.ts` speaks the real
+    RPC surface with `credentials: "include"`. Two contrast faults found by axe are fixed by tokens.
+  - **UI goldens implemented**: `REQ-001-send-message` and `REQ-012-run-statuses` pass in Playwright
+    (route interception, `golden-status.json` says implemented). Web suite: **14 passed, 5 skipped**
+    (the remaining five goldens wait on M2+).
+  - **Environment note**: the local dev Postgres is a superuser and RLS does not apply to
+    superusers, so the RLS proof runs as a dedicated unprivileged role (`boma_rls_probe`) — the
+    same condition CI uses.
+  - The traceability ratchet moved **down again** as requirements landed: 39 missing of 58 named
+    (budget unchanged at 40). The M1 web goldens are counted by the Playwright manifest, and the
+    two new ones (`REQ-001-send-message`, `REQ-012-run-statuses`) replay implemented.
+  - DEC-14 (the licence) is still the owner's decision; nothing was pushed (no remote configured).
 - 2026-11-12 — Product name fixed by the owner: **Boma Bot** (`@boma/*`, `BOMA_*`, `com.boma.app`).
   Rebuild of the target analysed in `../re-workspace`. The analysed tree keeps its own identifiers so
   `file:line` citations stay valid.
@@ -98,18 +148,21 @@ Commands actually run in this session, and their result. Nothing else is claimed
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean, 0 warnings |
 | Types | `cargo check --workspace --all-targets --all-features` | clean |
-| Tests | `cargo nextest run --workspace --all-features` | **47 → 56 tests, all passed** |
-| Coverage | `cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 80` | **87.50 % lines** (floor 80) |
+| Tests | `cargo nextest run --workspace --all-features` | **140 tests, all passed** (run three times, stable) |
+| Web tests | `npm run test` (Playwright + axe) with `FONTCONFIG_FILE=/tmp/opencode/fonts.conf` | **14 passed, 5 skipped** (pending goldens) |
+| Coverage | `cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 80` | **84.47 % lines** (floor 80); the floor gate passes |
 | Licences and advisories | `cargo deny check` | advisories ok, bans ok, licences ok, sources ok |
 | Unused dependencies | `cargo machete --with-metadata` | none |
-| Traceability | `python3 tools/trace_check.py spec . --max-missing 50` | 8/58 covered, budget 50, exit 0 |
+| Traceability | `python3 tools/trace_check.py spec . --max-missing 40` | 19/58 named by a test declaration, budget 40, exit 0 |
 | Secrets | `python3 tools/secret_scan.py .` | 0 findings |
-| Whole gate | `make check` | **exit 0** |
+| Whole gate | `make check` | **exit 0** (M0); the M1 gates above were re-run individually on this machine |
 | Web build | `npm run build` | static export of `/`, `/app`, `/_not-found` |
 | Web types | `npm run typecheck` | clean |
 | Web lint | `npm run lint` (`--max-warnings=0`) | clean |
 | Browser | `npm run test` (Playwright + axe) | **12 passed, 7 skipped** (pending goldens) |
 | Design system | `boardui init_boardui`, `install_rules`, `install_components`, `install_skill` | vendored into `apps/web/`, rules in the root `AGENTS.md`, skill in `.claude/skills/boardui/` |
+| API goldens | `cargo test -p boma-conformance --test golden_api` | **13/13 implemented replay byte for byte** |
+| UI goldens | `npx playwright test tests/golden.spec.ts` with `FONTCONFIG_FILE=...` | **REQ-001-send-message and REQ-012-run-statuses replay; the five later goldens still skip with reasons** |
 | Release build | `cargo build --release --locked --bin boma` | 5.9 MB binary |
 | Database | `boma migrate`, `boma serve`, `boma probe` against PostgreSQL 17.11 | migrations applied, all routes answer |
 | Compose and CI YAML | `yq` parse of `compose.yaml` and `.github/workflows/ci.yml` | valid |
@@ -163,6 +216,14 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
 
 ## Blocked
 
+- **The Playwright suites need `FONTCONFIG_FILE=/tmp/opencode/fonts.conf`** on this machine: it has
+  no system fonts, and Chromium dies with `SkFontMgr_FontConfigInterface Not implemented` the first
+  time it renders a Hebrew (or any non-Latin) glyph — which is why every Hebrew test crashed before
+  it could fail an assertion. CI (ubuntu-24.04) has system fonts and does not need it.
+- **The M2+ UI goldens stay pending** (`spec/golden/ui/`): `REQ-007-pending-card`,
+  `REQ-009-unread-divider`, `REQ-026-computer-panel`, `REQ-037-shared-page`,
+  `REQ-037-shared-page-invalid`. Each carries its milestone; the runner skips them explicitly.
+
 - **No Docker daemon and no `sudo`** on this machine: the container image and the Compose stack are
   written and reviewed but never built. Everything Compose does was verified by hand against a real
   PostgreSQL 17.11 instead (same image major, same environment variables, same migration step).
@@ -212,12 +273,15 @@ Any other externally visible difference would be a DEVIATION needing owner appro
 ## Next
 
 1. Restart opencode, so the BoardUI skill and the always-on rules load.
-2. `/implement M1`: walking skeleton (space, bot, thread, send message, SSE, tenant context + RLS),
-   with the tests written before the code, as AGENTS.md requires.
-3. Tighten the traceability ratchet (50 → 40 at M1) as the requirements land.
-4. Owner reviews `docs/PLAN.md` §2 (stack table) and vetoes any row; answers DEC-01…DEC-03 if they
-   have runtime knowledge.
-5. Configure a remote and let CI run for real: the workflow has never executed on GitHub.
+2. `/implement M2`: runs and tools milestone — steering (REQ-003), cards, orphaned-run recovery
+   hardening, approvals gate; then the five remaining UI goldens as their screens land.
+3. Owner reviews `docs/PLAN.md` §2 (stack table) and vetoes any row; answers DEC-01…DEC-03 if they
+   have runtime knowledge. DEC-14 (the licence) is still open.
+4. Configure a remote and let CI run for real: the workflow has never executed on GitHub. The local
+   dev Postgres lives on port 5433 with a superuser `boma`; CI/Makefile default to 5432.
+5. Re-run the coverage gate with the full debug build when the disk allows the from-scratch
+   instrumented rebuild (it was run with `CARGO_PROFILE_*_DEBUG=0`; the machine's `/tmp` is 91 %
+   full across sessions and repeatedly forced cache eviction).
 
 ## Decisions needed
 

@@ -42,10 +42,17 @@ maintenance, licence, simplicity).
 | `clap` | 4.6.7 | MIT OR Apache-2.0 | one binary, five subcommands (ADR-017) |
 | `uuid` | 1.29.2 | Apache-2.0 OR MIT | request ids now, entity ids from M1 |
 | `async-trait` | 0.1.92 | MIT OR Apache-2.0 | object-safe async ports (`ReadinessCheck`, providers) |
+| `argon2` | 0.6.0 | MIT OR Apache-2.0 | Argon2id password hashing at sign-up and sign-in (REQ-040); constant-time verify, fallible-hash branch |
+| `base64` | 0.22.1 | MIT OR Apache-2.0 | session token encoding (REQ-041) |
+| `rand` | 0.10.3 | MIT OR Apache-2.0 | entity identifiers and token entropy for the id/token generators |
+| `sha2` | 0.10.9 | MIT OR Apache-2.0 | SHA-256 hash of session tokens, compared in constant time (REQ-041) |
+| `subtle` | 2.6.1 | BSD-3-Clause | constant-time comparison of the password and token hashes |
+| `time` | 0.3.55 | MIT OR Apache-2.0 | instants the clock and the stores move (RFC 3339 rendering) |
+| `tokio-stream` | 0.1.19 | MIT | streaming SSE frames and the golden replay harness |
 
-Deliberately **not** added yet, so no unused dependency rots in the tree: `argon2`, `secrecy`,
+Deliberately **not** added yet, so no unused dependency rots in the tree: `secrecy`,
 `aes-gcm`, `proptest`, `wiremock`, `testcontainers`, `criterion`, `reqwest`. Each arrives with the
-milestone that needs it (M1 for argon2/`secrecy`/proptest, M2 for `wiremock`, M4 for HTTP providers).
+milestone that needs it (M1 for `argon2`, now landed; M2 for `wiremock`, M4 for HTTP providers).
 
 **YAML parser (deliberate).** The contract test parses the spec's OpenAPI document, so one YAML
 parser is needed. `serde_yaml_ng` was replaced by **`serde-saphyr` 2.1.1** (published 2026-11-05,

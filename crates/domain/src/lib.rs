@@ -9,8 +9,27 @@
 
 #![deny(missing_docs)]
 
+pub mod account;
+pub mod bot;
 pub mod error;
+pub mod event;
+pub mod ids;
+pub mod message;
 pub mod run;
+pub mod tenancy;
+pub mod thread;
 
+pub use account::{Email, Session, Space, SpaceRole, User, validate_password};
+pub use bot::Bot;
 pub use error::DomainError;
-pub use run::{RunStatus, RunTrigger};
+pub use event::{Event, EventType};
+pub use ids::{
+    BotId, EventId, InviteId, MessageId, OrganizationId, RunId, SessionId, SpaceId, ThreadId,
+    UserId,
+};
+pub use message::{
+    Block, Message, MessagePage, MessageRole, cursor_from_seq, parse_cursor, validate_message_text,
+};
+pub use run::{Run, RunStatus, RunTrigger};
+pub use tenancy::{SystemReason, TenantContext};
+pub use thread::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Thread, validate_page_size};

@@ -11,6 +11,12 @@ pub enum AppError {
     /// A pure business rule rejected the command.
     #[error(transparent)]
     Rule(#[from] DomainError),
+    /// The request conflicts with what already exists: the address is taken, the name is used.
+    #[error("conflict")]
+    Conflict,
+    /// The credentials do not match an account.
+    #[error("invalid credentials")]
+    InvalidCredentials,
     /// A required dependency did not answer.
     #[error("a dependency is unavailable")]
     Unavailable,
@@ -23,7 +29,10 @@ impl AppError {
     /// Whether the failure is caused by the caller rather than by the deployment.
     #[must_use]
     pub const fn is_client_fault(&self) -> bool {
-        matches!(self, Self::Rule(_) | Self::NotFound)
+        matches!(
+            self,
+            Self::Rule(_) | Self::Conflict | Self::InvalidCredentials | Self::NotFound
+        )
     }
 }
 
@@ -39,6 +48,20 @@ mod tests {
         let error = AppError::from(rule);
         assert!(error.is_client_fault());
         assert!(error.to_string().contains("completed"));
+        assert!(!AppError::Unavailable.is_client_fault());
+    }
+
+    #[test]
+    fn req_040_a_taken_address_is_a_conflict_and_not_a_server_error() {
+        let error = AppError::Conflict;
+        assert!(error.is_client_fault());
+        assert!(error.is_client_fault());
+        assert_eq!(error.to_string(), "conflict");
+    }
+
+    #[test]
+    fn req_040_wrong_credentials_are_a_client_fault() {
+        assert!(AppError::InvalidCredentials.is_client_fault());
         assert!(!AppError::Unavailable.is_client_fault());
     }
 }

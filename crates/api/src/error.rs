@@ -85,6 +85,20 @@ impl ApiError {
         Self::new(ErrorCode::Unauthorized, "Sign in to continue.")
     }
 
+    /// Credentials that do not match an account.
+    ///
+    /// The wording never says whether the address exists (REQ-040).
+    #[must_use]
+    pub const fn invalid_credentials() -> Self {
+        Self::new(ErrorCode::Unauthorized, "Those credentials do not match.")
+    }
+
+    /// The request conflicts with what already exists.
+    #[must_use]
+    pub const fn conflict() -> Self {
+        Self::new(ErrorCode::Conflict, "That already exists.")
+    }
+
     /// Absent, or owned by another tenant.
     #[must_use]
     pub const fn not_found() -> Self {
@@ -134,6 +148,8 @@ impl From<AppError> for ApiError {
     fn from(error: AppError) -> Self {
         match error {
             AppError::Rule(_) => Self::bad_request(),
+            AppError::Conflict => Self::new(ErrorCode::Conflict, "That already exists."),
+            AppError::InvalidCredentials => Self::invalid_credentials(),
             AppError::NotFound => Self::not_found(),
             AppError::Unavailable => Self::unavailable(),
         }

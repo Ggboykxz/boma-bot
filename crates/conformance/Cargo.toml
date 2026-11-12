@@ -13,6 +13,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+boma-app = { workspace = true }
+boma-domain = { workspace = true }
+boma-testkit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -21,8 +24,8 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 boma-api = { workspace = true }
-boma-app = { workspace = true }
 http-body-util = { workspace = true }
 serde-saphyr = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tower = { workspace = true }

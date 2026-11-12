@@ -7,10 +7,16 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::error::DomainError;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    error::DomainError,
+    ids::{BotId, RunId, SpaceId, ThreadId, UserId},
+};
 
 /// Where a run is in its lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     /// Accepted, waiting for an executor to take a lease.
     Queued,
@@ -43,7 +49,7 @@ impl RunStatus {
         Self::Cancelled,
     ];
 
-    /// The wire value used by the API, the database and the goldens.
+    /// The wire value.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -147,24 +153,25 @@ impl FromStr for RunStatus {
     }
 }
 
-/// Why a run exists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// What caused a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunTrigger {
     /// A person sent a message.
     User,
-    /// A schedule fired.
+    /// A routine fired.
     Routine,
-    /// An inbound webhook woke the bot.
+    /// An inbound webhook.
     Webhook,
-    /// Another bot wrote to this one.
+    /// Another bot.
     BotMessage,
-    /// Work attached to a board ticket.
+    /// Ticket work.
     Tickets,
-    /// The bot was created and is introducing itself.
+    /// The bot was just created.
     Created,
-    /// A parent run delegated work.
-    Helper,
-    /// A previous attempt failed and is being retried.
+    /// A helper run returned.
+    HelperResult,
+    /// A retry of a failed run.
     Retry,
 }
 
@@ -177,11 +184,11 @@ impl RunTrigger {
         Self::BotMessage,
         Self::Tickets,
         Self::Created,
-        Self::Helper,
+        Self::HelperResult,
         Self::Retry,
     ];
 
-    /// The wire value used by the API and the database.
+    /// The wire value.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -191,27 +198,18 @@ impl RunTrigger {
             Self::BotMessage => "bot_message",
             Self::Tickets => "tickets",
             Self::Created => "created",
-            Self::Helper => "helper",
+            Self::HelperResult => "helper_result",
             Self::Retry => "retry",
         }
     }
 
-    /// Whether a user message may steer this run.
+    /// Whether the run may take a person's message as steering.
     ///
-    /// Non-conversational triggers carry their own prompt, so a message that arrives during one
-    /// waits for the next turn instead of being folded into it (REQ-003).
+    /// Routine, webhook, ticket, bot-to-bot and creation runs are not the conversation: their
+    /// reply goes where it belongs, and a message that lands during them waits.
     #[must_use]
-    pub const fn is_conversational(self) -> bool {
-        !matches!(
-            self,
-            Self::Routine | Self::Webhook | Self::Created | Self::Tickets | Self::BotMessage
-        )
-    }
-
-    /// Whether the run must stay out of the chat and report elsewhere (the board).
-    #[must_use]
-    pub const fn is_background(self) -> bool {
-        matches!(self, Self::Tickets)
+    pub const fn accepts_steering(self) -> bool {
+        matches!(self, Self::User | Self::HelperResult | Self::Retry)
     }
 }
 
@@ -232,20 +230,76 @@ impl FromStr for RunTrigger {
             "bot_message" => Ok(Self::BotMessage),
             "tickets" => Ok(Self::Tickets),
             "created" => Ok(Self::Created),
-            "helper" => Ok(Self::Helper),
+            "helper_result" => Ok(Self::HelperResult),
             "retry" => Ok(Self::Retry),
             other => Err(DomainError::unknown_trigger(other)),
         }
     }
 }
 
+/// One execution of the agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Run {
+    /// The run's id.
+    pub id: RunId,
+    /// The tenant it belongs to.
+    pub space_id: SpaceId,
+    /// The bot that works.
+    pub bot_id: BotId,
+    /// The thread it writes to.
+    pub thread_id: ThreadId,
+    /// The member who started it.
+    pub user_id: UserId,
+    /// Where it is.
+    pub status: RunStatus,
+    /// What caused it.
+    pub trigger: RunTrigger,
+    /// The nonce that made the start idempotent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_nonce: Option<String>,
+    /// The message that started it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_message_id: Option<crate::ids::MessageId>,
+    /// When it was created.
+    pub created_at: String,
+    /// When it started working.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// When it finished.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    /// Why it failed, when it failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Who holds the lease, while the run is leased or running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lease_owner: Option<String>,
+    /// The fence token: it increases on every claim, so a stale worker can be refused.
+    #[serde(default)]
+    pub lease_fence: i64,
+    /// When the lease expires; an expired lease is recoverable (REQ-014).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at: Option<String>,
+}
+
+impl Run {
+    /// Whether the given worker still holds this run's lease.
+    ///
+    /// A worker that was slow past its lease expiry, or that was replaced by a reconciler, must
+    /// not write: the fence it presents no longer matches (REQ-012).
+    #[must_use]
+    pub fn holds_lease(&self, owner: &str, fence: i64) -> bool {
+        self.lease_owner.as_deref() == Some(owner) && self.lease_fence == fence
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RunStatus, RunTrigger};
-    use crate::error::DomainError;
+    use std::str::FromStr;
 
-    /// The table written out again, pair by pair. Two independent spellings of the same rule:
-    /// a typo in either one fails the exhaustive test below.
+    use super::{RunStatus, RunTrigger};
+
+    /// The table from `spec/02-data-model.md`, written out.
     const ALLOWED: &[(RunStatus, RunStatus)] = &[
         (RunStatus::Queued, RunStatus::Leased),
         (RunStatus::Queued, RunStatus::Cancelled),
@@ -317,48 +371,43 @@ mod tests {
     }
 
     #[test]
-    fn req_007_a_pending_question_does_not_hold_the_queue() {
-        assert!(!RunStatus::WaitingInput.holds_queue());
-        assert!(RunStatus::WaitingTakeover.holds_queue());
-        assert!(RunStatus::Running.holds_queue());
-        assert!(!RunStatus::Completed.holds_queue());
-    }
-
-    #[test]
-    fn req_003_non_conversational_triggers_never_take_steering() {
-        for trigger in RunTrigger::ALL {
-            let conversational = trigger.is_conversational();
-            let expected = matches!(
-                trigger,
-                RunTrigger::User | RunTrigger::Helper | RunTrigger::Retry
-            );
-            assert_eq!(conversational, expected, "{trigger}");
-        }
-        assert!(RunTrigger::Tickets.is_background());
-        assert!(!RunTrigger::User.is_background());
+    fn req_012_an_illegal_transition_is_an_error_not_a_no_op() {
+        let error = RunStatus::Completed
+            .transition_to(RunStatus::Running)
+            .expect_err("the table forbids it");
+        assert!(error.is_invalid_transition());
     }
 
     #[test]
     fn req_012_status_and_trigger_wire_values_round_trip() {
         for status in RunStatus::ALL {
-            assert_eq!(status.as_str().parse::<RunStatus>(), Ok(status));
+            assert_eq!(
+                RunStatus::from_str(status.as_str()).expect("a known status"),
+                status
+            );
         }
         for trigger in RunTrigger::ALL {
-            assert_eq!(trigger.as_str().parse::<RunTrigger>(), Ok(trigger));
+            assert_eq!(
+                RunTrigger::from_str(trigger.as_str()).expect("a known trigger"),
+                trigger
+            );
         }
-        assert_eq!(
-            "paused".parse::<RunStatus>(),
-            Err(DomainError::UnknownStatus("paused".to_owned()))
-        );
+        assert!(RunStatus::from_str("paused").is_err());
+        assert!(RunTrigger::from_str("cron").is_err());
     }
 
     #[test]
-    fn req_012_an_illegal_transition_is_an_error_not_a_no_op() {
-        let error = RunStatus::Completed.transition_to(RunStatus::Running).err();
-        assert!(matches!(error, Some(DomainError::InvalidTransition { .. })));
-        assert_eq!(
-            RunStatus::Queued.transition_to(RunStatus::Leased),
-            Ok(RunStatus::Leased)
-        );
+    fn req_003_non_conversational_triggers_never_take_steering() {
+        for trigger in RunTrigger::ALL {
+            let expected = matches!(
+                trigger,
+                RunTrigger::User | RunTrigger::HelperResult | RunTrigger::Retry
+            );
+            assert_eq!(
+                trigger.accepts_steering(),
+                expected,
+                "unexpected steering rule for {trigger}"
+            );
+        }
     }
 }

@@ -1,0 +1,401 @@
+//! The seeded world the golden fixtures replay against.
+//!
+//! The fixtures in `spec/golden/` are captured transactions: a request and the reply the
+//! reference produced. To replay them byte for byte, the environment around the request must be
+//! the one the capture was made in — the same space, the same bot, the same thread, the same
+//! messages, the same ids.
+//!
+//! This module builds that world. It is deliberately explicit: every id a fixture names is
+//! written here, so a fixture that stops matching the world is a visible change rather than a
+//! silent drift.
+//!
+//! The two placeholders a fixture may carry are substituted by the harness, never by the world:
+//!
+//! * `session=<redacted>` becomes the world's session cookie;
+//! * `<synthetic-address>` becomes a real address, because an address is personal data and the
+//!   export replaced it.
+//!
+//! This module is only ever used by the golden replay, which is a test: the `expect` calls below
+//! state that a seeded id must be accepted, and a failure there is a bug in the seed, not a
+//! runtime condition to handle.
+#![allow(clippy::expect_used, clippy::panic)]
+
+use boma_app::{
+    App,
+    ports::{NewAccount, NewBot, NewOrganization, NewSession, NewSpace, NewThread, NewUser},
+};
+use boma_domain::{
+    Block, Bot, BotId, Email, Event, EventType, InviteId, Message, MessageId, MessageRole,
+    OrganizationId, Run, RunId, RunStatus, RunTrigger, Session, SessionId, SpaceId, SpaceRole,
+    Thread, ThreadId, UserId,
+};
+use boma_testkit::TestApp;
+
+/// The instant every seeded row carries.
+pub const SEED_INSTANT: &str = "2026-01-01T00:00:00Z";
+
+/// The instant the run's start carries.
+pub const RUN_STARTED_AT: &str = "2026-01-01T00:00:01Z";
+
+/// The token the fixtures' session cookie carries.
+///
+/// The fixture says `session=<redacted>`; the harness substitutes this value.
+pub const SESSION_TOKEN: &str = "golden-session-token";
+
+/// The space the fixtures act in.
+pub const SPACE_ID: &str = "spc_golden";
+
+/// Another space, used by the cross-tenant fixture.
+pub const OTHER_SPACE_ID: &str = "spc_other_golden";
+
+/// The bot the fixtures act on.
+pub const BOT_ID: &str = "bot_golden";
+
+/// The thread of that bot.
+pub const THREAD_ID: &str = "thr_golden";
+
+/// The user the fixtures act as.
+pub const USER_ID: &str = "usr_golden";
+
+/// The organization that owns the space.
+pub const ORGANIZATION_ID: &str = "org_golden";
+
+/// The session the fixtures sign in with.
+pub const SESSION_ID: &str = "ses_golden";
+
+/// The run the fixtures show.
+pub const RUN_ID: &str = "run_golden";
+
+/// The world a fixture replays against.
+#[derive(Clone)]
+pub struct GoldenWorld {
+    /// The application under test.
+    pub app: App,
+    /// The cookie the fixtures send.
+    pub cookie: String,
+}
+
+/// The ids a procedure creates during a replay, per fixture.
+///
+/// A fixture whose procedure mints an id needs it here, in the order the procedure mints them; a
+/// fixture that only reads needs nothing.
+#[must_use]
+pub fn created_ids(fixture: &str) -> Vec<String> {
+    let ids: &[&str] = match fixture {
+        "send-message" | "send-message-replay" => &["msg_golden", "run_golden"],
+        "space-create" => &["spc_new_golden"],
+        "bot-create" => &["bot_golden", "thr_golden"],
+        "space-invite" => &["inv_golden"],
+        _ => &[],
+    };
+    ids.iter().map(|id| (*id).to_owned()).collect()
+}
+
+/// Builds the world for one fixture.
+///
+/// Returns `None` for the fixtures that need no world: health, capabilities, unauthorized.
+///
+/// # Panics
+///
+/// Panics when a seeded id is refused by the domain: that is a bug in the seed, not a runtime
+/// condition. The golden replay is a test, so a panic is the honest failure.
+pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
+    let needs_world = matches!(
+        fixture,
+        "send-message"
+            | "send-message-replay"
+            | "bot-create"
+            | "space-create"
+            | "space-invite"
+            | "thread-messages"
+            | "thread-subscribe"
+            | "run-list"
+            | "cross-tenant-not-found"
+    );
+    if !needs_world {
+        return None;
+    }
+
+    let test_app = TestApp::builder()
+        .ids(created_ids(fixture))
+        .fixed_clock(SEED_INSTANT)
+        .build();
+    let app = test_app.app().clone();
+    let cookie = format!("session={SESSION_TOKEN}");
+
+    // Every world starts with the account: the person, their organization, their space and their
+    // membership (REQ-042), written with the ids the fixture names.
+    let user_id = UserId::new(USER_ID).expect("the seed id is valid");
+    let organization_id = OrganizationId::new(ORGANIZATION_ID).expect("the seed id is valid");
+    let space_id = SpaceId::new(SPACE_ID).expect("the seed id is valid");
+    app.stores
+        .accounts
+        .create_account(NewAccount {
+            user: NewUser {
+                id: user_id.clone(),
+                email: Email::new("person@example.com").expect("the seed address is valid"),
+                password_hash: "hash:correct horse battery".to_owned(),
+                name: "Person".to_owned(),
+                locale: "en-US".to_owned(),
+                created_at: SEED_INSTANT.to_owned(),
+            },
+            organization: NewOrganization {
+                id: organization_id.clone(),
+                name: "Golden organization".to_owned(),
+                created_at: SEED_INSTANT.to_owned(),
+            },
+            space: NewSpace {
+                id: space_id.clone(),
+                organization_id: organization_id.clone(),
+                name: "Golden space".to_owned(),
+                is_default: true,
+                created_at: SEED_INSTANT.to_owned(),
+            },
+        })
+        .await
+        .expect("the account is created");
+
+    let token_hash = {
+        use boma_app::ports::TokenGenerator;
+        test_app
+            .tokens()
+            .hash(SESSION_TOKEN)
+            .expect("the token hashes")
+    };
+    app.stores
+        .sessions
+        .create(NewSession {
+            id: SessionId::new(SESSION_ID).expect("the seed id is valid"),
+            user_id: user_id.clone(),
+            token_hash,
+            expires_at: "2026-02-01T00:00:00Z".to_owned(),
+            created_at: SEED_INSTANT.to_owned(),
+        })
+        .await
+        .expect("the session is created");
+
+    match fixture {
+        "send-message" | "send-message-replay" => {
+            seed_bot(&app, &space_id, &user_id).await;
+        }
+        "bot-create" | "space-create" | "space-invite" => {}
+        "thread-messages" | "run-list" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_history(&test_app, &space_id, &bot, &thread, &user_id);
+        }
+        "thread-subscribe" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_events(&test_app, &space_id, &bot, &thread);
+        }
+        "cross-tenant-not-found" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            let _ = (bot, thread);
+            seed_other_space(&app, &user_id).await;
+        }
+        _ => return None,
+    }
+
+    Some(GoldenWorld { app, cookie })
+}
+
+/// Creates the bot and its thread with the ids the fixture names.
+async fn seed_bot(app: &App, space_id: &SpaceId, user_id: &UserId) -> (Bot, Thread) {
+    app.stores
+        .bots
+        .create_with_thread(
+            NewBot {
+                id: BotId::new(BOT_ID).expect("the seed id is valid"),
+                space_id: space_id.clone(),
+                user_id: user_id.clone(),
+                name: "Analyst".to_owned(),
+                description: Some("Reads commits and reports.".to_owned()),
+                color: Some("blue".to_owned()),
+                created_at: SEED_INSTANT.to_owned(),
+            },
+            NewThread {
+                id: ThreadId::new(THREAD_ID).expect("the seed id is valid"),
+                space_id: space_id.clone(),
+                bot_id: BotId::new(BOT_ID).expect("the seed id is valid"),
+                user_id: user_id.clone(),
+                created_at: SEED_INSTANT.to_owned(),
+            },
+        )
+        .await
+        .expect("the bot is created")
+}
+
+/// Seeds the messages and the run the page and activity fixtures capture.
+fn seed_history(
+    test_app: &TestApp,
+    space_id: &SpaceId,
+    bot: &Bot,
+    thread: &Thread,
+    user_id: &UserId,
+) {
+    let database = test_app.database();
+    database.seed_message(
+        space_id.clone(),
+        &text_message(
+            "msg_golden_1",
+            1,
+            MessageRole::User,
+            "Plan my week.",
+            user_id,
+        ),
+    );
+    database.seed_message(
+        space_id.clone(),
+        &text_message(
+            "msg_golden_2",
+            2,
+            MessageRole::User,
+            "Summarise the last three commits.",
+            user_id,
+        ),
+    );
+    database.seed_message(
+        space_id.clone(),
+        &text_message(
+            "msg_golden_3",
+            3,
+            MessageRole::Bot,
+            "Three commits, one revert.",
+            &bot.user_id,
+        ),
+    );
+    database.seed_run(Run {
+        id: RunId::new(RUN_ID).expect("the seed id is valid"),
+        space_id: space_id.clone(),
+        bot_id: bot.id.clone(),
+        thread_id: thread.id.clone(),
+        user_id: user_id.clone(),
+        status: RunStatus::Running,
+        trigger: RunTrigger::User,
+        client_nonce: None,
+        // The snippet the activity list shows is the message that started the run.
+        source_message_id: Some(MessageId::new("msg_golden_2").expect("the seed id is valid")),
+        created_at: SEED_INSTANT.to_owned(),
+        started_at: Some(RUN_STARTED_AT.to_owned()),
+        completed_at: None,
+        error: None,
+        lease_owner: None,
+        lease_fence: 0,
+        lease_expires_at: None,
+    });
+}
+
+/// Seeds the three events the stream fixture captures.
+fn seed_events(test_app: &TestApp, space_id: &SpaceId, _bot: &Bot, _thread: &Thread) {
+    let database = test_app.database();
+    database.seed_event(
+        space_id.clone(),
+        &Event {
+            thread_id: ThreadId::new(THREAD_ID).expect("the seed id is valid"),
+            seq: 4,
+            kind: EventType::Run,
+            payload: serde_json::json!({ "runId": RUN_ID, "status": "running" }),
+            created_at: "2026-01-01T00:00:04Z".to_owned(),
+        },
+    );
+    database.seed_event(
+        space_id.clone(),
+        &Event {
+            thread_id: ThreadId::new(THREAD_ID).expect("the seed id is valid"),
+            seq: 5,
+            kind: EventType::MessageUpdate,
+            payload: serde_json::json!({ "messageId": "msg_golden_5", "delta": "Three" }),
+            created_at: "2026-01-01T00:00:05Z".to_owned(),
+        },
+    );
+    database.seed_event(
+        space_id.clone(),
+        &Event {
+            thread_id: ThreadId::new(THREAD_ID).expect("the seed id is valid"),
+            seq: 6,
+            kind: EventType::Heartbeat,
+            payload: serde_json::json!({}),
+            created_at: "2026-01-01T00:00:15Z".to_owned(),
+        },
+    );
+}
+
+/// Seeds a second space the caller does not belong to.
+async fn seed_other_space(app: &App, _user_id: &UserId) {
+    app.stores
+        .spaces
+        .create(
+            NewSpace {
+                id: SpaceId::new(OTHER_SPACE_ID).expect("the seed id is valid"),
+                organization_id: OrganizationId::new(ORGANIZATION_ID)
+                    .expect("the seed id is valid"),
+                name: "Another space".to_owned(),
+                is_default: false,
+                created_at: SEED_INSTANT.to_owned(),
+            },
+            &UserId::new("usr_other_golden").expect("the seed id is valid"),
+        )
+        .await
+        .expect("the other space is created");
+}
+
+/// Builds a message with one text block.
+fn text_message(id: &str, seq: i64, role: MessageRole, text: &str, user_id: &UserId) -> Message {
+    Message {
+        id: MessageId::new(id).expect("the seed id is valid"),
+        thread_id: ThreadId::new(THREAD_ID).expect("the seed id is valid"),
+        seq,
+        role,
+        blocks: vec![Block::Text {
+            text: text.to_owned(),
+        }],
+        bot_id: if role == MessageRole::Bot {
+            Some(BotId::new(BOT_ID).expect("the seed id is valid"))
+        } else {
+            None
+        },
+        author_user_id: if role == MessageRole::User {
+            Some(user_id.clone())
+        } else {
+            None
+        },
+        run_id: if role == MessageRole::Bot {
+            Some(RunId::new(RUN_ID).expect("the seed id is valid"))
+        } else {
+            None
+        },
+        client_nonce: None,
+        created_at: created_at_of(seq),
+    }
+}
+
+/// The instant a seeded message carries.
+fn created_at_of(seq: i64) -> String {
+    format!("2026-01-01T00:00:0{seq}Z")
+}
+
+/// The role the seeded member has in the space.
+pub const GOLDEN_ROLE: SpaceRole = SpaceRole::Owner;
+
+/// The id of the invitation the invite fixture creates.
+///
+/// # Panics
+///
+/// Panics when the id is refused by the domain; a bug in the seed.
+#[must_use]
+pub fn invitation_id() -> InviteId {
+    InviteId::new("inv_golden").expect("the seed id is valid")
+}
+
+/// The session the fixtures sign in with.
+///
+/// # Panics
+///
+/// Panics when the id is refused by the domain; a bug in the seed.
+#[must_use]
+pub fn session() -> Session {
+    Session {
+        id: SessionId::new(SESSION_ID).expect("the seed id is valid"),
+        user_id: UserId::new(USER_ID).expect("the seed id is valid"),
+        expires_at: "2026-02-01T00:00:00Z".to_owned(),
+    }
+}

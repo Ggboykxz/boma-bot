@@ -11,14 +11,14 @@
       "reason": "M6 - the version chain needs the artifact table and the blob store"
     },
     "auth-capabilities": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-040",
-      "reason": "M1 - sign-in methods are reported once the session model exists"
+      "reason": null
     },
     "bot-create": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-004",
-      "reason": "M1 - creating a bot and its thread in one transaction lands with the walking skeleton"
+      "reason": null
     },
     "bot-webhook-denied": {
       "status": "pending",
@@ -36,9 +36,9 @@
       "reason": "M4 - takeover exclusivity needs the computer provider and its leases"
     },
     "cross-tenant-not-found": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-043",
-      "reason": "M1 - tenancy is enforced by RLS and the typed tenant context, both in M1"
+      "reason": null
     },
     "export-start": {
       "status": "pending",
@@ -91,9 +91,9 @@
       "reason": "M3 - the @once trigger needs the routine table and the dispatcher"
     },
     "run-list": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-011",
-      "reason": "M1 - the activity projection needs runs in the database"
+      "reason": null
     },
     "run-retry": {
       "status": "pending",
@@ -101,14 +101,14 @@
       "reason": "M2 - retry is implemented once leases and fence tokens exist"
     },
     "send-message": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-001",
-      "reason": "M1 - the RPC dispatcher and the send-message use case are the walking skeleton"
+      "reason": null
     },
     "send-message-replay": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-002",
-      "reason": "M1 - idempotency waits for the send-message use case it replays"
+      "reason": null
     },
     "shared-page": {
       "status": "pending",
@@ -121,14 +121,14 @@
       "reason": "M6 - the uniform not-found answer needs the shared-page lookup"
     },
     "space-create": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-042",
-      "reason": "M1 - spaces, memberships and invitations are the walking skeleton"
+      "reason": null
     },
     "space-invite": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-042",
-      "reason": "M1 - invitations land with the membership model"
+      "reason": null
     },
     "thread-answer": {
       "status": "pending",
@@ -136,26 +136,26 @@
       "reason": "M2 - answering resumes a run that is waiting on an approval"
     },
     "thread-messages": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-005",
-      "reason": "M1 - the ordered message page needs the thread tables"
+      "reason": null
     },
     "thread-subscribe": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-020",
-      "reason": "M1 - the SSE stream lands with the walking skeleton"
+      "reason": null
     },
     "unauthorized": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-040",
-      "reason": "M1 - the envelope exists and is tested, but this fixture replays /rpc/threads/send"
+      "reason": null
     }
   },
   "ui": {
     "REQ-001-send-message": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-001",
-      "reason": "M1 - the app shell exists, the thread screen arrives with the walking skeleton"
+      "reason": null
     },
     "REQ-007-pending-card": {
       "status": "pending",
@@ -168,9 +168,9 @@
       "reason": "M2 - read state and the unread divider need the thread with live updates"
     },
     "REQ-012-run-statuses": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-012",
-      "reason": "M1 - the eight status roles render once runs exist and the thread is on screen"
+      "reason": null
     },
     "REQ-026-computer-panel": {
       "status": "pending",

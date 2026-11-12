@@ -22,9 +22,14 @@ utoipa = { workspace = true }
 uuid = { workspace = true }
 
 boma-app = { workspace = true }
+tokio-stream = "0.1.19"
+tokio.workspace = true
+serde_json.workspace = true
+boma-domain.workspace = true
 
 [dev-dependencies]
 async-trait = { workspace = true }
+boma-testkit = { workspace = true }
 http-body-util = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
