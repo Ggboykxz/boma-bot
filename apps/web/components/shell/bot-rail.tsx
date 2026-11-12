@@ -3,10 +3,11 @@
 import { RiArrowDownSLine, RiArrowUpSLine, RiTimeLine } from "@remixicon/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { listBots, serverBots, subscribeBots } from "@/lib/bot-directory";
-import { botsList, threadsUnsnooze, type RosterBotView } from "@/lib/api/rpc";
+import { threadsUnsnooze, type RosterBotView } from "@/lib/api/rpc";
+import { listRoster, refreshRoster, subscribeRoster, serverRoster } from "@/lib/roster";
 import { useTranslation } from "@/lib/use-translation";
 
 /** How the rail renders one bot, and how it unsnoozes it. */
@@ -60,52 +61,25 @@ function RosterRow({
 export function BotRail() {
   const t = useTranslation();
   const pathname = usePathname();
-  const [roster, setRoster] = useState<RosterBotView[] | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const roster = useSyncExternalStore(subscribeRoster, listRoster, serverRoster);
   const directory = useSyncExternalStore(subscribeBots, listBots, serverBots);
 
-  const loadRoster = useCallback(async () => {
+  useEffect(() => {
+    void refreshRoster();
+  }, [pathname]);
+
+  const unsnooze = async (threadId: string) => {
     try {
-      const reply = await botsList();
-      setRoster(reply.bots);
+      await threadsUnsnooze({ threadId });
     } catch {
-      // The last good roster stays on screen; the fallback directory serves the first visit.
-      setRoster((current) => current);
+      // The shelf keeps the bot; the refresh decides.
     }
-  }, []);
+    await refreshRoster();
+  };
 
-  useEffect(() => {
-    void loadRoster();
-  }, [loadRoster, pathname]);
-
-  useEffect(() => {
-    const onRefresh = () => {
-      void loadRoster();
-    };
-    window.addEventListener("boma:roster-refresh", onRefresh);
-    return () => {
-      window.removeEventListener("boma:roster-refresh", onRefresh);
-    };
-  }, [loadRoster]);
-
-  const unsnooze = useCallback(
-    async (threadId: string) => {
-      try {
-        await threadsUnsnooze({ threadId });
-      } catch {
-        // The shelf keeps the bot; the refresh decides.
-      }
-      window.dispatchEvent(new CustomEvent("boma:roster-refresh"));
-    },
-    [],
-  );
-
-  const regular =
-    roster === null
-      ? []
-      : roster.filter((bot) => !bot.snoozedUntil);
-  const snoozed =
-    roster === null ? [] : roster.filter((bot) => bot.snoozedUntil);
+  const regular = roster === null ? [] : roster.filter((bot) => !bot.snoozedUntil);
+  const snoozed = roster === null ? [] : roster.filter((bot) => bot.snoozedUntil);
 
   return (
     <aside className="flex w-full flex-col gap-6 lg:w-56 lg:shrink-0">

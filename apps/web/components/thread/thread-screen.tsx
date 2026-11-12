@@ -24,6 +24,7 @@ import {
   type MessageView,
 } from "@/lib/api/rpc";
 import { botIdFromPath, registerBot } from "@/lib/bot-directory";
+import { refreshRoster } from "@/lib/roster";
 import { runStatusKey } from "@/lib/run-status";
 import { useTranslation } from "@/lib/use-translation";
 
@@ -247,7 +248,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
         await threadsSnooze({ threadId, until });
         setSnoozed(true);
       }
-      window.dispatchEvent(new CustomEvent("boma:roster-refresh"));
+      await refreshRoster();
     } catch {
       // The state keeps its last value; the button is the retry.
     }
