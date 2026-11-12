@@ -1,0 +1,503 @@
+openapi: 3.1.0
+info:
+  title: Bots platform HTTP interface
+  summary: Plain HTTP endpoints served next to the RPC interface.
+  description: >
+    Everything a browser, a webhook sender, a public link or an orchestrator needs that is not a
+    JSON-RPC procedure. The RPC interface (POST /rpc/{namespace}/{procedure}) is specified in
+    03-api-contract.md and intentionally not described here.
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:5173
+    description: Same-origin deployment (web proxy forwards /api, /rpc and /internal)
+tags:
+  - name: ops
+  - name: auth
+  - name: public
+  - name: webhooks
+  - name: devices
+  - name: admin
+
+paths:
+  /health:
+    get:
+      tags: [ops]
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+  /ready:
+    get:
+      tags: [ops]
+      operationId: ready
+      security: []
+      responses:
+        "200":
+          description: Database reachable and capabilities resolved.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean, const: true }
+                  version: { type: string }
+                  runtime: { type: string }
+                  sandbox: { type: string }
+                  integrations: { type: array, items: { type: string } }
+                  messaging: { type: boolean }
+                  email: { type: [string, "null"] }
+                  billing: { type: [string, "null"] }
+                  jobs: { type: string }
+                  realtime: { type: string }
+                  degraded: { type: boolean }
+                  revision: { type: [string, "null"] }
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /internal/health:
+    get:
+      tags: [ops]
+      operationId: internalHealth
+      responses:
+        "200":
+          description: Worker health for the supervisor.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  lastCompletedAt: { type: [string, "null"], format: date-time }
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/auth/capabilities:
+    get:
+      tags: [auth]
+      operationId: authCapabilities
+      security: []
+      responses:
+        "200":
+          description: Which sign-in methods the deployment offers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sso:
+                    type: [object, "null"]
+                    properties:
+                      name: { type: string }
+                      availability: { type: string }
+                  passwordAuth: { type: boolean }
+                  passwordReset: { type: boolean }
+                  resetUrl: { type: [string, "null"], format: uri }
+                  emailCode: { type: boolean }
+                  billing: { type: boolean }
+                  passkeyRpId: { type: [string, "null"] }
+                  nativePasskeys: { type: boolean }
+  /api/auth/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [auth]
+      operationId: authRead
+      description: Authentication library surface (session, callbacks, verification).
+      responses:
+        "200": { description: Handled }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [auth]
+      operationId: authWrite
+      description: Sign-in, sign-up, reset, passkey ceremonies. Body capped at 64 KiB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Handled }
+        "413": { $ref: "#/components/responses/TooLarge" }
+  /api/auth/scim/v2/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [admin]
+      operationId: scimRead
+      responses:
+        "200": { description: SCIM resource }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [admin]
+      operationId: scimWrite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: SCIM resource }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/csp-report:
+    post:
+      tags: [public]
+      operationId: cspReport
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/csp-report:
+            schema: { type: object, additionalProperties: true }
+          application/reports+json:
+            schema: { type: array, items: { type: object } }
+      responses:
+        "204": { description: Accepted and discarded }
+  /api/v1/plugin-submissions:
+    post:
+      tags: [public]
+      operationId: submitPlugin
+      security: []
+      description: >
+        Cookieless endpoint, CORS `*`. Source must parse as a repository reference; invalid sources
+        are rejected before any fetch. Rate limited per client address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { type: string, description: "git URL, optional @ref and #subdir" }
+                name: { type: string }
+                contact: { type: string }
+      responses:
+        "200":
+          description: Submission recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  id: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "429": { $ref: "#/components/responses/TooMany" }
+  /api/v1/pages/shared/{token}:
+    get:
+      tags: [public]
+      operationId: readSharedPage
+      security: []
+      description: Public read of a shared page. Uniform 404 for unknown or revoked tokens.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, minLength: 16 }
+      responses:
+        "200":
+          description: Current page version.
+          headers:
+            cache-control: { schema: { type: string } }
+            x-robots-tag: { schema: { type: string } }
+            referrer-policy: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title: { type: string }
+                  blocks: { type: array, items: { type: object } }
+                  updatedAt: { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooMany" }
+  /api/v1/assets/{asset}:
+    get:
+      tags: [public]
+      operationId: getScriptAsset
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema: { enum: [mermaid.js, page-runtime.js] }
+        - name: if-none-match
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: JavaScript asset.
+          headers:
+            etag: { schema: { type: string } }
+            x-content-type-options: { schema: { type: string, const: nosniff } }
+          content:
+            text/javascript:
+              schema: { type: string }
+        "304": { description: Not modified }
+  /api/v1/bots/{botId}/webhook:
+    post:
+      tags: [webhooks]
+      operationId: botWebhook
+      description: Bearer secret per bot. Uniform 401 for unknown bot, missing or wrong secret.
+      parameters:
+        - name: botId
+          in: path
+          required: true
+          schema: { type: string }
+      security:
+        - botBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "202": { description: Run scheduled }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+  /api/v1/email/inbound:
+    post:
+      tags: [webhooks]
+      operationId: inboundEmail
+      description: Relay-authenticated inbound mail, addressed by the `to` query parameter.
+      parameters:
+        - name: to
+          in: query
+          required: true
+          schema: { type: string }
+      security:
+        - relayBearer: []
+      requestBody:
+        required: true
+        content:
+          message/rfc822:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Accepted, ignored, or rejected by policy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  ignored: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "503":
+          description: Transient failure; the relay should retry.
+  /api/v1/email/unsubscribe:
+    get:
+      tags: [public]
+      operationId: unsubscribe
+      security: []
+      parameters:
+        - name: user
+          in: query
+          required: true
+          schema: { type: string }
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Opt-out recorded (idempotent) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/messaging/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [webhooks]
+      operationId: messagingWebhook
+      description: Platform callbacks (Slack, Teams, Telegram, Discord-class). 256 KiB cap.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Handled }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+  /api/billing/webhook:
+    post:
+      tags: [webhooks]
+      operationId: billingWebhook
+      description: Payment provider events, signature-verified, 512 KiB cap, idempotent per event id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Processed or already seen }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+  /api/internal/screen-target:
+    post:
+      tags: [ops]
+      operationId: screenTarget
+      description: >
+        Opens a screen stream for a sealed capability (bot, computer, screen generation). Body capped
+        at 16 KiB; anything that does not open a current capability is refused.
+      security:
+        - screenCapability: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        "200": { description: Screen stream }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+  /api/devices/pair:
+    post:
+      tags: [devices]
+      operationId: pairDevice
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                publicKey: { type: string }
+      responses:
+        "200": { description: Pairing code or registered device }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/devices/self/session:
+    get:
+      tags: [devices]
+      operationId: deviceSession
+      security:
+        - deviceKey: []
+      responses:
+        "200":
+          description: Session for the paired device.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  userId: { type: string }
+                  spaceId: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/monitoring/config:
+    get:
+      tags: [ops]
+      operationId: monitoringConfig
+      responses:
+        "200":
+          description: Client monitoring configuration (no secrets).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  tunnel: { type: string }
+  /api/monitoring/tunnel:
+    post:
+      tags: [ops]
+      operationId: monitoringTunnel
+      description: Bounded browser error envelope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "202": { description: Accepted }
+        "413": { $ref: "#/components/responses/TooLarge" }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+    botBearer:
+      type: http
+      scheme: bearer
+    relayBearer:
+      type: http
+      scheme: bearer
+    screenCapability:
+      type: http
+      scheme: bearer
+    deviceKey:
+      type: http
+      scheme: bearer
+  responses:
+    BadRequest:
+      description: Invalid input.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing or invalid credentials.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Credential does not open this resource.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found (also used for resources of another tenant).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooLarge:
+      description: Body exceeds the endpoint limit.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooMany:
+      description: Rate limited.
+      headers:
+        retry-after: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: Dependency unavailable (database, worker heartbeat).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          enum: [UNAUTHORIZED, FORBIDDEN, NOT_FOUND, BAD_REQUEST, CONFLICT, TOO_MANY_REQUESTS, INTERNAL]

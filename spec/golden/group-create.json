@@ -1,0 +1,30 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/groups/create",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "name": "Triage",
+      "botIds": [
+        "bot_golden",
+        "bot_golden_2"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "grp_golden",
+      "name": "Triage",
+      "threadId": "thr_group_golden",
+      "memberBotIds": [
+        "bot_golden",
+        "bot_golden_2"
+      ]
+    }
+  },
+  "notes": "A group owns one thread shared by its bots; membership changes never fork the thread (apps/api/src/routes/bots.ts:737, REQ-010)."
+}

@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/bots/get",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_other_golden"
+    },
+    "body": {
+      "botId": "bot_golden"
+    }
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "code": "NOT_FOUND",
+      "error": "Not found."
+    }
+  },
+  "notes": "A resource in another space is not found, never forbidden: the difference would confirm that the id exists (REQ-043)."
+}

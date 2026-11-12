@@ -1,0 +1,48 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/threads/messages",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "threadId": "thr_golden",
+      "limit": 2
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "messages": [
+        {
+          "id": "msg_golden_3",
+          "seq": 3,
+          "role": "bot",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Three commits, one revert."
+            }
+          ],
+          "runId": "run_golden",
+          "createdAt": "2026-01-01T00:00:03Z"
+        },
+        {
+          "id": "msg_golden_2",
+          "seq": 2,
+          "role": "user",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "Summarise the last three commits."
+            }
+          ],
+          "createdAt": "2026-01-01T00:00:02Z"
+        }
+      ],
+      "nextCursor": "seq:2"
+    }
+  },
+  "notes": "Newest-first page ordered by seq with an opaque cursor. A page must never be ordered by insertion time; seq is the only ordering the client may trust (REQ-005)."
+}

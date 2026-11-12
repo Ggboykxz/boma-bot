@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/runs/retry",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "runId": "run_golden_failed"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "runId": "run_golden_failed",
+      "status": "queued",
+      "attempt": 2
+    }
+  },
+  "notes": "Retry is the only transition out of a terminal state, and only from `failed`; from `completed` or `cancelled` the call must fail with CONFLICT (packages/core/src/run-state.ts:44-54, REQ-012, REQ-021)."
+}

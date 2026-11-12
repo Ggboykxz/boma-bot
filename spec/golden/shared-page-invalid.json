@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/pages/shared/<unknown>",
+    "headers": {}
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "error": "Not found."
+    }
+  },
+  "notes": "Uniform failure: unknown token, revoked token and malformed token are indistinguishable in body, status and timing (REQ-037, 04.5)."
+}

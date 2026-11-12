@@ -1,0 +1,31 @@
+{
+  "state": {
+    "route": "/app/bot_golden",
+    "seed": "computer-held-by-another-member",
+    "role": "member",
+    "viewport": "1440x900",
+    "media": {
+      "colorScheme": "dark",
+      "reducedMotion": "reduce"
+    }
+  },
+  "expect": [
+    {
+      "role": "region",
+      "count": 1
+    },
+    {
+      "role": "status",
+      "state": "visible"
+    },
+    {
+      "role": "img",
+      "state": "visible"
+    },
+    {
+      "role": "button",
+      "state": "disabled"
+    }
+  ],
+  "notes": "The holder sees release enabled and everyone else sees takeover; a stale screen capability must surface as a status, not a frozen image. Reduced motion must not animate the stream. Reference capture: none (static pass). REQ-026, REQ-029, REQ-030."
+}

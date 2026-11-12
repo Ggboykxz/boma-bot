@@ -1,0 +1,31 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/routines/create",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "botId": "bot_golden",
+      "name": "Morning digest",
+      "prompt": "Summarise overnight commits.",
+      "crons": [
+        "0 8 * * 1-5"
+      ],
+      "timezone": "Europe/Paris",
+      "active": true,
+      "notify": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "rtn_golden",
+      "nextRunAt": "2026-01-02T07:00:00Z",
+      "active": true,
+      "timezone": "Europe/Paris"
+    }
+  },
+  "notes": "nextRunAt is computed in the routine's timezone and returned as UTC, so the client never guesses the schedule (packages/core/src/cron.ts, apps/api/src/routes/routines.ts:64, REQ-023)."
+}

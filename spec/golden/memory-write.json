@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/memory/write",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "botId": "bot_golden",
+      "scope": "bot",
+      "path": "notes/commits.md",
+      "content": "# Commits\n- a1b2c3 revert\n"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "path": "notes/commits.md",
+      "revision": 4,
+      "updatedAt": "2026-01-01T00:01:00Z"
+    }
+  },
+  "notes": "A write appends a revision; the document is a projection of the latest revision, so revision numbers only increase (apps/api/src/routes/memory.ts:24, REQ-022)."
+}

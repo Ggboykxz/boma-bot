@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/spaces/create",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "name": "Platform team"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "spc_new_golden",
+      "name": "Platform team",
+      "isDefault": false,
+      "role": "owner"
+    }
+  },
+  "notes": "The creator becomes owner of the new space and the caller's membership is written in the same transaction (apps/api/src/routes/spaces.ts, REQ-042)."
+}

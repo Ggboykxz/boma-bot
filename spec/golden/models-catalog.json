@@ -1,0 +1,33 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/models/catalog",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {}
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "providers": [
+        {
+          "id": "provider_golden",
+          "name": "Provider",
+          "models": [
+            {
+              "id": "model_golden",
+              "name": "Model",
+              "contextWindow": 128000,
+              "roles": [
+                "chat"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "notes": "Catalogue only: no keys, no account identifiers. Whether a provider is usable is a separate credential call (apps/api/src/routes/models.ts, REQ-052)."
+}

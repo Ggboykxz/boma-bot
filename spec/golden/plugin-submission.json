@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/plugin-submissions",
+    "headers": {
+      "content-type": "application/json",
+      "origin": "https://example.test"
+    },
+    "body": {
+      "source": "https://example.test/plugin.git#main",
+      "name": "Example",
+      "contact": "<synthetic-address>"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "id": "sub_golden"
+    }
+  },
+  "notes": "Cookieless, CORS-open, source parsed before any fetch, 10/hour/IP. The reply carries an id and nothing about the submitter (apps/api/src/plugin-submissions.ts:139-154, REQ-034)."
+}

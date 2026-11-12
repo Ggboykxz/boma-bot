@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/spaces/invite",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "email": "<synthetic-address>",
+      "role": "member"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "invitationId": "inv_golden",
+      "expiresAt": "2026-01-08T00:00:00Z",
+      "status": "pending"
+    }
+  },
+  "notes": "The response never contains the token: it is delivered by mail and stored hashed. Expiry is returned so the UI can show it (REQ-042)."
+}

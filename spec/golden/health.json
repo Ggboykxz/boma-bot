@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/health",
+    "headers": {}
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "ok": true
+    }
+  },
+  "notes": "Liveness only. Must not touch the database; readiness is /ready (apps/api/src/health.ts). Golden asserts the exact body shape a probe depends on."
+}

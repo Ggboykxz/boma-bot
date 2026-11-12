@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/export/start",
+    "headers": {
+      "cookie": "session=<redacted>"
+    },
+    "body": {}
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "exportId": "exp_golden",
+      "status": "pending"
+    }
+  },
+  "notes": "Export is asynchronous; the archive is a zip whose manifest carries a version, so an importer can refuse a format it does not know (apps/api/src/account-export.ts:132, REQ-044)."
+}

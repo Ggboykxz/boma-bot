@@ -1,0 +1,48 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/threads/subscribe",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden",
+      "accept": "text/event-stream"
+    },
+    "body": {
+      "threadId": "thr_golden"
+    }
+  },
+  "response": {
+    "status": 200,
+    "contentType": "text/event-stream",
+    "events": [
+      {
+        "threadId": "thr_golden",
+        "seq": 4,
+        "type": "run",
+        "payload": {
+          "runId": "run_golden",
+          "status": "running"
+        },
+        "createdAt": "2026-01-01T00:00:04Z"
+      },
+      {
+        "threadId": "thr_golden",
+        "seq": 5,
+        "type": "message-update",
+        "payload": {
+          "messageId": "msg_golden_5",
+          "delta": "Three"
+        },
+        "createdAt": "2026-01-01T00:00:05Z"
+      },
+      {
+        "threadId": "thr_golden",
+        "seq": 6,
+        "type": "heartbeat",
+        "payload": {},
+        "createdAt": "2026-01-01T00:00:15Z"
+      }
+    ]
+  },
+  "notes": "Stream, not request/response: every frame carries a per-thread seq so a reconnect can resume without gaps, and a heartbeat proves liveness during silence (apps/api/src/routes/threads.ts:185-203, REQ-005, REQ-020)."
+}

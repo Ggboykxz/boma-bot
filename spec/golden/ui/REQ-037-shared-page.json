@@ -1,0 +1,27 @@
+{
+  "state": {
+    "route": "/p/token_golden",
+    "seed": "shared-page-valid",
+    "role": "anonymous",
+    "viewport": "390x844",
+    "media": {
+      "colorScheme": "light",
+      "reducedMotion": "no-preference"
+    }
+  },
+  "expect": [
+    {
+      "role": "main",
+      "state": "visible"
+    },
+    {
+      "role": "navigation",
+      "state": "absent"
+    },
+    {
+      "role": "button",
+      "state": "absent"
+    }
+  ],
+  "notes": "A valid token renders the page with no application chrome and no session. Reference capture: none (static pass). REQ-037."
+}

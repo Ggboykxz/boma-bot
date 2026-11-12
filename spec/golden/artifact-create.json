@@ -1,0 +1,28 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/artifacts/create",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "botId": "bot_golden",
+      "name": "report.md",
+      "mimeType": "text/markdown",
+      "contentBase64": "IyBSZXBvcnQK",
+      "clientNonce": "nonce-artifact-0001"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "art_golden",
+      "version": 1,
+      "rootArtifactId": "art_golden",
+      "size": 11,
+      "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "notes": "Content is stored out of band; the reply carries metadata only. Bytes are never in the response of a create (apps/api/src/artifacts.ts:24, REQ-036)."
+}

@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/threads/send",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "botId": "bot_golden",
+      "text": "hello"
+    }
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "code": "UNAUTHORIZED",
+      "error": "Sign in to continue."
+    }
+  },
+  "notes": "The stable error envelope: a machine code plus a message safe to display. Internal detail never crosses this boundary (03, 04.5)."
+}

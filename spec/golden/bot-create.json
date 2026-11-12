@@ -1,0 +1,26 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/bots/create",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "name": "Analyst",
+      "description": "Reads commits and reports.",
+      "color": "blue"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "bot_golden",
+      "name": "Analyst",
+      "threadId": "thr_golden",
+      "archivedAt": null,
+      "createdAt": "2026-01-01T00:00:00Z"
+    }
+  },
+  "notes": "Creating a bot creates its thread in the same transaction, so the client never has a bot without a conversation (apps/api/src/routes/bots.ts:312, REQ-004)."
+}

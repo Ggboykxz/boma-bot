@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/threads/answer",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "cardId": "card_golden",
+      "answer": "approve"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "runId": "run_golden"
+    }
+  },
+  "notes": "Answering resumes the run; the effect runs once and only after this call. A second answer to the same card is rejected rather than replayed (apps/api/src/routes/threads.ts:624, apps/api/src/adapters approval-effect, REQ-017)."
+}

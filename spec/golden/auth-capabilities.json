@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/auth/capabilities",
+    "headers": {}
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "sso": null,
+      "passwordAuth": true,
+      "passwordReset": true,
+      "resetUrl": "http://127.0.0.1:5173/reset-password",
+      "emailCode": false,
+      "billing": false,
+      "passkeyRpId": "127.0.0.1",
+      "nativePasskeys": false
+    }
+  },
+  "notes": "Drives which sign-in controls the client renders. Absent methods are omitted, not disabled: `sso: null` means the button does not exist (REQ-040)."
+}

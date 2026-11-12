@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/computer/takeover",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "botId": "bot_golden"
+    }
+  },
+  "response": {
+    "status": 409,
+    "body": {
+      "code": "CONFLICT",
+      "error": "Someone else has control."
+    }
+  },
+  "notes": "Exclusive control: a second takeover is a conflict, not a queue. The holder is named in the message (apps/api/src/routes/computer.ts:363, REQ-029)."
+}

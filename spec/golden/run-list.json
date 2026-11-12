@@ -1,0 +1,31 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/runs/list",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "botId": "bot_golden",
+      "limit": 1
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "runs": [
+        {
+          "id": "run_golden",
+          "status": "running",
+          "trigger": "user",
+          "promptSnippet": "Summarise the last three commits.",
+          "startedAt": "2026-01-01T00:00:01Z",
+          "completedAt": null
+        }
+      ],
+      "nextCursor": null
+    }
+  },
+  "notes": "Activity is a projection over runs, ordered newest first, with a snippet short enough to render in one line (apps/api/src/runs.ts:31, REQ-011)."
+}

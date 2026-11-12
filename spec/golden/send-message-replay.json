@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/threads/send",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "botId": "bot_golden",
+      "text": "Summarise the last three commits.",
+      "clientNonce": "nonce-golden-0001"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "messageId": "msg_golden",
+      "runId": "run_golden",
+      "status": "queued"
+    }
+  },
+  "notes": "Identical request replayed: same ids, no second message, no second run. This is the contract for a client that retries after a timeout (apps/api/src/thread-target.ts:525, REQ-002)."
+}

@@ -1,0 +1,36 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/artifacts/listVersions",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "artifactId": "art_golden"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "versions": [
+        {
+          "id": "art_golden_v3",
+          "version": 3,
+          "rootArtifactId": "art_golden"
+        },
+        {
+          "id": "art_golden_v2",
+          "version": 2,
+          "rootArtifactId": "art_golden"
+        },
+        {
+          "id": "art_golden",
+          "version": 1,
+          "rootArtifactId": "art_golden"
+        }
+      ]
+    }
+  },
+  "notes": "Versions form a chain rooted at the first upload; newest first, version numbers dense and monotonic (apps/api/src/artifacts.ts:469, REQ-036)."
+}

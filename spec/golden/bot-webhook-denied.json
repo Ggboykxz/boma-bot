@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/bots/bot_unknown/webhook",
+    "headers": {
+      "authorization": "Bearer <invalid>",
+      "content-type": "application/json"
+    },
+    "body": {
+      "event": "push"
+    }
+  },
+  "response": {
+    "status": 401,
+    "body": {
+      "error": "Unauthorized."
+    }
+  },
+  "notes": "Unknown bot and wrong secret produce the same response, so bot ids cannot be enumerated (apps/api/src/webhook.ts:50-58, REQ-050, REQ-043)."
+}

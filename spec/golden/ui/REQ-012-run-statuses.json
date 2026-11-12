@@ -1,0 +1,27 @@
+{
+  "state": {
+    "route": "/app/activity",
+    "seed": "one-run-per-status",
+    "role": "member",
+    "viewport": "1280x800",
+    "media": {
+      "colorScheme": "light",
+      "reducedMotion": "no-preference"
+    }
+  },
+  "expect": [
+    {
+      "role": "list",
+      "count": 1
+    },
+    {
+      "role": "listitem",
+      "count": 8
+    },
+    {
+      "role": "status",
+      "count": 8
+    }
+  ],
+  "notes": "Eight seeded runs, one per status, each with its own status role so no state is conveyed by colour alone. Retry is offered only on the failed row (packages/core/src/run-state.ts:44-54). Reference capture: none (static pass). REQ-012."
+}

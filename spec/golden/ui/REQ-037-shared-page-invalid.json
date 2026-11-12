@@ -1,0 +1,31 @@
+{
+  "state": {
+    "route": "/p/token_unknown",
+    "seed": "shared-page-unknown-token",
+    "role": "anonymous",
+    "viewport": "390x844",
+    "media": {
+      "colorScheme": "light",
+      "reducedMotion": "no-preference"
+    }
+  },
+  "expect": [
+    {
+      "role": "main",
+      "state": "visible"
+    },
+    {
+      "role": "heading",
+      "count": 1
+    },
+    {
+      "role": "navigation",
+      "state": "absent"
+    },
+    {
+      "role": "form",
+      "state": "absent"
+    }
+  ],
+  "notes": "Unknown and revoked tokens produce the same document shape: one heading, no retry form, no hint that the token ever existed. Uniform failure is the requirement, not the wording. Reference capture: none (static pass). REQ-037."
+}

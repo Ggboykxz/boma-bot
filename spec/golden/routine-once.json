@@ -1,0 +1,29 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/rpc/routines/create",
+    "headers": {
+      "cookie": "session=<redacted>",
+      "x-space-id": "spc_golden"
+    },
+    "body": {
+      "botId": "bot_golden",
+      "name": "One shot",
+      "prompt": "Do it once.",
+      "crons": [
+        "@once"
+      ],
+      "timezone": "UTC",
+      "active": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "rtn_once_golden",
+      "nextRunAt": "2026-01-01T00:05:00Z",
+      "active": true
+    }
+  },
+  "notes": "@once is the single one-shot value: it fires once and the routine deactivates, so an active routine with @once must never have a second nextRunAt (REQ-023)."
+}

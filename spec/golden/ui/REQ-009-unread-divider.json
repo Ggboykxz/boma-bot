@@ -1,0 +1,27 @@
+{
+  "state": {
+    "route": "/app/bot_golden",
+    "seed": "six-unread-messages",
+    "role": "member",
+    "viewport": "1280x800",
+    "media": {
+      "colorScheme": "light",
+      "reducedMotion": "no-preference"
+    }
+  },
+  "expect": [
+    {
+      "role": "separator",
+      "count": 1
+    },
+    {
+      "role": "log",
+      "state": "visible"
+    },
+    {
+      "role": "listitem",
+      "count": 6
+    }
+  ],
+  "notes": "Unread content is separated exactly once and counted from lastSeq, excluding hidden background steps. A second visit after reading must render zero separators. Reference capture: none (static pass). REQ-009."
+}

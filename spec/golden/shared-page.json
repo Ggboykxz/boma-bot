@@ -1,0 +1,28 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/v1/pages/shared/<token>",
+    "headers": {
+      "accept": "application/json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow",
+      "referrer-policy": "no-referrer"
+    },
+    "body": {
+      "title": "Weekly report",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "All green."
+        }
+      ],
+      "updatedAt": "2026-01-01T00:02:00Z"
+    }
+  },
+  "notes": "Public read by token only, never by page id, with noindex and no-referrer. Unknown and revoked tokens return the same 404 body (apps/api/src/shared-pages.ts:8-38, REQ-037)."
+}

@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/ready",
+    "headers": {}
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "version": "0.0.0-golden",
+      "runtime": "sandboxed",
+      "sandbox": "docker",
+      "integrations": [],
+      "messaging": false,
+      "email": null,
+      "billing": null,
+      "jobs": "inline",
+      "realtime": "postgres",
+      "degraded": false,
+      "revision": "golden"
+    }
+  },
+  "notes": "Capability report with secrets absent. A rebuild may add fields but must not remove these; `degraded` is the flag an orchestrator reads when a subsystem is optional (apps/api/src/health.ts, REQ-053)."
+}

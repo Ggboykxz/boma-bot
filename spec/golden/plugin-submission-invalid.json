@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/plugin-submissions",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "source": "not a repository"
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": "Invalid source."
+    }
+  },
+  "notes": "Rejected before any network access; a rebuild must not resolve or clone a ref it cannot parse (REQ-034)."
+}

@@ -1,0 +1,31 @@
+{
+  "state": {
+    "route": "/app/bot_golden",
+    "seed": "pending-question-card",
+    "role": "member",
+    "viewport": "1280x800",
+    "media": {
+      "colorScheme": "dark",
+      "reducedMotion": "no-preference"
+    }
+  },
+  "expect": [
+    {
+      "role": "region",
+      "count": 1
+    },
+    {
+      "role": "button",
+      "state": "enabled"
+    },
+    {
+      "role": "textbox",
+      "state": "enabled"
+    },
+    {
+      "role": "navigation",
+      "state": "visible"
+    }
+  ],
+  "notes": "A waiting question keeps the composer usable (only approvals are modal) and leaves navigation reachable, so the user can leave the thread and come back. Reference capture: none (static pass). REQ-007."
+}

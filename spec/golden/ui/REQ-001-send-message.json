@@ -1,0 +1,31 @@
+{
+  "state": {
+    "route": "/app/bot_golden",
+    "seed": "thread-with-one-user-message",
+    "role": "member",
+    "viewport": "1280x800",
+    "media": {
+      "colorScheme": "light",
+      "reducedMotion": "no-preference"
+    }
+  },
+  "expect": [
+    {
+      "role": "main",
+      "state": "visible"
+    },
+    {
+      "role": "log",
+      "state": "visible"
+    },
+    {
+      "role": "textbox",
+      "state": "enabled"
+    },
+    {
+      "role": "listitem",
+      "count": 1
+    }
+  ],
+  "notes": "One seeded message renders exactly one item in the transcript and leaves the composer usable. A duplicate optimistic row would show two items. Reference capture: none (static pass, no /ui-probe). REQ-001, REQ-002."
+}
