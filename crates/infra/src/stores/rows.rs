@@ -496,3 +496,46 @@ pub(crate) fn memory_document(
         updated_at: row.updated_at,
     })
 }
+
+/// A row of `routines`.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct RoutineRow {
+    pub(crate) id: String,
+    pub(crate) space_id: String,
+    pub(crate) bot_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) user_id: String,
+    pub(crate) name: String,
+    pub(crate) prompt: String,
+    pub(crate) crons: Vec<String>,
+    pub(crate) timezone: String,
+    pub(crate) active: bool,
+    pub(crate) notify: bool,
+    pub(crate) last_run_at: Option<String>,
+    pub(crate) next_run_at: Option<String>,
+    pub(crate) account_failures: i32,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+}
+
+/// Turns a stored row into the routine it describes.
+pub(crate) fn routine(row: RoutineRow) -> Result<boma_app::ports::Routine, AppError> {
+    Ok(boma_app::ports::Routine {
+        id: boma_domain::RoutineId::new(row.id)?,
+        space_id: SpaceId::new(row.space_id)?,
+        bot_id: BotId::new(row.bot_id)?,
+        thread_id: ThreadId::new(row.thread_id)?,
+        user_id: UserId::new(row.user_id)?,
+        name: row.name,
+        prompt: row.prompt,
+        crons: row.crons,
+        timezone: row.timezone,
+        active: row.active,
+        notify: row.notify,
+        last_run_at: row.last_run_at,
+        next_run_at: row.next_run_at,
+        account_failures: u32::try_from(row.account_failures).unwrap_or(u32::MAX),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}

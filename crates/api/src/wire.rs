@@ -310,6 +310,111 @@ pub struct MemoryProviderReply {
     pub provider: String,
 }
 
+/// The reply of `routines.create` (REQ-023).
+///
+/// `@once` routines carry no timezone: they fire once, they do not reschedule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineWriteReply {
+    /// The new routine's id.
+    pub id: String,
+    /// When it wakes next, or none when it is inactive.
+    pub next_run_at: Option<String>,
+    /// Whether it wakes at all.
+    pub active: bool,
+    /// The IANA timezone its cron computes in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+}
+
+impl From<&boma_app::ports::Routine> for RoutineWriteReply {
+    fn from(routine: &boma_app::ports::Routine) -> Self {
+        Self {
+            id: routine.id.as_str().to_owned(),
+            next_run_at: routine.next_run_at.clone(),
+            active: routine.active,
+            timezone: if routine.crons.iter().any(|entry| entry == boma_domain::ONCE) {
+                None
+            } else {
+                Some(routine.timezone.clone())
+            },
+        }
+    }
+}
+
+/// One routine, as the management view lists it (REQ-023).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineView {
+    /// The routine's id.
+    pub id: String,
+    /// The bot it wakes.
+    pub bot_id: String,
+    /// Its conversation.
+    pub thread_id: String,
+    /// The name a person sees.
+    pub name: String,
+    /// The prompt the agent receives.
+    pub prompt: String,
+    /// The cron expressions.
+    pub crons: Vec<String>,
+    /// Its IANA timezone.
+    pub timezone: String,
+    /// Whether it wakes at all.
+    pub active: bool,
+    /// Whether the owner is told about each run.
+    pub notify: bool,
+    /// When it last fired.
+    pub last_run_at: Option<String>,
+    /// When it wakes next.
+    pub next_run_at: Option<String>,
+    /// The consecutive failures since the last success.
+    pub account_failures: u32,
+    /// When it was created.
+    pub created_at: String,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+impl From<&boma_app::ports::Routine> for RoutineView {
+    fn from(routine: &boma_app::ports::Routine) -> Self {
+        Self {
+            id: routine.id.as_str().to_owned(),
+            bot_id: routine.bot_id.as_str().to_owned(),
+            thread_id: routine.thread_id.as_str().to_owned(),
+            name: routine.name.clone(),
+            prompt: routine.prompt.clone(),
+            crons: routine.crons.clone(),
+            timezone: routine.timezone.clone(),
+            active: routine.active,
+            notify: routine.notify,
+            last_run_at: routine.last_run_at.clone(),
+            next_run_at: routine.next_run_at.clone(),
+            account_failures: routine.account_failures,
+            created_at: routine.created_at.clone(),
+            updated_at: routine.updated_at.clone(),
+        }
+    }
+}
+
+/// The reply of `routines.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutinesReply {
+    /// The routines of the bot, in creation order.
+    pub routines: Vec<RoutineView>,
+}
+
+/// The reply of `routines.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineRemoveReply {
+    /// The routine that was removed.
+    pub routine_id: String,
+    /// Whether anything was there.
+    pub removed: bool,
+}
+
 /// The reply of `bots.list` (REQ-009).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

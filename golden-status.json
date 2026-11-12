@@ -81,14 +81,14 @@
       "reason": null
     },
     "routine-create": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-023",
-      "reason": "M3 - schedules and nextRunAt computation are not implemented"
+      "reason": null
     },
     "routine-once": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-023",
-      "reason": "M3 - the @once trigger needs the routine table and the dispatcher"
+      "reason": null
     },
     "run-list": {
       "status": "implemented",

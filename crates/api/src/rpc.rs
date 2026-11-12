@@ -25,7 +25,8 @@ use crate::{
     wire::{
         AnswerReply, BotReply, BotsListReply, CancelReply, InvitationReply, MemoryDocumentReply,
         MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
-        MessagesReply, ReactReply, RosterBotView, RunRetryReply, RunView, RunsReply, SendReply,
+        MessagesReply, ReactReply, RosterBotView, RoutineRemoveReply, RoutineView,
+        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SendReply,
         SnoozeReply, SpaceReply, ThreadHeadReply,
     },
 };
@@ -42,6 +43,8 @@ pub mod namespaces {
     pub const RUNS: &str = "runs";
     /// Memory documents (REQ-022).
     pub const MEMORY: &str = "memory";
+    /// Routines: cron definitions that wake a bot (REQ-023).
+    pub const ROUTINES: &str = "routines";
 }
 
 /// Every procedure this deployment serves.
@@ -73,6 +76,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::MEMORY, "list"),
         (namespaces::MEMORY, "remove"),
         (namespaces::MEMORY, "provider"),
+        (namespaces::ROUTINES, "create"),
+        (namespaces::ROUTINES, "list"),
+        (namespaces::ROUTINES, "remove"),
     ]
 }
 
@@ -165,6 +171,15 @@ async fn dispatch(
             provider: "builtin".to_owned(),
         })
         .into_response()),
+        (namespaces::ROUTINES, "create") => routines_create(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ROUTINES, "list") => routines_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ROUTINES, "remove") => routines_remove(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
     };
 
@@ -627,6 +642,100 @@ async fn memory_remove(
     .await?;
     Ok(MemoryRemoveReply {
         path: outcome.path,
+        removed: outcome.removed,
+    })
+}
+
+/// The default every routine gets: awake.
+fn default_active() -> bool {
+    true
+}
+
+/// The body of `routines.create` (REQ-023).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RoutinesCreateRequest {
+    /// The bot the routine wakes.
+    bot_id: String,
+    /// The name a person sees.
+    name: String,
+    /// The prompt the agent receives when the routine fires.
+    prompt: String,
+    /// The cron expressions, or `@once`.
+    crons: Vec<String>,
+    /// The IANA timezone the cron computes in.
+    timezone: String,
+    /// Whether the routine wakes; a routine a member created is awake by default.
+    #[serde(default = "default_active")]
+    active: bool,
+    /// Whether the owner is told about each run.
+    #[serde(default)]
+    notify: bool,
+}
+
+/// The body of `routines.list` (REQ-023).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RoutinesListRequest {
+    /// The bot whose routines the caller lists.
+    bot_id: String,
+}
+
+/// The body of `routines.remove` (REQ-023).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RoutinesRemoveRequest {
+    /// The routine to remove.
+    routine_id: String,
+}
+
+/// `routines.create` — create a routine and compute its next wake (REQ-023).
+async fn routines_create(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<RoutineWriteReply, ApiError> {
+    let request: RoutinesCreateRequest = parse(&body)?;
+    let outcome = usecases::routines_create(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.name,
+        &request.prompt,
+        &request.crons,
+        &request.timezone,
+        request.active,
+        request.notify,
+    )
+    .await?;
+    Ok(RoutineWriteReply::from(&outcome.routine))
+}
+
+/// `routines.list` — list a bot's routines (REQ-023).
+async fn routines_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<RoutinesReply, ApiError> {
+    let request: RoutinesListRequest = parse(&body)?;
+    let routines =
+        usecases::routines_list(state.app(), &auth.actor.context, &request.bot_id).await?;
+    Ok(RoutinesReply {
+        routines: routines.iter().map(RoutineView::from).collect(),
+    })
+}
+
+/// `routines.remove` — remove a routine (REQ-023).
+async fn routines_remove(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<RoutineRemoveReply, ApiError> {
+    let request: RoutinesRemoveRequest = parse(&body)?;
+    let outcome =
+        usecases::routines_remove(state.app(), &auth.actor.context, &request.routine_id).await?;
+    Ok(RoutineRemoveReply {
+        routine_id: outcome.routine_id.as_str().to_owned(),
         removed: outcome.removed,
     })
 }

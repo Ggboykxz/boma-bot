@@ -33,8 +33,8 @@ use boma_app::{
         EventPublisher, EventStore, Invitation, InvitationStore, MemoryStore, MessageStore,
         NewAccount, NewBot, NewEffect, NewEvent, NewInvitation, NewMemoryDocument, NewMessage,
         NewRun, NewSession, NewSpace, NewThread, ReactionAction, ReactionStore, ReadStateStore,
-        RosterStore, RunActivity, RunStore, SessionStore, SpaceStore, StoredMessage, ThreadStore,
-        ToolStore, UserStore,
+        RosterStore, RoutineOutcome, RoutineStore, RunActivity, RunStore, SessionStore, SpaceStore,
+        StoredMessage, ThreadStore, ToolStore, UserStore,
     },
 };
 use boma_domain::DomainError;
@@ -191,6 +191,32 @@ struct MemoryDocumentMemRow {
     updated_at: String,
 }
 
+/// A routine, with its tenant (REQ-023).
+#[derive(Debug, Clone)]
+struct RoutineRow {
+    /// The routine.
+    routine: boma_app::ports::Routine,
+}
+
+/// One recorded outcome of a wake, for the audit trail.
+// The dispatcher reads these rows in the next slice (REQ-024); the structure is load-bearing.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct RoutineRunRow {
+    /// The routine.
+    routine_id: boma_domain::RoutineId,
+    /// The tenant.
+    space_id: SpaceId,
+    /// The run the wake produced, when it did.
+    run_id: Option<RunId>,
+    /// `fired`, `coalesced`, `skipped`, `failed`, `paused`.
+    outcome: String,
+    /// Free-text detail.
+    detail: Option<String>,
+    /// When it happened.
+    occurred_at: String,
+}
+
 /// A run.
 #[derive(Debug, Clone)]
 struct RunRow {
@@ -293,6 +319,10 @@ struct State {
     snoozes: Vec<SnoozeRow>,
     /// The memory documents people wrote.
     memory_documents: Vec<MemoryDocumentMemRow>,
+    /// The routines of each bot.
+    routines: Vec<RoutineRow>,
+    /// The audit trail of routine wakes.
+    routine_runs: Vec<RoutineRunRow>,
     /// The effects runs perform.
     effects: Vec<EffectRow>,
     /// The tools the spaces installed.
@@ -484,6 +514,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn memory(&self) -> MemoryMemoryStore {
         MemoryMemoryStore::new(self)
+    }
+
+    /// The store of routines.
+    #[must_use]
+    pub fn routines(&self) -> MemoryRoutineStore {
+        MemoryRoutineStore::new(self)
     }
 
     /// Seeds a conversation with explicit sequences.
@@ -2517,6 +2553,257 @@ impl MemoryStore for MemoryMemoryStore {
             !(visible(context, &row.space_id) && row.bot_id == bot_id.cloned() && row.path == path)
         });
         Ok(state.memory_documents.len() != before)
+    }
+}
+
+/// The store of routines (REQ-023).
+#[derive(Debug, Clone)]
+pub struct MemoryRoutineStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryRoutineStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryRoutineStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl RoutineStore for MemoryRoutineStore {
+    async fn create(
+        &self,
+        context: &TenantContext,
+        routine: boma_app::ports::NewRoutine,
+    ) -> Result<boma_app::ports::Routine, AppError> {
+        let space_id = routine.space_id.clone();
+        let mut state = write(&self.state);
+        if !state
+            .bots
+            .iter()
+            .any(|row| row.bot.id == routine.bot_id && visible(context, &row.bot.space_id))
+        {
+            return Err(AppError::NotFound);
+        }
+        if state
+            .routines
+            .iter()
+            .any(|row| row.routine.id == routine.id)
+        {
+            return Err(AppError::Conflict);
+        }
+        let created_at = routine.created_at.clone();
+        let record = boma_app::ports::Routine {
+            id: routine.id,
+            space_id: space_id.clone(),
+            bot_id: routine.bot_id,
+            thread_id: routine.thread_id,
+            user_id: routine.user_id,
+            name: routine.name,
+            prompt: routine.prompt,
+            crons: routine.crons,
+            timezone: routine.timezone,
+            active: routine.active,
+            notify: routine.notify,
+            last_run_at: None,
+            next_run_at: routine.next_run_at,
+            account_failures: 0,
+            created_at: created_at.clone(),
+            updated_at: created_at,
+        };
+        state.routines.push(RoutineRow {
+            routine: record.clone(),
+        });
+        Ok(record)
+    }
+
+    async fn find(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::RoutineId,
+    ) -> Result<Option<boma_app::ports::Routine>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .routines
+            .iter()
+            .find(|row| row.routine.id == *id && visible(context, &row.routine.space_id))
+            .map(|row| row.routine.clone()))
+    }
+
+    async fn remove(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::RoutineId,
+    ) -> Result<bool, AppError> {
+        let mut state = write(&self.state);
+        let before = state.routines.len();
+        state
+            .routines
+            .retain(|row| !(row.routine.id == *id && visible(context, &row.routine.space_id)));
+        Ok(state.routines.len() != before)
+    }
+
+    async fn list(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Vec<boma_app::ports::Routine>, AppError> {
+        let state = read(&self.state);
+        let mut routines: Vec<boma_app::ports::Routine> = state
+            .routines
+            .iter()
+            .filter(|row| visible(context, &row.routine.space_id) && row.routine.bot_id == *bot_id)
+            .map(|row| row.routine.clone())
+            .collect();
+        routines.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left.id.as_str().cmp(right.id.as_str()))
+        });
+        Ok(routines)
+    }
+
+    async fn due(&self, as_of: &str) -> Result<Vec<boma_app::ports::Routine>, AppError> {
+        let state = read(&self.state);
+        let mut routines: Vec<boma_app::ports::Routine> = state
+            .routines
+            .iter()
+            .filter(|row| {
+                row.routine.active
+                    && row
+                        .routine
+                        .next_run_at
+                        .as_deref()
+                        .is_some_and(|at| at <= as_of)
+            })
+            .map(|row| row.routine.clone())
+            .collect();
+        routines.sort_by(|left, right| {
+            left.next_run_at
+                .cmp(&right.next_run_at)
+                .then(left.id.as_str().cmp(right.id.as_str()))
+        });
+        Ok(routines)
+    }
+
+    async fn record_fired(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::RoutineId,
+        occurred_at: &str,
+        run_id: Option<&RunId>,
+        next_run_at: Option<&str>,
+    ) -> Result<boma_app::ports::Routine, AppError> {
+        let mut state = write(&self.state);
+        let Some(index) = state
+            .routines
+            .iter()
+            .position(|row| row.routine.id == *id && visible(context, &row.routine.space_id))
+        else {
+            return Err(AppError::NotFound);
+        };
+        let updated_at = occurred_at.to_owned();
+        let routine = &mut state.routines[index].routine;
+        routine.last_run_at = Some(occurred_at.to_owned());
+        routine.next_run_at = next_run_at.map(str::to_owned);
+        if next_run_at.is_none() {
+            routine.active = false;
+        }
+        routine.account_failures = 0;
+        routine.updated_at = updated_at;
+        let updated = routine.clone();
+        let space_id = updated.space_id.clone();
+        state.routine_runs.push(RoutineRunRow {
+            routine_id: id.clone(),
+            space_id,
+            run_id: run_id.cloned(),
+            outcome: "fired".to_owned(),
+            detail: None,
+            occurred_at: occurred_at.to_owned(),
+        });
+        Ok(updated)
+    }
+
+    async fn record_failure(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::RoutineId,
+        occurred_at: &str,
+        run_id: Option<&RunId>,
+        threshold: u32,
+    ) -> Result<boma_app::ports::Routine, AppError> {
+        let mut state = write(&self.state);
+        let Some(index) = state
+            .routines
+            .iter()
+            .position(|row| row.routine.id == *id && visible(context, &row.routine.space_id))
+        else {
+            return Err(AppError::NotFound);
+        };
+        let updated_at = occurred_at.to_owned();
+        let routine = &mut state.routines[index].routine;
+        routine.account_failures += 1;
+        if routine.account_failures >= threshold {
+            routine.active = false;
+        }
+        routine.updated_at = updated_at;
+        let updated = routine.clone();
+        let space_id = updated.space_id.clone();
+        let outcome = if updated.active { "failed" } else { "paused" };
+        state.routine_runs.push(RoutineRunRow {
+            routine_id: id.clone(),
+            space_id,
+            run_id: run_id.cloned(),
+            outcome: outcome.to_owned(),
+            detail: None,
+            occurred_at: occurred_at.to_owned(),
+        });
+        Ok(updated)
+    }
+
+    async fn record_skip(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::RoutineId,
+        outcome: RoutineOutcome,
+        occurred_at: &str,
+        run_id: Option<&RunId>,
+        detail: Option<&str>,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let Some(routine) = state
+            .routines
+            .iter()
+            .find(|row| row.routine.id == *id && visible(context, &row.routine.space_id))
+            .map(|row| row.routine.clone())
+        else {
+            return Err(AppError::NotFound);
+        };
+        let outcome = match outcome {
+            RoutineOutcome::Fired => "fired",
+            RoutineOutcome::Coalesced => "coalesced",
+            RoutineOutcome::Skipped | RoutineOutcome::Once => "skipped",
+            RoutineOutcome::Failed => "failed",
+            RoutineOutcome::Paused => "paused",
+        };
+        state.routine_runs.push(RoutineRunRow {
+            routine_id: id.clone(),
+            space_id: routine.space_id.clone(),
+            run_id: run_id.cloned(),
+            outcome: outcome.to_owned(),
+            detail: detail.map(str::to_owned),
+            occurred_at: occurred_at.to_owned(),
+        });
+        Ok(())
     }
 }
 

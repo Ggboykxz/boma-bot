@@ -18,6 +18,7 @@ pub mod ids;
 pub mod memory;
 pub mod message;
 pub mod model;
+pub mod routine;
 pub mod run;
 pub mod tenancy;
 pub mod thread;
@@ -28,8 +29,8 @@ pub use card::{Card, CardId, CardKind, CardStatus, ExternalEffect, ToolKind, Too
 pub use error::DomainError;
 pub use event::{Event, EventType};
 pub use ids::{
-    BotId, EventId, InviteId, MessageId, OrganizationId, RunId, SessionId, SpaceId, ThreadId,
-    UserId,
+    BotId, EventId, InviteId, MessageId, OrganizationId, RoutineId, RunId, SessionId, SpaceId,
+    ThreadId, UserId,
 };
 pub use memory::{MemoryDocument, MemoryScope, validate_memory_path};
 pub use message::{
@@ -37,6 +38,11 @@ pub use message::{
     validate_message_text,
 };
 pub use model::{DeploymentModels, ModelChoice, ModelPreferences, resolve};
+pub use routine::{
+    MAX_CRONS, MAX_ROUTINE_NAME_LENGTH, MAX_ROUTINE_PROMPT_LENGTH, ONCE, next_run_at,
+    parse_trigger, validate_routine_name, validate_routine_prompt, validate_timezone,
+    validate_triggers,
+};
 pub use run::{Run, RunStatus, RunTrigger};
 pub use tenancy::{SystemReason, TenantContext};
 pub use thread::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Thread, validate_page_size};

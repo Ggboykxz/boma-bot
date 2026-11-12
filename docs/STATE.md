@@ -16,10 +16,19 @@
   the model prompt; the scripted provider ignores context until then, which is honestly currently
   everywhere (same story as REQ-016's tool-call loop).
 
-Row order matches implementation order. Slices still to land this milestone: REQ-023 (routines as
-cron definitions), REQ-024 (dispatch, retry backoff, coalescing, pause at threshold), REQ-025
-(run now).
+Row order matches implementation order. Slices still to land this milestone: REQ-024 (dispatch,
+retry backoff, coalescing, pause at threshold), REQ-025 (run now).
 
+- **REQ-023 (routines as cron definitions, MUST)** is done for its create path: a bot wakes on
+  cron expressions in its own IANA timezone (`croner` + `chrono` + `chrono-tz`, MIT), and `@once`
+  fires exactly once five minutes after the request drops. Migration `0014_routines.sql` creates
+  `routines` and `routine_runs` (the audit trail) with RLS; `routines.create` computes
+  `nextRunAt` in the timezone and returns it as UTC; `routines.list` reads it back; triggered
+  alarm fires are not dispatched yet (REQ-024). The two goldens (`routine-create`, `routine-once`)
+  replay byte-for-byte: `routine-create` pinned against a clock after Thursday's 8am slot, so the
+  next weekday wake lands Friday 07:00 UTC; `routine-once` from the default instant lands
+  00:05. Reply shape omits `timezone` for `@once` (a one-shot has no timezone semantics worth
+  serialising).
 ## Done
 
 - **REQ-006 (stop work, MUST)** is done (`e453df1`): `runs.cancel` stops a run wherever it is, the

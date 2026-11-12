@@ -56,6 +56,11 @@ macro_rules! opaque_id {
 }
 
 opaque_id!(
+    /// A routine.
+    RoutineId
+);
+
+opaque_id!(
     /// A person.
     UserId
 );

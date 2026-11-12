@@ -43,6 +43,9 @@ maintenance, licence, simplicity).
 | `uuid` | 1.29.2 | Apache-2.0 OR MIT | request ids now, entity ids from M1 |
 | `async-trait` | 0.1.92 | MIT OR Apache-2.0 | object-safe async ports (`ReadinessCheck`, providers) |
 | `argon2` | 0.6.0 | MIT OR Apache-2.0 | Argon2id password hashing at sign-up and sign-in (REQ-040); constant-time verify, fallible-hash branch |
+| `croner` | 4.0.3 | MIT | Cron patterns with timezone-aware next-run computation (REQ-023); MISRA-grade parser, `find_next_occurrence` |
+| `chrono` | 0.4.45 | MIT OR Apache-2.0 | Instants, `DateTime<Tz>` and UTC arithmetic for cron evaluation (REQ-023) |
+| `chrono-tz` | 0.10.4 | MIT OR Apache-2.0 | IANA timezone database used by cron evaluation (REQ-023, e.g. Europe/Paris) |
 | `base64` | 0.22.1 | MIT OR Apache-2.0 | session token encoding (REQ-041) |
 | `rand` | 0.10.3 | MIT OR Apache-2.0 | entity identifiers and token entropy for the id/token generators |
 | `sha2` | 0.10.9 | MIT OR Apache-2.0 | SHA-256 hash of session tokens, compared in constant time (REQ-041) |

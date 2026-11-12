@@ -904,6 +904,191 @@ pub trait MemoryStore: Send + Sync {
     ) -> Result<bool, AppError>;
 }
 
+/// A routine, as the app carries it (REQ-023).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Routine {
+    /// The routine's id.
+    pub id: boma_domain::RoutineId,
+    /// The tenant it belongs to.
+    pub space_id: boma_domain::SpaceId,
+    /// The bot it wakes.
+    pub bot_id: boma_domain::BotId,
+    /// The conversation it writes in.
+    pub thread_id: boma_domain::ThreadId,
+    /// Who owns it.
+    pub user_id: boma_domain::UserId,
+    /// The name a person sees.
+    pub name: String,
+    /// The prompt the agent receives when it fires.
+    pub prompt: String,
+    /// The cron expressions, or [`boma_domain::ONCE`].
+    pub crons: Vec<String>,
+    /// The IANA timezone the cron computes in.
+    pub timezone: String,
+    /// Whether it wakes at all.
+    pub active: bool,
+    /// Whether the owner is told about each run.
+    pub notify: bool,
+    /// When it last fired.
+    pub last_run_at: Option<String>,
+    /// When it wakes next, in UTC.
+    pub next_run_at: Option<String>,
+    /// Consecutive failures since the last success.
+    pub account_failures: u32,
+    /// When it was created.
+    pub created_at: String,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+/// A routine to create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewRoutine {
+    /// The routine's id.
+    pub id: boma_domain::RoutineId,
+    /// The tenant it belongs to.
+    pub space_id: boma_domain::SpaceId,
+    /// The bot it wakes.
+    pub bot_id: boma_domain::BotId,
+    /// The conversation it writes in.
+    pub thread_id: boma_domain::ThreadId,
+    /// Who owns it.
+    pub user_id: boma_domain::UserId,
+    /// The name a person sees.
+    pub name: String,
+    /// The prompt the agent receives when it fires.
+    pub prompt: String,
+    /// The cron expressions, or [`boma_domain::ONCE`].
+    pub crons: Vec<String>,
+    /// The IANA timezone the cron computes in.
+    pub timezone: String,
+    /// Whether it wakes at all.
+    pub active: bool,
+    /// Whether the owner is told about each run.
+    pub notify: bool,
+    /// When it wakes next, in UTC.
+    pub next_run_at: Option<String>,
+    /// When it is created.
+    pub created_at: String,
+}
+
+/// What a routine tick did, for the audit trail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutineOutcome {
+    /// The routine fired and the run is queued.
+    Fired,
+    /// No run was created because one was already active; the wake was coalesced.
+    Coalesced,
+    /// The routine was manually skipped by the schedule, or a `@once` slot was consumed.
+    Skipped,
+    /// The routine was deactivated because it was `@once`.
+    Once,
+    /// A failure was recorded.
+    Failed,
+    /// The routine paused itself because the failure threshold was reached.
+    Paused,
+}
+
+/// The routines of this app (REQ-023, REQ-024, REQ-025).
+#[async_trait]
+pub trait RoutineStore: Send + Sync {
+    /// Creates a routine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn create(
+        &self,
+        context: &boma_domain::TenantContext,
+        routine: NewRoutine,
+    ) -> Result<Routine, AppError>;
+
+    /// Finds a routine inside a tenant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RoutineId,
+    ) -> Result<Option<Routine>, AppError>;
+
+    /// Removes a routine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn remove(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RoutineId,
+    ) -> Result<bool, AppError>;
+
+    /// Lists a bot's routines, newest last.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Vec<Routine>, AppError>;
+
+    /// The routines due at `as_of`, in the order the dispatcher must run them (system context).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn due(&self, as_of: &str) -> Result<Vec<Routine>, AppError>;
+
+    /// Marks the routine as fired; recomputes the wake, and deactivates a `@once` routine.
+    ///
+    /// `next_run_at: None` means `@once`: the routine fires and deactivates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn record_fired(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RoutineId,
+        occurred_at: &str,
+        run_id: Option<&boma_domain::RunId>,
+        next_run_at: Option<&str>,
+    ) -> Result<Routine, AppError>;
+
+    /// Marks a failure; pauses the routine when `threshold` consecutive failures are recorded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn record_failure(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RoutineId,
+        occurred_at: &str,
+        run_id: Option<&boma_domain::RunId>,
+        threshold: u32,
+    ) -> Result<Routine, AppError>;
+
+    /// Records one skipped wake (coalesced, deactivated, paused).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn record_skip(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RoutineId,
+        outcome: RoutineOutcome,
+        occurred_at: &str,
+        run_id: Option<&boma_domain::RunId>,
+        detail: Option<&str>,
+    ) -> Result<(), AppError>;
+}
+
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).
 #[async_trait]
 pub trait ToolStore: Send + Sync {

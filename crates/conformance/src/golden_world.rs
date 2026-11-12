@@ -82,6 +82,8 @@ pub struct GoldenWorld {
 #[must_use]
 pub fn created_ids(fixture: &str) -> Vec<String> {
     let ids: &[&str] = match fixture {
+        "routine-create" => &["rtn_golden"],
+        "routine-once" => &["rtn_once_golden"],
         "send-message" | "send-message-replay" => &["msg_golden", "run_golden"],
         "space-create" => &["spc_new_golden"],
         "bot-create" => &["bot_golden", "thr_golden"],
@@ -114,6 +116,8 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "cross-tenant-not-found"
             | "run-retry"
             | "memory-write"
+            | "routine-create"
+            | "routine-once"
     );
     if !needs_world {
         return None;
@@ -123,6 +127,9 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
     // fixture whose capture ran past its scheduled instant states its own here.
     let clock_seed = match fixture {
         "memory-write" => "2026-01-01T00:01:00Z",
+        // The fixture's capture landed after the Thursday 08:00 Paris slot, so the next
+        // weekday wake is Friday 07:00 UTC, exactly what the golden pins.
+        "routine-create" => "2026-01-01T09:00:00Z",
         _ => SEED_INSTANT,
     };
     let test_app = TestApp::builder()
@@ -134,7 +141,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
     let (user_id, space_id) = seed_account_and_session(&test_app, &app).await;
 
     match fixture {
-        "send-message" | "send-message-replay" => {
+        "send-message" | "send-message-replay" | "routine-create" | "routine-once" => {
             seed_bot(&app, &space_id, &user_id).await;
         }
         "bot-create" | "space-create" | "space-invite" => {}

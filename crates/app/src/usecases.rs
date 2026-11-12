@@ -793,6 +793,137 @@ async fn resolve_memory_scope(
     }
 }
 
+/// The outcome of `routines.create` (REQ-023).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineCreateOutcome {
+    /// The created routine.
+    pub routine: crate::ports::Routine,
+}
+
+/// The outcome of `routines.remove` (REQ-023).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineRemoveOutcome {
+    /// The removed routine's id.
+    pub routine_id: boma_domain::RoutineId,
+    /// Whether anything was there.
+    pub removed: bool,
+}
+
+/// Creates a routine and computes its next wake (REQ-023).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
+/// [`AppError::Rule`] when the name, the prompt, the triggers, or the timezone is refused.
+#[allow(clippy::too_many_arguments)]
+pub async fn routines_create(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    name: &str,
+    prompt: &str,
+    crons: &[String],
+    timezone: &str,
+    active: bool,
+    notify: bool,
+) -> Result<RoutineCreateOutcome, AppError> {
+    boma_domain::validate_routine_name(name)?;
+    boma_domain::validate_routine_prompt(prompt)?;
+    boma_domain::validate_timezone(timezone)?;
+    boma_domain::validate_triggers(crons)?;
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let thread = app
+        .stores
+        .threads
+        .for_bot(context, &bot.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let now = app.services.clock.now();
+    let next_run_at = if active {
+        Some(boma_domain::next_run_at(crons, timezone, &now)?)
+    } else {
+        None
+    };
+    let routine_id = boma_domain::RoutineId::new(app.services.ids.new_id("routine"))?;
+    let routine = app
+        .stores
+        .routines
+        .create(
+            context,
+            crate::ports::NewRoutine {
+                id: routine_id,
+                space_id: bot.space_id.clone(),
+                bot_id: bot.id,
+                thread_id: thread.id,
+                user_id: context.user_id().cloned().ok_or(AppError::NotFound)?,
+                name: name.to_owned(),
+                prompt: prompt.to_owned(),
+                crons: crons.to_vec(),
+                timezone: timezone.to_owned(),
+                active,
+                notify,
+                next_run_at,
+                created_at: now,
+            },
+        )
+        .await?;
+    Ok(RoutineCreateOutcome { routine })
+}
+
+/// Lists a bot's routines, creation order (REQ-023).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant.
+pub async fn routines_list(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<Vec<crate::ports::Routine>, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores.routines.list(context, &bot_id).await
+}
+
+/// Removes a routine (REQ-023).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when it does not exist in the caller's tenant.
+pub async fn routines_remove(
+    app: &App,
+    context: &TenantContext,
+    id: &str,
+) -> Result<RoutineRemoveOutcome, AppError> {
+    let routine = app
+        .stores
+        .routines
+        .find(
+            context,
+            &boma_domain::RoutineId::new(id.to_owned()).map_err(|_| AppError::NotFound)?,
+        )
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores.routines.remove(context, &routine.id).await?;
+    Ok(RoutineRemoveOutcome {
+        routine_id: routine.id,
+        removed: true,
+    })
+}
+
 /// The outcome of one snooze call (REQ-009).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnoozeOutcome {

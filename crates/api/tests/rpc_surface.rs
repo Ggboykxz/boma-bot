@@ -1089,3 +1089,79 @@ async fn req_022_memory_scope_rules_and_removal() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["removed"], serde_json::json!(false));
 }
+
+#[tokio::test]
+async fn req_023_a_created_routine_wakes_on_its_next_instant_the_wire_agrees_on() {
+    let world = world().await;
+
+    let create = post(
+        state(&world.app),
+        "/rpc/routines/create",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "name": "Morning digest",
+            "prompt": "Summarise overnight commits.",
+            "crons": ["0 8 * * 1-5"],
+            "timezone": "Europe/Paris",
+            "notify": true,
+            "active": true
+        }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::OK);
+    let body = json(create).await;
+    assert!(body["id"].is_string());
+    assert_eq!(body["active"], serde_json::json!(true));
+    assert_eq!(body["timezone"], serde_json::json!("Europe/Paris"));
+    assert_eq!(body["nextRunAt"], serde_json::json!("2026-01-01T07:00:00Z"));
+
+    // A timezone the server does not know is refused with the stable envelope.
+    let refused = post(
+        state(&world.app),
+        "/rpc/routines/create",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "name": "X",
+            "prompt": "Run",
+            "crons": ["0 8 * * *"],
+            "timezone": "Nowhere/Special"
+        }),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    // The @once sentinel fires once and never gets a second wake.
+    let once = post(
+        state(&world.app),
+        "/rpc/routines/create",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "name": "One shot",
+            "prompt": "Do it once.",
+            "crons": ["@once"],
+            "timezone": "UTC"
+        }),
+    )
+    .await;
+    assert_eq!(once.status(), StatusCode::OK);
+    let body = json(once).await;
+    assert_eq!(body["nextRunAt"], serde_json::json!("2026-01-01T00:05:00Z"));
+    assert_eq!(body["active"], serde_json::json!(true));
+
+    // The routines list carries the created routine.
+    let list = post(
+        state(&world.app),
+        "/rpc/routines/list",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = json(list).await;
+    let routines = body["routines"].as_array().expect("a list");
+    assert_eq!(routines.len(), 2);
+    assert_eq!(routines[0]["name"], serde_json::json!("Morning digest"));
+}

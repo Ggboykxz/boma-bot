@@ -13,6 +13,7 @@ pub mod messages;
 pub mod reactions;
 pub mod read_states;
 pub mod roster;
+pub mod routines;
 pub mod rows;
 pub mod runs;
 pub mod sessions;

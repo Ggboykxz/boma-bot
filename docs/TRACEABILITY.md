@@ -39,7 +39,7 @@ Status values:
 | REQ-020 | M1 | `crates/app/src/worker.rs::req_020_the_prompt_is_the_last_thing_the_person_wrote` | `crates/app/src/worker.rs`, `crates/api/src/realtime.rs` |
 | REQ-021 | M1 | `crates/testkit/src/build.rs::req_021_a_run_that_fails_carries_a_legible_reason` | `crates/app/src/worker.rs::fail_run`, `crates/app/src/service.rs::Failure` |
 | REQ-022 | M3 | `crates/api/tests/rpc_surface.rs::req_022_memory_write_grows_the_revision`, `crates/api/tests/rpc_surface.rs::req_022_memory_scope_rules_and_removal`, `crates/infra/tests/m1.rs::req_022_memory_revisions_are_append_only_in_postgres`, golden `memory-write` | `crates/domain/src/memory.rs`, `migrations/0013_memory.sql`, `crates/app/src/ports.rs` (MemoryStore, NewMemoryDocument), `crates/app/src/usecases.rs::memory_write`, `crates/infra/src/stores/memory.rs`, `crates/api/src/rpc.rs::memory_write`, `crates/infra/src/stores/rows.rs` (MemoryDocumentRow) |
-| REQ-023 | M3 | — | — |
+| REQ-023 | M3 | `crates/api/tests/rpc_surface.rs::req_023_a_created_routine_wakes_on_its_next_instant_the_wire_agrees_on`, `crates/domain/src/routine.rs::req_023_*`, goldens `routine-create`, `routine-once` | `migrations/0014_routines.sql`, `crates/domain/src/routine.rs`, `crates/app/src/ports.rs` (RoutineStore), `crates/infra/src/stores/routines.rs`, `crates/api/src/rpc.rs::routines_*`, `crates/conformance/src/golden_world.rs` |
 | REQ-024 | M3 | — | — |
 | REQ-025 | M3 | — | — |
 | REQ-026 | M4 | — | — |

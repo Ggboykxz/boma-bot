@@ -40,8 +40,8 @@ pub use memory::{
     MemoryAccountStore, MemoryBotStore, MemoryCardStore, MemoryDatabase, MemoryEffectStore,
     MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore, MemoryMemoryStore,
     MemoryMessageStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
-    MemoryRunStore, MemorySessionStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore,
-    MemoryUserStore, Organization,
+    MemoryRoutineStore, MemoryRunStore, MemorySessionStore, MemorySpaceStore, MemoryThreadStore,
+    MemoryToolStore, MemoryUserStore, Organization,
 };
 pub use scripts::{FixedHasher, ScriptedClock, ScriptedIds, ScriptedProvider, ScriptedTokens};
 
