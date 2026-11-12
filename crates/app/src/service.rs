@@ -12,7 +12,7 @@ use crate::{
     ports::{
         AccountStore, BotStore, CardStore, Clock, EffectStore, EventPublisher, EventStore,
         IdGenerator, InvitationStore, MessageStore, PasswordHasher, RunStore, SessionStore,
-        SpaceStore, ThreadStore, TokenGenerator, UserStore,
+        SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -43,6 +43,8 @@ pub struct Stores {
     pub cards: Arc<dyn CardStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
+    /// The per-run tool catalogue.
+    pub tools: Arc<dyn ToolStore>,
 }
 
 impl Stores {
@@ -65,6 +67,7 @@ impl Stores {
         invitations: Arc<dyn InvitationStore>,
         cards: Arc<dyn CardStore>,
         effects: Arc<dyn EffectStore>,
+        tools: Arc<dyn ToolStore>,
     ) -> Self {
         Self {
             accounts,
@@ -79,6 +82,7 @@ impl Stores {
             invitations,
             cards,
             effects,
+            tools,
         }
     }
 }

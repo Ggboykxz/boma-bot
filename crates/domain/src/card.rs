@@ -66,6 +66,51 @@ pub struct Card {
     pub answered_at: Option<String>,
 }
 
+/// One tool a run may call, as the catalogue describes it (REQ-016).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    /// The tool's key, unique within the catalogue.
+    pub key: String,
+    /// What it does, for the model and for the audit trail.
+    pub description: String,
+    /// The family it belongs to: built-in, connector, MCP, skill or memory.
+    pub kind: ToolKind,
+}
+
+/// The family a tool belongs to (REQ-016).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolKind {
+    /// Part of the runtime, always available.
+    Builtin,
+    /// Installed through a connector.
+    Connector,
+    /// Exposed by an MCP server.
+    Mcp,
+    /// A taught or installed skill.
+    Skill,
+    /// The bot's memory tools.
+    Memory,
+}
+
+impl ToolKind {
+    /// Parses a tool kind from its stored form (REQ-016).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DomainError::UnknownEventType`] for a kind the product does not name.
+    pub fn parse(value: &str) -> Result<Self, DomainError> {
+        match value {
+            "builtin" => Ok(Self::Builtin),
+            "connector" => Ok(Self::Connector),
+            "mcp" => Ok(Self::Mcp),
+            "skill" => Ok(Self::Skill),
+            "memory" => Ok(Self::Memory),
+            other => Err(DomainError::UnknownEventType(other.to_owned())),
+        }
+    }
+}
+
 /// One side effect a run performs, keyed so it can never execute twice (REQ-017).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalEffect {

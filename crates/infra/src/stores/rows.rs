@@ -10,7 +10,8 @@ use boma_app::AppError;
 use boma_domain::{
     Block, Bot, BotId, Card, CardId, CardKind, CardStatus, Email, Event, EventType, ExternalEffect,
     InviteId, Message, MessageId, MessageRole, OrganizationId, Run, RunId, RunStatus, RunTrigger,
-    Session, SessionId, Space, SpaceId, SpaceRole, Thread, ThreadId, User, UserId,
+    Session, SessionId, Space, SpaceId, SpaceRole, Thread, ThreadId, ToolKind, ToolSpec, User,
+    UserId,
 };
 use serde_json::Value;
 use sqlx::types::Json;
@@ -63,6 +64,7 @@ pub(crate) struct BotRow {
     pub(crate) thread_id: Option<String>,
     pub(crate) archived_at: Option<String>,
     pub(crate) created_at: String,
+    pub(crate) enabled_tools: Vec<String>,
 }
 
 /// A row of `threads`.
@@ -218,6 +220,7 @@ pub(crate) fn bot(row: BotRow) -> Result<Bot, AppError> {
         thread_id: ThreadId::new(row.thread_id.unwrap_or_default())?,
         archived_at: row.archived_at,
         created_at: row.created_at,
+        enabled_tools: row.enabled_tools,
     })
 }
 
@@ -337,6 +340,14 @@ pub(crate) fn card(row: CardRow) -> Result<Card, AppError> {
     })
 }
 
+/// A row of `tool_installs`.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct ToolInstallRow {
+    pub(crate) tool_key: String,
+    pub(crate) description: String,
+    pub(crate) kind: String,
+}
+
 /// Turns a stored row into the effect it describes.
 pub(crate) fn effect(row: EffectRow) -> Result<ExternalEffect, AppError> {
     Ok(ExternalEffect {
@@ -345,6 +356,15 @@ pub(crate) fn effect(row: EffectRow) -> Result<ExternalEffect, AppError> {
         kind: row.kind,
         payload: row.payload.0,
         applied_at: row.applied_at,
+    })
+}
+
+/// Turns a stored row into the tool spec it describes.
+pub(crate) fn tool_spec(row: ToolInstallRow) -> Result<ToolSpec, AppError> {
+    Ok(ToolSpec {
+        key: row.tool_key,
+        description: row.description,
+        kind: ToolKind::parse(&row.kind)?,
     })
 }
 

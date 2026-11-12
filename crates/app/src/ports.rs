@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use boma_domain::{
     Bot, Card, CardId, Email, Event, ExternalEffect, Message, MessagePage, Run, RunId, RunStatus,
-    Session, Space, SpaceRole, TenantContext, Thread, User, UserId,
+    Session, Space, SpaceRole, TenantContext, Thread, ToolSpec, User, UserId,
 };
 
 use crate::error::AppError;
@@ -680,6 +680,21 @@ pub trait CardStore: Send + Sync {
     ) -> Result<Card, AppError>;
 }
 
+/// The tools a run may use, as the space and the bot enabled them (REQ-016).
+#[async_trait]
+pub trait ToolStore: Send + Sync {
+    /// The catalogue of tools a bot may use in a space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn catalogue_for(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Vec<ToolSpec>, AppError>;
+}
+
 /// Stores the side effects a run performs, exactly once per effect key (REQ-017).
 #[async_trait]
 pub trait EffectStore: Send + Sync {
@@ -707,6 +722,8 @@ pub struct ProviderRequest {
     pub prompt: String,
     /// The messages before the prompt, oldest first.
     pub history: Vec<Message>,
+    /// The tools this run may use, already filtered (REQ-016).
+    pub tools: Vec<ToolSpec>,
 }
 
 /// Produces the answer of a bot.

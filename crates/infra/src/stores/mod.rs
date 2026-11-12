@@ -14,4 +14,5 @@ pub mod runs;
 pub mod sessions;
 pub mod spaces;
 pub mod threads;
+pub mod tools;
 pub mod users;

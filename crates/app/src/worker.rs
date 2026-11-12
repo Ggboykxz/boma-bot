@@ -166,11 +166,15 @@ impl Worker {
             .unwrap_or_default();
         let latest = history.iter().map(|message| message.seq).max().unwrap_or(0);
         let prompt = prompt_of(&history);
+        // The catalogue is built per pass: the bot's grant and the space's installs can change
+        // between one pass and the next (REQ-016).
+        let tools = usecases::tool_catalogue(&self.app, context, claimed.bot.id.as_str()).await?;
         let request = ProviderRequest {
             bot: claimed.bot.clone(),
             thread: claimed.thread.clone(),
             prompt,
             history,
+            tools,
         };
 
         match self.provider.complete(request).await {

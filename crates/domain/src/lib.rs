@@ -22,7 +22,7 @@ pub mod thread;
 
 pub use account::{Email, Session, Space, SpaceRole, User, validate_password};
 pub use bot::Bot;
-pub use card::{Card, CardId, CardKind, CardStatus, ExternalEffect};
+pub use card::{Card, CardId, CardKind, CardStatus, ExternalEffect, ToolKind, ToolSpec};
 pub use error::DomainError;
 pub use event::{Event, EventType};
 pub use ids::{

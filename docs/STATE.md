@@ -20,6 +20,15 @@
 - **REQ-007 (pending cards, MUST)** is done (`29bc3cb`): the card block renders as a region with an
   action button and an answer textbox, so a pending question stays answerable while the composer
   keeps working. The pending-question-card UI golden replays.
+- **REQ-016 (per-run tool catalogue, MUST)** is done in its M2 slice (`0648403`-descendant, not yet
+  committed separately): a run receives only the tools its bot may use. The catalogue anchors on
+  the bot (a `TenantContext::System` worker may ask), reads the space's enabled installs and the
+  bot's grant, and a bot with an empty grant sees every enabled install. The catalogue is built
+  per provider pass, never cached, and the model receives only what it may use. `BUILTIN_TOOLS`
+  is explicitly empty until each built-in lands with the milestone that executes it (memory with
+  REQ-022, messaging with REQ-048): an honest empty list beats a silent non-empty one. Not yet in
+  this slice: the model actually calling a tool (the tool-call loop), and the audit event for a
+  refused call; those land with the agent engine that makes the call.
 - **REQ-017 (approval gate, MUST)** is done: `threads.answer` answers a card once, records the
   authorized effect under an idempotency key (`external_effects`, unique per run), and resumes the
   run that was waiting. The second answer to the same card is refused. Proved at three levels (in
@@ -27,10 +36,11 @@
   `Card`/`CardKind`/`CardStatus`/`ExternalEffect`; migration `0004_cards.sql` creates `cards` and
   `external_effects` with RLS.
 
-Remaining in M2, in dependency order: REQ-016 (per-run tool catalogue), REQ-015 model fallback,
-REQ-008 replies/reactions, REQ-019 delegation, REQ-009 read state (SHOULD).
+Remaining in M2, in dependency order: REQ-015 model fallback, REQ-008 replies/reactions, REQ-019
+delegation, REQ-009 read state (SHOULD); the tool-call loop and the refusal audit event from
+REQ-016 land with the agent engine that makes the call (milestone M3/M5).
 
-The current commit carries REQ-003, REQ-006, REQ-007 and REQ-017; M2 is not done yet.
+The current commit carries REQ-003, REQ-006, REQ-007, REQ-016 and REQ-017; M2 is not done yet.
 
 ## Done
 

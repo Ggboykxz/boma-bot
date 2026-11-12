@@ -76,6 +76,7 @@ impl BotStore for PostgresBotStore {
                         thread_id: thread.id.clone(),
                         archived_at: None,
                         created_at: bot.created_at.clone(),
+                        enabled_tools: Vec::new(),
                     },
                     Thread {
                         id: thread.id,
@@ -103,7 +104,8 @@ impl BotStore for PostgresBotStore {
                 sqlx::query_as::<_, BotRow>(
                     "SELECT id, space_id, user_id, name, description, color, thread_id,
                             boma.rfc3339(archived_at) AS archived_at,
-                            boma.rfc3339(created_at) AS created_at
+                            boma.rfc3339(created_at) AS created_at,
+                            enabled_tools
                      FROM bots
                      WHERE id = $1",
                 )

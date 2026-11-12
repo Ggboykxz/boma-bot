@@ -32,13 +32,14 @@ use boma_app::{
         Account, AccountStore, ActivityPage, BotStore, CardStore, Clock, EffectStore,
         EventPublisher, EventStore, Invitation, InvitationStore, MessageStore, NewAccount, NewBot,
         NewEffect, NewEvent, NewInvitation, NewMessage, NewRun, NewSession, NewSpace, NewThread,
-        RunActivity, RunStore, SessionStore, SpaceStore, StoredMessage, ThreadStore, UserStore,
+        RunActivity, RunStore, SessionStore, SpaceStore, StoredMessage, ThreadStore, ToolStore,
+        UserStore,
     },
 };
 use boma_domain::{
     Block, Bot, BotId, Card, CardId, CardStatus, Email, Event, ExternalEffect, Message, MessageId,
     MessagePage, OrganizationId, Run, RunId, RunStatus, Session, SessionId, Space, SpaceId,
-    SpaceRole, TenantContext, Thread, ThreadId, User, UserId, cursor_from_seq,
+    SpaceRole, TenantContext, Thread, ThreadId, ToolKind, ToolSpec, User, UserId, cursor_from_seq,
 };
 use tokio::sync::broadcast;
 
@@ -154,6 +155,21 @@ struct EffectRow {
     effect: ExternalEffect,
 }
 
+/// One tool the space installed and can grant (REQ-016).
+#[derive(Debug, Clone)]
+struct ToolInstallRow {
+    /// The space.
+    space_id: SpaceId,
+    /// The key the catalogue and the grants use.
+    tool_key: String,
+    /// What the tool does.
+    description: String,
+    /// Its family.
+    kind: ToolKind,
+    /// Whether it is enabled for the space.
+    enabled: bool,
+}
+
 /// An event, with the tenant it belongs to.
 #[derive(Debug, Clone)]
 struct EventRow {
@@ -212,6 +228,8 @@ struct State {
     cards: Vec<CardRow>,
     /// The effects runs perform.
     effects: Vec<EffectRow>,
+    /// The tools the spaces installed.
+    tool_installs: Vec<ToolInstallRow>,
 }
 
 impl State {
@@ -371,6 +389,12 @@ impl MemoryDatabase {
         MemoryEffectStore::new(self)
     }
 
+    /// The store of tool installs.
+    #[must_use]
+    pub fn tools(&self) -> MemoryToolStore {
+        MemoryToolStore::new(self)
+    }
+
     /// Seeds a conversation with explicit sequences.
     ///
     /// The product allocates the sequences itself; a golden replay needs to decide them, because
@@ -427,6 +451,41 @@ impl MemoryDatabase {
     /// Seeds a card with the tenant it belongs to.
     pub fn seed_card(&self, space_id: SpaceId, card: Card) {
         write(&self.state).cards.push(CardRow { card, space_id });
+    }
+
+    /// Seeds a tool install.
+    pub fn seed_tool_install(
+        &self,
+        space_id: SpaceId,
+        tool_key: &str,
+        description: &str,
+        kind: ToolKind,
+        enabled: bool,
+    ) {
+        write(&self.state).tool_installs.push(ToolInstallRow {
+            space_id,
+            tool_key: tool_key.to_owned(),
+            description: description.to_owned(),
+            kind,
+            enabled,
+        });
+    }
+
+    /// Sets a bot's grant: the catalogue keys it may use (empty means every install).
+    ///
+    /// # Panics
+    ///
+    /// Panics when the bot does not exist; a test that seeds a grant for a bot that was never
+    /// created is a bug in the seed.
+    pub fn seed_bot_grant(&self, bot_id: &BotId, enabled_tools: Vec<String>) {
+        let mut state = write(&self.state);
+        #[allow(clippy::expect_used)]
+        let bot = state
+            .bots
+            .iter_mut()
+            .find(|row| row.bot.id == *bot_id)
+            .expect("the bot exists");
+        bot.bot.enabled_tools = enabled_tools;
     }
 
     /// The organization the spaces of a person belong to.
@@ -843,6 +902,7 @@ impl BotStore for MemoryBotStore {
             thread_id: thread.id.clone(),
             archived_at: None,
             created_at: bot.created_at.clone(),
+            enabled_tools: Vec::new(),
         };
         let stored_thread = Thread {
             id: thread.id.clone(),
@@ -1649,6 +1709,12 @@ impl Default for MemoryEffectStore {
     }
 }
 
+impl Default for MemoryToolStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
 #[async_trait::async_trait]
 impl InvitationStore for MemoryInvitationStore {
     async fn create(&self, invitation: NewInvitation) -> Result<Invitation, AppError> {
@@ -1798,6 +1864,55 @@ pub struct MemoryEventPublisher {
     channels: Mutex<HashMap<ThreadId, broadcast::Sender<Event>>>,
     /// How many events a channel keeps before a slow subscriber misses one.
     capacity: usize,
+}
+
+/// The store of tool installs (REQ-016).
+#[derive(Debug, Clone)]
+pub struct MemoryToolStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryToolStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolStore for MemoryToolStore {
+    async fn catalogue_for(
+        &self,
+        context: &TenantContext,
+        bot_id: &BotId,
+    ) -> Result<Vec<ToolSpec>, AppError> {
+        // The bot anchors the catalogue: no caller context required (a system context may ask,
+        // the worker is one), and the tenant guard is still the row-level security below.
+        let state = read(&self.state);
+        let Some(row) = state.bots.iter().find(|row| row.bot.id == *bot_id) else {
+            return Ok(Vec::new());
+        };
+        if !visible(context, &row.bot.space_id) {
+            return Ok(Vec::new());
+        }
+        let space_id = row.bot.space_id.clone();
+        let grant = row.bot.enabled_tools.clone();
+        let catalogue = state
+            .tool_installs
+            .iter()
+            .filter(|row| row.space_id == space_id && row.enabled)
+            .filter(|row| grant.is_empty() || grant.iter().any(|key| key == &row.tool_key))
+            .map(|row| ToolSpec {
+                key: row.tool_key.clone(),
+                description: row.description.clone(),
+                kind: row.kind.clone(),
+            })
+            .collect();
+        Ok(catalogue)
+    }
 }
 
 impl MemoryEventPublisher {

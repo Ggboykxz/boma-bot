@@ -34,6 +34,12 @@ pub struct Bot {
     pub archived_at: Option<String>,
     /// When it was created.
     pub created_at: String,
+    /// The tools this bot may call, as a list of catalogue keys.
+    ///
+    /// Empty means the bot may call every tool its space installs (REQ-016). A non-empty list
+    /// is the grant: the catalogue contains only these keys.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled_tools: Vec<String>,
 }
 
 impl Bot {

@@ -19,7 +19,7 @@
 
 use boma_domain::{
     Bot, CardId, CardStatus, Email, EventType, Message, MessagePage, Run, RunStatus, RunTrigger,
-    Space, SpaceRole, TenantContext, Thread, User, parse_cursor, validate_message_text,
+    Space, SpaceRole, TenantContext, Thread, ToolSpec, User, parse_cursor, validate_message_text,
 };
 
 pub use crate::accounts::{SignIn, SignUp};
@@ -743,4 +743,38 @@ pub async fn answer_card(
         card,
         effect_recorded,
     })
+}
+
+/// The built-in tools every run receives (REQ-016).
+///
+/// The spec requires built-in tools to exist but does not enumerate them, so this list is empty
+/// at M2: each built-in lands with the milestone that executes it (memory tools with REQ-022,
+/// messaging tools with REQ-048). An empty space and an empty bot grant therefore yield exactly
+/// these built-ins, as the acceptance criteria require. A silent non-empty list here would be a
+/// lie about what exists; each milestone appends, it never removes.
+pub const BUILTIN_TOOLS: &[ToolSpec] = &[];
+
+/// The tool catalogue of one run: the built-ins plus the tools the bot may use (REQ-016).
+///
+/// A bot with an empty grant sees every enabled install of its space; a grant is the list of
+/// keys it may use instead. A tool the bot may not use never appears in the catalogue.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the tenant.
+pub async fn tool_catalogue(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<Vec<ToolSpec>, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let mut tools = BUILTIN_TOOLS.to_vec();
+    tools.extend(app.stores.tools.catalogue_for(context, &bot.id).await?);
+    Ok(tools)
 }

@@ -32,7 +32,7 @@ Status values:
 | REQ-013 | M1 | `crates/testkit/src/memory.rs::req_013_an_expired_lease_is_reclaimed_after_a_deploy` | `crates/infra/src/stores/runs.rs::claim_next_queued`, `crates/testkit/src/memory.rs::MemoryRunStore::claim_next_queued` |
 | REQ-014 | M1 | `crates/infra/tests/m1.rs::req_014_an_expired_lease_is_reclaimed_by_another_worker` | `crates/infra/src/stores/runs.rs::claim_next_queued` |
 | REQ-015 | M2 | — | — |
-| REQ-016 | M2 | — | — |
+| REQ-016 | M2 | `crates/testkit/src/build.rs::req_016_the_catalogue_carries_only_granted_tools`, `crates/testkit/src/build.rs::req_016_the_worker_asks_with_only_granted_tools` | `crates/app/src/usecases.rs::tool_catalogue`, `crates/infra/src/stores/tools.rs`, `migrations/0005_tools.sql` |
 | REQ-017 | M2 | `crates/testkit/src/build.rs::req_017_answering_a_card_records_the_effect_exactly_once`, `crates/api/tests/rpc_surface.rs::req_017_answering_a_card_resumes_the_run_and_is_refused_twice`, `crates/infra/tests/m1.rs::req_017_answer_a_card_and_record_its_effect_once_in_postgres`, golden `thread-answer` | `crates/app/src/usecases.rs::answer_card`, `crates/api/src/rpc.rs::threads_answer`, `crates/infra/src/stores/cards.rs`, `migrations/0004_cards.sql` |
 | REQ-018 | M8 | — | — |
 | REQ-019 | M2 | — | — |

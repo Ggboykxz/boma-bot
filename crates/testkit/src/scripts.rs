@@ -490,6 +490,7 @@ mod tests {
                 thread_id: boma_domain::ThreadId::new("thr_1").expect("an id is accepted"),
                 archived_at: None,
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
+                enabled_tools: Vec::new(),
             },
             thread: boma_domain::Thread {
                 id: boma_domain::ThreadId::new("thr_1").expect("an id is accepted"),
@@ -502,6 +503,7 @@ mod tests {
             },
             prompt: prompt.to_owned(),
             history: Vec::new(),
+            tools: Vec::new(),
         }
     }
 

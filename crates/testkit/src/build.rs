@@ -318,6 +318,7 @@ impl TestAppBuilder {
             Arc::new(database.invitations()),
             Arc::new(database.cards()),
             Arc::new(database.effects()),
+            Arc::new(database.tools()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -815,6 +816,153 @@ mod tests {
         let second =
             boma_app::usecases::answer_card(test.app(), &context, "card_golden", "approve").await;
         assert!(second.is_err(), "a closed card absorbs no second answer");
+    }
+
+    #[tokio::test]
+    async fn req_016_the_catalogue_carries_only_granted_tools() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        // The space installs three tools; one is disabled.
+        let database = test.database();
+        database.seed_tool_install(
+            space.id.clone(),
+            "mcp.echo",
+            "Echo a string",
+            boma_domain::ToolKind::Mcp,
+            true,
+        );
+        database.seed_tool_install(
+            space.id.clone(),
+            "mcp.write",
+            "Write the file",
+            boma_domain::ToolKind::Mcp,
+            true,
+        );
+        database.seed_tool_install(
+            space.id.clone(),
+            "connector.github",
+            "Open a GitHub pull request",
+            boma_domain::ToolKind::Connector,
+            false,
+        );
+
+        // A bot whose grant is the echo tool: the catalogue carries exactly that, whatever the
+        // space enabled.
+        database.seed_bot_grant(&bot_id, vec!["mcp.echo".to_owned()]);
+
+        let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
+            .await
+            .expect("the catalogue answers");
+        assert_eq!(catalogue.len(), 1);
+        assert_eq!(catalogue[0].key, "mcp.echo");
+        assert_eq!(catalogue[0].kind, boma_domain::ToolKind::Mcp);
+
+        // Empty grant: the bot sees every enabled install of the space, disabled ones never
+        // (REQ-016).
+        database.seed_bot_grant(&bot_id, Vec::new());
+        let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
+            .await
+            .expect("the catalogue answers");
+        let keys: Vec<&str> = catalogue.iter().map(|tool| tool.key.as_str()).collect();
+        assert!(keys.contains(&"mcp.echo"));
+        assert!(keys.contains(&"mcp.write"));
+        assert!(!keys.contains(&"connector.github"));
+    }
+
+    #[tokio::test]
+    async fn req_016_the_worker_asks_with_only_granted_tools() {
+        use std::sync::Arc;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let thread_id = created.thread.id.clone();
+        let bot_id = created.bot.id.clone();
+
+        let database = test.database();
+        database.seed_tool_install(
+            space.id.clone(),
+            "mcp.echo",
+            "Echo a string",
+            boma_domain::ToolKind::Mcp,
+            true,
+        );
+        database.seed_tool_install(
+            space.id.clone(),
+            "mcp.write",
+            "Write the file",
+            boma_domain::ToolKind::Mcp,
+            true,
+        );
+        database.seed_bot_grant(&bot_id, vec!["mcp.write".to_owned()]);
+
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let provider =
+            Arc::new(crate::ScriptedProvider::default().with_fallback(vec!["Done.".to_owned()]));
+        let worker = boma_app::worker::Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 1);
+        let keys: Vec<&str> = requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["mcp.write"],
+            "the model never sees a tool the bot may not use"
+        );
+        let _ = thread_id;
     }
 
     #[tokio::test]
