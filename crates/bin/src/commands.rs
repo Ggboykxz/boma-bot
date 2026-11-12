@@ -15,6 +15,8 @@ use boma_infra::{
 };
 use tokio::net::TcpListener;
 
+use boma_app::ports::ComputerRuntime;
+
 use crate::config::Config;
 
 /// How long the worker waits between two polls of the queue.
@@ -33,7 +35,14 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     let database =
         Postgres::connect_lazy(&config.database).context("the database pool cannot be built")?;
     let readiness = Readiness::new(vec![database.readiness(config.http.readiness_timeout())]);
-    let app = build_app(&database);
+    let computer = Some(config.computer.provision().await.with_context(|| {
+        format!(
+            "SANDBOX_PROVIDER={} is set but does not answer: {}",
+            config.computer.provider.name(),
+            config.computer,
+        )
+    })?);
+    let app = build_app(&database, computer);
     let state = AppState::new(
         readiness,
         config.capabilities.clone(),
@@ -57,8 +66,8 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         .context("the HTTP server stopped with an error")
 }
 
-/// Builds the application from the Postgres pool.
-fn build_app(database: &Postgres) -> App {
+/// Builds the application from the Postgres pool, with the selected computer backend attached.
+fn build_app(database: &Postgres, computer: Option<Arc<dyn ComputerRuntime>>) -> App {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
     App::new(
@@ -82,20 +91,26 @@ fn build_app(database: &Postgres) -> App {
             Arc::new(PostgresMemoryStore::new(pool.clone())),
             Arc::new(PostgresRoutineStore::new(pool)),
         ),
-        Services::new(
-            publisher,
-            Arc::new(Argon2idHasher::default()),
-            Arc::new(TokenGenerator),
-            Arc::new(IdGenerator),
-            Arc::new(SystemClock),
-            boma_domain::model::DeploymentModels {
-                reachable: vec![
-                    "openai/gpt-5".to_owned(),
-                    "anthropic/claude-sonnet".to_owned(),
-                ],
-                default: "anthropic/claude-sonnet".to_owned(),
-            },
-        ),
+        {
+            let services = Services::new(
+                publisher,
+                Arc::new(Argon2idHasher::default()),
+                Arc::new(TokenGenerator),
+                Arc::new(IdGenerator),
+                Arc::new(SystemClock),
+                boma_domain::model::DeploymentModels {
+                    reachable: vec![
+                        "openai/gpt-5".to_owned(),
+                        "anthropic/claude-sonnet".to_owned(),
+                    ],
+                    default: "anthropic/claude-sonnet".to_owned(),
+                },
+            );
+            match computer {
+                Some(runtime) => services.with_computers(runtime),
+                None => services,
+            }
+        },
     )
 }
 
@@ -110,7 +125,14 @@ fn build_app(database: &Postgres) -> App {
 pub async fn worker(config: Config) -> anyhow::Result<()> {
     let database =
         Postgres::connect_lazy(&config.database).context("the database pool cannot be built")?;
-    let app = Arc::new(build_app(&database));
+    let computer = Some(config.computer.provision().await.with_context(|| {
+        format!(
+            "SANDBOX_PROVIDER={} is set but does not answer: {}",
+            config.computer.provider.name(),
+            config.computer,
+        )
+    })?);
+    let app = Arc::new(build_app(&database, computer));
     let provider = Arc::new(ScriptedProvider::default());
     let dispatcher_app = Arc::clone(&app);
     let worker = Worker::new(app, provider, worker_owner());

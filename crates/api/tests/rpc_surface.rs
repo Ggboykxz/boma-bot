@@ -1262,3 +1262,65 @@ async fn test_app_seed_user_id(test_app: &TestApp, email: &str) -> boma_domain::
         .0
         .id
 }
+
+#[tokio::test]
+async fn req_027_a_deployment_without_a_computer_backend_answers_computers_unavailable() {
+    // A `none` deployment: computers cannot be reached, and the API says so plainly.
+    let test_app = TestApp::builder().without_computers().build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot_id, _thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/status",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id.as_str() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = json(response).await;
+    assert_eq!(body["code"], serde_json::json!("COMPUTERS_UNAVAILABLE"));
+}
+
+#[tokio::test]
+async fn req_027_a_bot_with_no_computer_answers_stopped_never_an_error() {
+    // A `docker` deployment with no computer started yet: `stopped`, 200, nothing else.
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/computer/status",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body,
+        serde_json::json!({"status": "stopped", "provider": "docker"})
+    );
+
+    // Another space's bot is not found: the computer is not an oracle.
+    let missing = post(
+        state(&world.app),
+        "/rpc/computer/status",
+        Some(&world.caller),
+        serde_json::json!({ "botId": "bot_does_not_exist" }),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}

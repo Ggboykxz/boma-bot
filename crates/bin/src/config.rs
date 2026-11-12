@@ -17,6 +17,8 @@ use boma_api::{AuthCapabilities, HttpConfig, HttpConfigError};
 use boma_app::Capabilities;
 use boma_infra::{ConfigError as DatabaseConfigError, DatabaseSettings};
 
+use crate::computer::{ComputerConfig, ComputerConfigError, from_pairs as computer_from_pairs};
+
 /// A configuration variable that is missing or unusable.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -34,6 +36,9 @@ pub enum ConfigError {
         /// Value the operator supplied, already trimmed.
         value: String,
     },
+    /// The computer selection was rejected.
+    #[error(transparent)]
+    Computer(#[from] ComputerConfigError),
     /// The database settings were rejected.
     #[error(transparent)]
     Database(#[from] DatabaseConfigError),
@@ -71,6 +76,8 @@ pub struct Config {
     pub telemetry: TelemetrySettings,
     /// What `/ready` reports.
     pub capabilities: Capabilities,
+    /// The computer backend this deployment is configured with (REQ-027).
+    pub computer: ComputerConfig,
     /// Which sign-in methods the deployment offers.
     pub auth_capabilities: AuthCapabilities,
 }
@@ -151,11 +158,16 @@ impl Config {
             }
         };
 
+        let computer = computer_from_pairs(
+            env.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )?;
+
         let capabilities = Capabilities {
             version: optional(&env, "BOMA_VERSION")
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned()),
             runtime: optional(&env, "BOMA_RUNTIME").unwrap_or_else(|| "sandboxed".to_owned()),
-            sandbox: optional(&env, "BOMA_SANDBOX").unwrap_or_else(|| "none".to_owned()),
+            sandbox: computer.provider.name().to_owned(),
             integrations: parse_string_list(&env, "BOMA_INTEGRATIONS"),
             messaging: optional_parsed(&env, "BOMA_MESSAGING", false)?,
             email: optional(&env, "BOMA_EMAIL"),
@@ -181,6 +193,7 @@ impl Config {
                 format,
             },
             capabilities,
+            computer,
             auth_capabilities,
         })
     }

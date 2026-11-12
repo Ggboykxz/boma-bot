@@ -23,11 +23,11 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AnswerReply, BotReply, BotsListReply, CancelReply, InvitationReply, MemoryDocumentReply,
-        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
-        MessagesReply, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
-        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
-        SendReply, SnoozeReply, SpaceReply, ThreadHeadReply,
+        AnswerReply, BotReply, BotsListReply, CancelReply, ComputerStatusReply, InvitationReply,
+        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
+        MemoryWriteReply, MessagesReply, ReactReply, RosterBotView, RoutineRemoveReply,
+        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
+        RunsReply, SendReply, SnoozeReply, SpaceReply, ThreadHeadReply,
     },
 };
 
@@ -45,6 +45,8 @@ pub mod namespaces {
     pub const MEMORY: &str = "memory";
     /// Routines: cron definitions that wake a bot (REQ-023).
     pub const ROUTINES: &str = "routines";
+    /// The computer: a bot's sandbox (REQ-026..031).
+    pub const COMPUTER: &str = "computer";
 }
 
 /// Every procedure this deployment serves.
@@ -80,6 +82,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::ROUTINES, "list"),
         (namespaces::ROUTINES, "remove"),
         (namespaces::ROUTINES, "runNow"),
+        (namespaces::COMPUTER, "status"),
     ]
 }
 
@@ -182,6 +185,9 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::ROUTINES, "runNow") => routines_run_now(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "status") => computer_status(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -741,6 +747,46 @@ async fn routines_remove(
     Ok(RoutineRemoveReply {
         routine_id: outcome.routine_id.as_str().to_owned(),
         removed: outcome.removed,
+    })
+}
+
+/// The body of `computer.status` (REQ-027).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComputerStatusRequest {
+    /// The bot whose computer is asked about.
+    bot_id: String,
+}
+
+/// `computer.status` — where this bot's computer is (REQ-026, REQ-027).
+///
+/// A deployment without a computer backend answers `COMPUTERS_UNAVAILABLE`; a bot whose computer
+/// has never started answers `stopped`, never an error. Another space's bot is `NOT_FOUND`.
+async fn computer_status(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ComputerStatusReply, ApiError> {
+    let request: ComputerStatusRequest = parse(&body)?;
+    let app = state.app();
+    let Some(runtime) = &app.services.computer else {
+        return Err(ApiError::computers_unavailable());
+    };
+    if runtime.provider() == "none" {
+        return Err(ApiError::computers_unavailable());
+    }
+    let bot_id = boma_domain::BotId::new(request.bot_id).map_err(|_| ApiError::not_found())?;
+    app.stores
+        .bots
+        .find(&auth.actor.context, &bot_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(ApiError::not_found)?;
+    Ok(ComputerStatusReply {
+        status: "stopped".to_owned(),
+        provider: runtime.provider().to_owned(),
+        started_at: None,
+        screen_generation: None,
     })
 }
 

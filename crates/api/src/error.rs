@@ -24,6 +24,8 @@ pub enum ErrorCode {
     NotFound,
     /// The request body or parameters failed validation.
     BadRequest,
+    /// The deployment has no computer backend configured (REQ-027).
+    ComputersUnavailable,
     /// The request conflicts with the current state.
     Conflict,
     /// Rate limited.
@@ -37,6 +39,7 @@ impl ErrorCode {
     #[must_use]
     pub const fn status(self) -> StatusCode {
         match self {
+            Self::ComputersUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
@@ -109,6 +112,16 @@ impl ApiError {
     #[must_use]
     pub const fn bad_request() -> Self {
         Self::new(ErrorCode::BadRequest, "The request is not valid.")
+    }
+
+    /// Computers are not available in this deployment: `SANDBOX_PROVIDER=none` or no backend.
+    #[must_use]
+    pub const fn computers_unavailable() -> Self {
+        Self {
+            code: ErrorCode::ComputersUnavailable,
+            message: "Computers are not available in this deployment.",
+            status: StatusCode::SERVICE_UNAVAILABLE,
+        }
     }
 
     /// A dependency the request needs is down or too slow.
@@ -187,6 +200,10 @@ mod tests {
     #[test]
     fn req_040_every_error_code_has_one_status() {
         let pairs = [
+            (
+                ErrorCode::ComputersUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
             (ErrorCode::Unauthorized, StatusCode::UNAUTHORIZED),
             (ErrorCode::Forbidden, StatusCode::FORBIDDEN),
             (ErrorCode::NotFound, StatusCode::NOT_FOUND),

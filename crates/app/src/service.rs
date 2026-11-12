@@ -123,6 +123,8 @@ pub struct Services {
     pub clock: Arc<dyn Clock>,
     /// The models this deployment can reach, and the fallback it executes on.
     pub models: boma_domain::model::DeploymentModels,
+    /// The computer backend, when this deployment is configured with one (REQ-027).
+    pub computer: Option<Arc<dyn crate::ports::ComputerRuntime>>,
 }
 
 impl Services {
@@ -143,7 +145,18 @@ impl Services {
             ids,
             clock,
             models,
+            computer: None,
         }
+    }
+
+    /// Builds the services with a computer backend attached.
+    ///
+    /// A deployment that is not configured with one leaves it `None` and every computer answer
+    /// stays a clear "computers unavailable" (REQ-027).
+    #[must_use]
+    pub fn with_computers(mut self, computer: Arc<dyn crate::ports::ComputerRuntime>) -> Self {
+        self.computer = Some(computer);
+        self
     }
 }
 

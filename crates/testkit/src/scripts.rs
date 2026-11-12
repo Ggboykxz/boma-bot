@@ -401,6 +401,24 @@ impl ScriptedProvider {
     }
 }
 
+/// The computer backend a test drives (REQ-027).
+///
+/// The memory runtime stands in for a `docker` provider that answers: `ping` is healthy and the
+/// computers never go anywhere until REQ-026 gives this backend a lifecycle to script.
+#[derive(Debug, Default)]
+pub struct ScriptedComputerRuntime;
+
+#[async_trait::async_trait]
+impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
+    fn provider(&self) -> &'static str {
+        "docker"
+    }
+
+    async fn ping(&self) -> Result<(), boma_app::AppError> {
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl ModelProvider for ScriptedProvider {
     async fn complete(&self, request: ProviderRequest) -> Result<Vec<String>, AppError> {

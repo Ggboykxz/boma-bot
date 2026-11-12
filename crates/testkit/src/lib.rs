@@ -43,7 +43,10 @@ pub use memory::{
     MemoryRoutineStore, MemoryRunStore, MemorySessionStore, MemorySpaceStore, MemoryThreadStore,
     MemoryToolStore, MemoryUserStore, Organization,
 };
-pub use scripts::{FixedHasher, ScriptedClock, ScriptedIds, ScriptedProvider, ScriptedTokens};
+pub use scripts::{
+    FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedIds, ScriptedProvider,
+    ScriptedTokens,
+};
 
 /// The application crate, re-exported so that a test needs only one dependency.
 pub use boma_app;

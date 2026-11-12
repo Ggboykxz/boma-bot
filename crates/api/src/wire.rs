@@ -327,6 +327,25 @@ pub struct RoutineWriteReply {
     pub timezone: Option<String>,
 }
 
+/// The reply of `computer.status` (REQ-026, REQ-027).
+///
+/// `status` is one of `queued | running | interrupted | completed | failed | stopped`, or
+/// `unavailable` when the deployment has no computer backend at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerStatusReply {
+    /// Where the computer is. `stopped` when the bot has none; never an error.
+    pub status: String,
+    /// The provider configured for this deployment.
+    pub provider: String,
+    /// When the computer started, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// The generation of the screen backend; bumps on restart and invalidates old capabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_generation: Option<u64>,
+}
+
 /// The reply of `routines.runNow` (REQ-025).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

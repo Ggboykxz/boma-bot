@@ -254,7 +254,7 @@ fn name_of(email: &Email) -> String {
 ///
 /// Every script is optional: an application built without one still works, with deterministic
 /// fallbacks.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TestAppBuilder {
     /// The identifiers the application mints, in order.
     ids: Vec<String>,
@@ -264,6 +264,20 @@ pub struct TestAppBuilder {
     tokens: Vec<String>,
     /// The instant the clock falls back to.
     fixed_instant: Option<String>,
+    /// Whether the app builds with a computer backend (REQ-027).
+    computers: bool,
+}
+
+impl Default for TestAppBuilder {
+    fn default() -> Self {
+        Self {
+            ids: Vec::new(),
+            instants: Vec::new(),
+            tokens: Vec::new(),
+            fixed_instant: None,
+            computers: true,
+        }
+    }
 }
 
 impl TestAppBuilder {
@@ -278,6 +292,13 @@ impl TestAppBuilder {
     #[must_use]
     pub fn clock(mut self, instants: Vec<String>) -> Self {
         self.instants = instants;
+        self
+    }
+
+    /// Builds the app without a computer backend: every computer answer is unavailable.
+    #[must_use]
+    pub fn without_computers(mut self) -> Self {
+        self.computers = false;
         self
     }
 
@@ -342,6 +363,12 @@ impl TestAppBuilder {
                 default: "anthropic/claude-sonnet".to_owned(),
             },
         );
+        let services = if self.computers {
+            services.with_computers(Arc::new(crate::ScriptedComputerRuntime)
+                as Arc<dyn boma_app::ports::ComputerRuntime>)
+        } else {
+            services
+        };
 
         TestApp {
             app: App::new(stores, services),

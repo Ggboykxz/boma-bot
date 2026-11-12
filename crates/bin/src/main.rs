@@ -8,6 +8,7 @@
 
 mod cli;
 mod commands;
+mod computer;
 mod config;
 mod probe;
 mod telemetry;

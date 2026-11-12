@@ -26,6 +26,8 @@ time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+bollard = { version = "0.21" }
+
 boma-app = { workspace = true }
 boma-domain = { workspace = true }
 

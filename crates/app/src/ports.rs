@@ -1123,6 +1123,27 @@ pub trait RoutineStore: Send + Sync {
     ) -> Result<(), AppError>;
 }
 
+/// The computer backend this deployment is configured with (REQ-027).
+///
+/// A runtime is provider-shaped: the local Docker supervisor, a cloud provider or `none`. The
+/// trait is deliberately small; the computer's lifecycle, observation surface and takeover
+/// semantics live on their own ports (REQ-026, REQ-028, REQ-029, REQ-030).
+#[async_trait]
+pub trait ComputerRuntime: Send + Sync {
+    /// The provider's name, for `/ready` and operator logs: `docker`, `none`.
+    fn provider(&self) -> &'static str;
+
+    /// Answers whether this deployment can run computers right now.
+    ///
+    /// A `none` runtime answers `Ok(())` — the absence of computers is a legitimate, working
+    /// configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] when the provider is configured but cannot be reached.
+    async fn ping(&self) -> Result<(), AppError>;
+}
+
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).
 #[async_trait]
 pub trait ToolStore: Send + Sync {
