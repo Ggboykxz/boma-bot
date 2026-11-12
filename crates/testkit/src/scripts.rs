@@ -306,6 +306,19 @@ impl TokenGenerator for ScriptedTokens {
     }
 }
 
+/// The pause a test puts in front of the first answer.
+///
+/// The test drives the worker from another thread: it learns the first provider call has started
+/// by waiting on `asked`, steers the run while the model is "thinking", and then lets the answer
+/// through with `release`. The provider then behaves exactly as if the model were slow.
+#[derive(Debug)]
+struct Gate {
+    /// Raised when the provider is called; released by the test once it steered.
+    asked: std::sync::Arc<tokio::sync::Notify>,
+    /// The one message that lets the answer through.
+    release: tokio::sync::oneshot::Receiver<Vec<String>>,
+}
+
 /// The model provider a test drives: the answers it hands out, in order.
 ///
 /// The provider is a port like the others: the worker asks it for an answer and gets back the
@@ -324,6 +337,8 @@ pub struct ScriptedProvider {
     fallback: Mutex<Option<Vec<String>>>,
     /// The requests the provider received.
     requests: Mutex<Vec<ProviderRequest>>,
+    /// A gate holding the first answer back. `None` outside tests that need the pause.
+    gate: Mutex<Option<Gate>>,
 }
 
 impl ScriptedProvider {
@@ -336,7 +351,29 @@ impl ScriptedProvider {
             answers: Mutex::new(answers.into()),
             fallback: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
+            gate: Mutex::new(None),
         }
+    }
+
+    /// Holds the first answer back until the test lets it through.
+    ///
+    /// Returns the provider, a notification the test waits on for the first call, and a channel
+    /// whose sender unblocks it. The gate only wraps the first call; later calls answer normally.
+    #[must_use]
+    pub fn gated_first_answer(
+        self,
+    ) -> (
+        Self,
+        std::sync::Arc<tokio::sync::Notify>,
+        tokio::sync::oneshot::Sender<Vec<String>>,
+    ) {
+        let (release, receiver) = tokio::sync::oneshot::channel();
+        let asked = std::sync::Arc::new(tokio::sync::Notify::new());
+        lock(&self.gate).replace(Gate {
+            asked: asked.clone(),
+            release: receiver,
+        });
+        (self, asked, release)
     }
 
     /// Builds the provider with the answer it hands out when its script is exhausted.
@@ -357,6 +394,15 @@ impl ScriptedProvider {
 impl ModelProvider for ScriptedProvider {
     async fn complete(&self, request: ProviderRequest) -> Result<Vec<String>, AppError> {
         lock(&self.requests).push(request);
+        let gate = lock(&self.gate).take();
+        if let Some(gate) = gate {
+            gate.asked.notify_one();
+            // The test steered while the model was thinking: this one answer is the newest.
+            return match gate.release.await {
+                Ok(chunks) => Ok(chunks),
+                Err(_) => Err(AppError::Unavailable),
+            };
+        }
         if let Some(chunks) = lock(&self.answers).pop_front() {
             return Ok(chunks);
         }

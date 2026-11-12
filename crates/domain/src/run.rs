@@ -280,9 +280,26 @@ pub struct Run {
     /// When the lease expires; an expired lease is recoverable (REQ-014).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lease_expires_at: Option<String>,
+    /// The seq of the first message still waiting to join this run's attempt (REQ-003).
+    ///
+    /// A steering message is one a member wrote while this run was active; it rides the run
+    /// instead of queueing a second one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_from_seq: Option<i64>,
+    /// How far the worker has read: the highest message seq a provider pass already answered.
+    /// Anything newer is still pending steering (REQ-003).
+    #[serde(default)]
+    pub steering_consumed_seq: i64,
 }
 
 impl Run {
+    /// The seq of the first message this run still owes a pass, if any (REQ-003).
+    #[must_use]
+    pub fn steering_pending(&self) -> bool {
+        self.steering_from_seq
+            .is_some_and(|from| from > self.steering_consumed_seq)
+    }
+
     /// Whether the given worker still holds this run's lease.
     ///
     /// A worker that was slow past its lease expiry, or that was replaced by a reconciler, must

@@ -61,6 +61,7 @@ impl RunStore for PostgresRunStore {
                                boma.rfc3339(lease_expires_at) AS lease_expires_at,
                                boma.rfc3339(started_at) AS started_at,
                                boma.rfc3339(completed_at) AS completed_at, error,
+                               steering_from_seq, steering_consumed_seq,
                                boma.rfc3339(created_at) AS created_at",
                 )
                 .bind(run.id.as_str())
@@ -117,6 +118,7 @@ impl RunStore for PostgresRunStore {
                 sqlx::query_as::<_, RunRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
+                            steering_from_seq, steering_consumed_seq,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -148,6 +150,7 @@ impl RunStore for PostgresRunStore {
                 sqlx::query_as::<_, RunRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
+                            steering_from_seq, steering_consumed_seq,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -165,6 +168,102 @@ impl RunStore for PostgresRunStore {
         .await?;
 
         row.map(rows::run).transpose()
+    }
+
+    async fn find_active_for_thread(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, AppError> {
+        let thread_id = thread_id.as_str().to_owned();
+        let row = tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                sqlx::query_as::<_, RunRow>(
+                    "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
+                            source_message_id, lease_owner, lease_fence,
+                            steering_from_seq, steering_consumed_seq,
+                            boma.rfc3339(lease_expires_at) AS lease_expires_at,
+                            boma.rfc3339(started_at) AS started_at,
+                            boma.rfc3339(completed_at) AS completed_at, error,
+                            boma.rfc3339(created_at) AS created_at
+                     FROM runs
+                     WHERE thread_id = $1
+                       AND status IN ('leased', 'running')
+                       -- A routine or a webhook turn is not conversational (REQ-003).
+                       AND trigger IN ('user', 'helper_result', 'retry')
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1",
+                )
+                .bind(thread_id.as_str())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)
+            })
+        })
+        .await?;
+
+        row.map(rows::run).transpose()
+    }
+
+    async fn set_steering_from(
+        &self,
+        context: &TenantContext,
+        id: &RunId,
+        seq: i64,
+    ) -> Result<(), AppError> {
+        let id = id.as_str().to_owned();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                // The first pending message decides: later ones never move the window.
+                sqlx::query(
+                    "UPDATE runs
+                     SET steering_from_seq = CASE
+                             WHEN steering_from_seq IS NULL OR steering_from_seq > $2 THEN $2
+                             ELSE steering_from_seq
+                         END
+                     WHERE id = $1 AND status NOT IN ('completed', 'failed', 'cancelled')",
+                )
+                .bind(id.as_str())
+                .bind(seq)
+                .execute(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)
+            })
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn set_steering_consumed(
+        &self,
+        context: &TenantContext,
+        id: &RunId,
+        seq: i64,
+        fence: Option<i64>,
+    ) -> Result<(), AppError> {
+        let id = id.as_str().to_owned();
+        let updated = tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                sqlx::query(
+                    "UPDATE runs
+                     SET steering_consumed_seq = GREATEST(steering_consumed_seq, $2)
+                     WHERE id = $1
+                       AND status NOT IN ('completed', 'failed', 'cancelled')
+                       AND ($3::bigint IS NULL OR lease_fence = $3)",
+                )
+                .bind(id.as_str())
+                .bind(seq)
+                .bind(fence)
+                .execute(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)
+            })
+        })
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(AppError::Conflict);
+        }
+        Ok(())
     }
 
     async fn claim_next_queued(&self, owner: &str) -> Result<Option<Run>, AppError> {
@@ -200,6 +299,7 @@ impl RunStore for PostgresRunStore {
                      WHERE r.id = candidate.id
                      RETURNING r.id, r.space_id, r.bot_id, r.thread_id, r.user_id, r.status, r.trigger,
                                r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
+                               r.steering_from_seq, r.steering_consumed_seq,
                                boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                                boma.rfc3339(r.started_at) AS started_at,
                                boma.rfc3339(r.completed_at) AS completed_at, r.error,
@@ -278,6 +378,7 @@ impl RunStore for PostgresRunStore {
                 sqlx::query_as::<_, ActivityRow>(
                     "SELECT r.id, r.space_id, r.bot_id, r.thread_id, r.user_id, r.status, r.trigger,
                             r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
+                            r.steering_from_seq, r.steering_consumed_seq,
                             boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(r.started_at) AS started_at,
                             boma.rfc3339(r.completed_at) AS completed_at, r.error,

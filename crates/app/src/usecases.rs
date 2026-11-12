@@ -384,6 +384,25 @@ pub async fn send_message(
         )
         .await?;
 
+    // A conversational run that is already working takes this message as steering input instead
+    // of queueing a second run behind it (REQ-003). The message is in the thread, the run is
+    // marked, and the client sees one working run.
+    if let Some(active) = app
+        .stores
+        .runs
+        .find_active_for_thread(context, &thread.id)
+        .await?
+    {
+        app.stores
+            .runs
+            .set_steering_from(context, &active.id, message.message.seq)
+            .await?;
+        return Ok(SendOutcome {
+            message: message.message,
+            run: active,
+        });
+    }
+
     let run = app
         .stores
         .runs

@@ -110,6 +110,8 @@ pub(crate) struct RunRow {
     pub(crate) started_at: Option<String>,
     pub(crate) completed_at: Option<String>,
     pub(crate) error: Option<String>,
+    pub(crate) steering_from_seq: Option<i64>,
+    pub(crate) steering_consumed_seq: i64,
     pub(crate) created_at: String,
 }
 
@@ -247,6 +249,8 @@ pub(crate) fn run(row: RunRow) -> Result<Run, AppError> {
         lease_owner: row.lease_owner,
         lease_fence: row.lease_fence,
         lease_expires_at: row.lease_expires_at,
+        steering_from_seq: row.steering_from_seq,
+        steering_consumed_seq: row.steering_consumed_seq,
     })
 }
 

@@ -1163,6 +1163,8 @@ impl RunStore for MemoryRunStore {
             lease_owner: None,
             lease_fence: 0,
             lease_expires_at: None,
+            steering_from_seq: None,
+            steering_consumed_seq: 0,
         };
         state.runs.push(RunRow {
             run: stored.clone(),
@@ -1195,6 +1197,87 @@ impl RunStore for MemoryRunStore {
             return Ok(None);
         }
         Ok(Some(existing.run.clone()))
+    }
+
+    async fn find_active_for_thread(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, AppError> {
+        let state = read(&self.state);
+        let mut candidate: Option<&Run> = None;
+        for row in &state.runs {
+            let run = &row.run;
+            if run.thread_id != *thread_id || !visible(context, &run.space_id) {
+                continue;
+            }
+            if !matches!(run.status, RunStatus::Leased | RunStatus::Running) {
+                continue;
+            }
+            if !run.trigger.accepts_steering() {
+                continue;
+            }
+            candidate = match candidate {
+                None => Some(run),
+                Some(current) => {
+                    if current.created_at < run.created_at
+                        || (current.created_at == run.created_at && current.id < run.id)
+                    {
+                        Some(run)
+                    } else {
+                        Some(current)
+                    }
+                }
+            };
+        }
+        Ok(candidate.cloned())
+    }
+
+    async fn set_steering_from(
+        &self,
+        context: &TenantContext,
+        id: &RunId,
+        seq: i64,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state.runs.iter_mut().find(|row| row.run.id == *id) else {
+            return Err(AppError::NotFound);
+        };
+        if !visible(context, &row.run.space_id) {
+            return Err(AppError::NotFound);
+        }
+        // The first pending message decides: a later one never moves the window back or forth.
+        row.run.steering_from_seq = Some(match row.run.steering_from_seq {
+            Some(current) => current.min(seq),
+            None => seq,
+        });
+        Ok(())
+    }
+
+    async fn set_steering_consumed(
+        &self,
+        context: &TenantContext,
+        id: &RunId,
+        seq: i64,
+        fence: Option<i64>,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state.runs.iter_mut().find(|row| row.run.id == *id) else {
+            return Err(AppError::NotFound);
+        };
+        if !visible(context, &row.run.space_id) {
+            return Err(AppError::NotFound);
+        }
+        if row.run.status.is_terminal() {
+            return Err(AppError::Conflict);
+        }
+        if let Some(fence) = fence
+            && row.run.lease_fence != fence
+        {
+            return Err(AppError::Conflict);
+        }
+        row.run.steering_consumed_seq = row.run.steering_consumed_seq.max(seq);
+        Ok(())
     }
 
     async fn claim_next_queued(&self, owner: &str) -> Result<Option<Run>, AppError> {

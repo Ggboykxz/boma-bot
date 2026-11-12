@@ -19,7 +19,7 @@ Status values:
 |---|---|---|---|
 | REQ-001 | M1 | `crates/api/tests/rpc_surface.rs::req_001_a_send_writes_one_message_and_starts_one_queued_run` | `crates/app/src/usecases.rs::send_message` |
 | REQ-002 | M1 | `crates/api/tests/rpc_surface.rs::req_002_the_same_nonce_returns_the_same_message_and_run` | `crates/app/src/usecases.rs::send_message`, `crates/infra/src/stores/messages.rs` |
-| REQ-003 | M2 | — | `crates/domain/src/run.rs::RunTrigger::accepts_steering` |
+| REQ-003 | M2 | `crates/testkit/src/build.rs::req_003_a_message_during_an_active_run_joins_it`, `crates/testkit/src/build.rs::req_003_the_worker_folds_a_steering_message_in_before_it_answers`, `crates/domain/src/run.rs::req_003_non_conversational_triggers_never_take_steering` | `crates/domain/src/run.rs`, `crates/app/src/usecases.rs::send_message`, `crates/app/src/worker.rs::provider_pass`, `migrations/0003_steering.sql` |
 | REQ-004 | M1 | `crates/api/tests/rpc_surface.rs::req_004_creating_a_bot_creates_its_thread` | `crates/app/src/usecases.rs::create_bot` |
 | REQ-005 | M1 | `crates/api/tests/rpc_surface.rs::req_005_the_message_page_is_newest_first_and_carries_a_cursor` | `crates/app/src/usecases.rs::page_messages`, `crates/domain/src/message.rs` |
 | REQ-006 | M2 | `crates/testkit/src/build.rs::req_006_a_stopped_run_absorbs_nothing_else`, `crates/api/tests/rpc_surface.rs::req_006_a_cancel_stops_the_run_and_is_idempotent` | `crates/app/src/usecases.rs::cancel_run`, `crates/api/src/rpc.rs::runs_cancel`, `crates/app/src/worker.rs` |

@@ -4,17 +4,25 @@
 
 **M2 — in progress.** Slices land one commit at a time; tests written before the code.
 
-- **REQ-006 (stop work, MUST)** is done and committed-as-`feat(app,api,infra,testkit): …`: a `runs.cancel`
-  procedure stops a run wherever it is, the worker stops producing into it (pre-check, per-chunk
-  check, and the per-write terminal guard), a terminal run absorbs no further write in either
-  adapter (with the fence), the stop is idempotent, and the live stream announces `cancelled`. The
-  helper-run half of REQ-006 (stop the helper, not the parent) lands with REQ-019 delegation.
+- **REQ-006 (stop work, MUST)** is done (`e453df1`): `runs.cancel` stops a run wherever it is, the
+  worker stops producing into it (pre-check, per-chunk check, per-write terminal guard), a
+  terminal run absorbs no further write in either store, the stop is idempotent, and the live
+  stream announces `cancelled`. The helper-run half (stop the helper, not the parent) lands with
+  REQ-019 delegation.
+- **REQ-003 (steering, MUST)** is done: a message written during a conversational run
+  (`user`/`helper_result`/`retry` trigger, leased or running) joins the active run instead of
+  queueing a second one; the steering text rides the run (`steering_from_seq`), the worker runs
+  one provider pass per pending steering state (bounded at four), and the reply lands as one bot
+  message for both texts. A routine or webhook turn is not conversational, so a message written
+  during one waits for the next turn, as the spec requires. Important catch: `prompt_of` read the
+  history *oldest-first* — the prompt is now the newest user text, and the steering test caught it.
+  Migrations now carry `0003_steering.sql` (two columns).
 
 Remaining in M2, in dependency order: REQ-003 steering, REQ-016/REQ-017 (per-run tool catalogue and
 the approval gate with exactly-once), REQ-015 model fallback, REQ-007 pending cards, REQ-008
 replies/reactions, REQ-019 delegation, REQ-009 read state (SHOULD).
 
-The current commit carries REQ-006 only; M2 is not done yet.
+The current commit carries REQ-003 and REQ-006; M2 is not done yet.
 
 ## Done
 

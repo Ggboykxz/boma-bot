@@ -15,6 +15,23 @@ use crate::{
     usecases,
 };
 
+/// How many passes a worker may fold steering text into one run (REQ-003).
+///
+/// A steering message that arrives after the fourth pass is answered by the next turn instead of
+/// being folded into this one: the loop terminates even if the member keeps typing.
+const MAX_STEERING_PASSES: u32 = 4;
+
+/// What a provider pass did, so the caller can steer the next one.
+#[derive(Debug)]
+enum PassOutcome {
+    /// The chunks were streamed and appended; `latest_seq` is the newest message read.
+    Answered { text: String, latest_seq: i64 },
+    /// The person cancelled while the model was working.
+    Cancelled,
+    /// The provider did not answer: the run is already marked failed.
+    Failed,
+}
+
 /// The name a worker claims runs under.
 #[derive(Clone)]
 pub struct Worker {
@@ -69,100 +86,131 @@ impl Worker {
         )
         .await?;
 
-        let history = self
-            .app
-            .stores
-            .messages
-            .page(&context, &run.thread_id, None, 50)
-            .await
-            .map(|page| page.messages)
-            .unwrap_or_default();
-
-        let request = ProviderRequest {
-            bot: claimed.bot.clone(),
-            thread: claimed.thread.clone(),
-            prompt: prompt_of(&history),
-            history,
-        };
-
-        match self.provider.complete(request).await {
-            Ok(chunks) => {
-                // The provider answered; the person may have cancelled while it was thinking.
-                // A finished run absorbs nothing else (REQ-006).
-                let answered = self.write_answer(&context, &claimed, &chunks).await?;
-                if answered {
-                    usecases::set_run_status(
-                        &self.app,
-                        &context,
-                        run.id.as_str(),
-                        RunStatus::Completed,
-                        Some(run.lease_fence),
-                        None,
-                    )
-                    .await?;
-                } else {
-                    tracing::info!(run = %claimed.run.id, "the run was cancelled; the reply is not written and the run stays cancelled");
-                }
-            }
-            Err(error) => {
-                tracing::warn!(run = %run.id, %error, "a run failed");
-                self.fail_run(&context, &run, error).await?;
-            }
-        }
-
-        Ok(true)
-    }
-
-    /// Writes the answer into the thread, chunk by chunk.
-    ///
-    /// Returns `false` when the run was cancelled while the model was answering: the caller then
-    /// stops there instead of marking the run completed (REQ-006).
-    async fn write_answer(
-        &self,
-        context: &TenantContext,
-        claimed: &usecases::ClaimedRun,
-        chunks: &[String],
-    ) -> Result<bool, AppError> {
-        // Even an empty answer is a decision about a live run: a cancellation wins.
-        if !self.still_live(context, &claimed.run).await? {
-            return Ok(false);
-        }
+        // One answer per pass, and a fresh pass whenever the member steered while the model was
+        // working (REQ-003): the newest text joins the current attempt instead of queueing a
+        // second run. Bounded so a member cannot hold the worker in a loop forever.
         let mut text = String::new();
-        for chunk in chunks {
-            if !self.still_live(context, &claimed.run).await? {
-                tracing::info!(run = %claimed.run.id, "the run was cancelled mid-stream; the reply is not written");
-                return Ok(false);
+        let mut passes: u32 = 0;
+        loop {
+            match self.provider_pass(&context, &claimed).await? {
+                PassOutcome::Answered {
+                    text: chunk_text,
+                    latest_seq,
+                } => {
+                    text.push_str(&chunk_text);
+                    self.app
+                        .stores
+                        .runs
+                        .set_steering_consumed(&context, &run.id, latest_seq, Some(run.lease_fence))
+                        .await?;
+                    let reloaded = self
+                        .app
+                        .stores
+                        .runs
+                        .find(&context, &run.id)
+                        .await?
+                        .ok_or(AppError::Unavailable)?;
+                    if reloaded.steering_pending() && passes < MAX_STEERING_PASSES {
+                        passes += 1;
+                        continue;
+                    }
+                    break;
+                }
+                PassOutcome::Cancelled | PassOutcome::Failed => return Ok(true),
             }
-            text.push_str(chunk);
-            self.app
-                .stores
-                .events
-                .append(
-                    context,
-                    crate::ports::NewEvent {
-                        space_id: claimed.thread.space_id.clone(),
-                        thread_id: claimed.thread.id.clone(),
-                        kind: boma_domain::EventType::MessageUpdate,
-                        payload: serde_json::json!({
-                            "messageId": claimed.run.id.as_str(),
-                            "delta": chunk,
-                        }),
-                        created_at: self.app.services.clock.now(),
-                    },
-                )
-                .await?;
         }
 
+        if !self.still_live(&context, &claimed.run).await? {
+            tracing::info!(run = %claimed.run.id, "the run was cancelled; the reply is not written and the run stays cancelled");
+            return Ok(true);
+        }
         usecases::write_reply(
             &self.app,
-            context,
+            &context,
             &claimed.thread,
             &claimed.bot,
             &claimed.run.id,
             &text,
         )
         .await?;
+        usecases::set_run_status(
+            &self.app,
+            &context,
+            run.id.as_str(),
+            RunStatus::Completed,
+            Some(run.lease_fence),
+            None,
+        )
+        .await?;
+
         Ok(true)
+    }
+
+    /// One provider pass over the thread (REQ-003).
+    ///
+    /// Reads the newest page, calls the provider once and streams the chunks out. Returns what
+    /// happened, so the caller can decide whether to wait for more steering or stop.
+    async fn provider_pass(
+        &self,
+        context: &TenantContext,
+        claimed: &usecases::ClaimedRun,
+    ) -> Result<PassOutcome, AppError> {
+        let run = claimed.run.clone();
+        let history = self
+            .app
+            .stores
+            .messages
+            .page(context, &run.thread_id, None, 50)
+            .await
+            .map(|page| page.messages)
+            .unwrap_or_default();
+        let latest = history.iter().map(|message| message.seq).max().unwrap_or(0);
+        let prompt = prompt_of(&history);
+        let request = ProviderRequest {
+            bot: claimed.bot.clone(),
+            thread: claimed.thread.clone(),
+            prompt,
+            history,
+        };
+
+        match self.provider.complete(request).await {
+            Ok(chunks) => {
+                let mut text = String::new();
+                for chunk in &chunks {
+                    if !self.still_live(context, &claimed.run).await? {
+                        tracing::info!(run = %claimed.run.id, "the run was cancelled mid-stream; the reply is not written");
+                        return Ok(PassOutcome::Cancelled);
+                    }
+                    text.push_str(chunk);
+                    self.app
+                        .stores
+                        .events
+                        .append(
+                            context,
+                            crate::ports::NewEvent {
+                                space_id: claimed.thread.space_id.clone(),
+                                thread_id: claimed.thread.id.clone(),
+                                kind: boma_domain::EventType::MessageUpdate,
+                                payload: serde_json::json!({
+                                    "messageId": claimed.run.id.as_str(),
+                                    "delta": chunk,
+                                }),
+                                created_at: self.app.services.clock.now(),
+                            },
+                        )
+                        .await?;
+                }
+                Ok(PassOutcome::Answered {
+                    text,
+                    latest_seq: latest,
+                })
+            }
+            Err(error) => {
+                tracing::warn!(run = %run.id, %error, "a run failed");
+                self.fail_run(context, &run, error).await?;
+                Ok(PassOutcome::Failed)
+            }
+        }
     }
 
     /// Whether the run has not reached a terminal state yet.
@@ -206,14 +254,24 @@ impl Worker {
     }
 }
 
-/// The last thing a person wrote, as the prompt for the provider.
+/// The prompt for the provider: the newest thing a person wrote, or the newest text of any
+/// role when the thread only holds the system's words.
+///
+/// The history page is newest first, so the first match is the freshest one.
 fn prompt_of(history: &[boma_domain::Message]) -> String {
+    let text = |message: &boma_domain::Message| {
+        message
+            .blocks
+            .iter()
+            .find_map(boma_domain::Block::as_text)
+            .map(str::to_owned)
+    };
     history
         .iter()
-        .rev()
-        .find_map(|message| message.blocks.iter().find_map(boma_domain::Block::as_text))
+        .find(|message| message.role == boma_domain::MessageRole::User)
+        .and_then(text)
+        .or_else(|| history.iter().find_map(text))
         .unwrap_or_default()
-        .to_owned()
 }
 
 #[cfg(test)]
@@ -241,8 +299,37 @@ mod tests {
 
     #[test]
     fn req_020_the_prompt_is_the_last_thing_the_person_wrote() {
-        let history = vec![message("first"), message("second")];
+        // The history page is newest first: the fresh text sits at the front.
+        let history = vec![message("second"), message("first")];
         assert_eq!(prompt_of(&history), "second");
+    }
+
+    #[test]
+    fn req_020_the_prompt_is_the_newest_thing_the_person_wrote() {
+        // The history page is newest first: the prompt must be the freshest user text, not the
+        // oldest (a regression here lost every steering message at the provider, REQ-003).
+        fn message(text: &str, role: MessageRole, seq: i64) -> Message {
+            Message {
+                id: MessageId::new(format!("msg_{seq}")).expect("an id is accepted"),
+                thread_id: ThreadId::new("thr_1").expect("an id is accepted"),
+                seq,
+                role,
+                blocks: vec![Block::Text {
+                    text: text.to_owned(),
+                }],
+                bot_id: None,
+                author_user_id: None,
+                run_id: None,
+                client_nonce: None,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            }
+        }
+        let history = vec![
+            message("third", MessageRole::User, 3),
+            message("bot", MessageRole::Bot, 2),
+            message("first", MessageRole::User, 1),
+        ];
+        assert_eq!(prompt_of(&history), "third");
     }
 
     #[test]

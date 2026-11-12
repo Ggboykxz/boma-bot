@@ -556,6 +556,207 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn req_003_a_message_during_an_active_run_joins_it() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot = created.bot;
+        let first = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the first message is sent");
+
+        // Claim the run without running it, so the steering window is open.
+        let claimed = test
+            .app()
+            .stores
+            .runs
+            .claim_next_queued("worker-1")
+            .await
+            .expect("the claim answers")
+            .expect("the run is claimed");
+        assert_eq!(claimed.id, first.run.id);
+        test.app()
+            .stores
+            .runs
+            .set_status(
+                &boma_domain::TenantContext::System {
+                    reason: boma_domain::SystemReason::ScheduledJob,
+                    user_id: Some(user_id.clone()),
+                },
+                &first.run.id,
+                RunStatus::Running,
+                &test.app().services.clock.now(),
+                Some(claimed.lease_fence),
+                None,
+            )
+            .await
+            .expect("the run is running");
+
+        let second = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.id.to_string(),
+                text: "And mention Friday's release.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the steering message is sent");
+
+        assert_eq!(
+            second.run.id, first.run.id,
+            "one working run: the steering message joined the active one (REQ-003)"
+        );
+
+        let active = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &first.run.id)
+            .await
+            .expect("the run answers")
+            .expect("the run exists");
+        assert_eq!(active.steering_from_seq, Some(2));
+    }
+
+    #[tokio::test]
+    async fn req_003_the_worker_folds_a_steering_message_in_before_it_answers() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let thread_id = created.thread.id.clone();
+        let bot = created.bot;
+        let first = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the first message is sent");
+
+        // The model answers "slowly": the first call waits behind the gate, the member steers
+        // while it is thinking, and the fold happens in the passes that follow (REQ-003).
+        let scripted = crate::ScriptedProvider::new(vec![vec![" After the steering.".to_owned()]]);
+        let (scripted, asked, release) = scripted.gated_first_answer();
+        let provider = std::sync::Arc::new(scripted);
+        let worker = boma_app::worker::Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        let step = tokio::spawn(async move { worker.step().await });
+
+        // The first provider call is in flight: steer the run, then let the answer through.
+        asked.notified().await;
+        let second = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.id.to_string(),
+                text: "And mention Friday's release.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the steering message is sent");
+        assert_eq!(second.run.id, first.run.id, "one working run (REQ-003)");
+        release
+            .send(vec!["Considering Friday.".to_owned()])
+            .expect("the gate opens");
+        assert!(
+            step.await
+                .expect("the worker finishes")
+                .expect("the step succeeded")
+        );
+
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 2, "one pass per pending steering state");
+        assert_eq!(requests[0].prompt, "Summarise my week.");
+        assert_eq!(requests[1].prompt, "And mention Friday's release.");
+        assert_eq!(requests[1].history.len(), 2);
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread_id, None, 10)
+            .await
+            .expect("the page answers");
+        let bots = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Bot)
+            .count();
+        assert_eq!(bots, 1, "one bot reply for both texts");
+        let reply = page
+            .messages
+            .iter()
+            .find(|message| message.role == boma_domain::MessageRole::Bot)
+            .expect("the bot answered");
+        let reply_text = reply
+            .blocks
+            .iter()
+            .filter_map(boma_domain::Block::as_text)
+            .collect::<Vec<_>>()
+            .join("");
+        assert_eq!(reply_text, "Considering Friday. After the steering.");
+
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &first.run.id)
+            .await
+            .expect("the run answers")
+            .expect("the run exists");
+        assert_eq!(run.status, RunStatus::Completed);
+        assert_eq!(run.steering_consumed_seq, 2);
+    }
+
+    #[tokio::test]
     async fn req_042_a_seeded_person_owns_the_space_they_land_in() {
         let test = TestApp::builder().build();
         let user_id = test

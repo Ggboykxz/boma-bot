@@ -511,6 +511,49 @@ pub trait RunStore: Send + Sync {
         client_nonce: &str,
     ) -> Result<Option<Run>, AppError>;
 
+    /// The newest run on a thread that is working and can take a steering message (REQ-003).
+    ///
+    /// A routine, a webhook or a bot-to-bot turn is not conversational, so a message written
+    /// during one waits for the next turn instead of riding it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_active_for_thread(
+        &self,
+        context: &boma_domain::TenantContext,
+        thread_id: &boma_domain::ThreadId,
+    ) -> Result<Option<Run>, AppError>;
+
+    /// Marks the furthest message seq that still joins this run's attempt (REQ-003).
+    ///
+    /// The first pending steering message decides: later ones never move it forward.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn set_steering_from(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RunId,
+        seq: i64,
+    ) -> Result<(), AppError>;
+
+    /// Marks how far the worker has read for this run (REQ-003).
+    ///
+    /// The fence decides who may write, like every other worker write (REQ-012).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer, or the fence no longer matches.
+    async fn set_steering_consumed(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RunId,
+        seq: i64,
+        fence: Option<i64>,
+    ) -> Result<(), AppError>;
+
     /// Claims the oldest queued run, if there is one.
     ///
     /// The claim is atomic: the run moves from `queued` to `leased` only if nobody else
