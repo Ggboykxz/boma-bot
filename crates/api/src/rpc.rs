@@ -127,6 +127,8 @@ async fn send(state: AppState, auth: AuthContext, body: Bytes) -> Result<SendRep
             bot_id: request.bot_id,
             text: request.text,
             client_nonce: request.client_nonce,
+            reply_to_message_id: request.reply_to_message_id,
+            reply_quote: request.reply_quote,
         },
     )
     .await?;
@@ -149,6 +151,12 @@ struct SendRequest {
     /// The nonce that makes the send idempotent.
     #[serde(default)]
     client_nonce: Option<String>,
+    /// The message this one answers, when it is a reply.
+    #[serde(default)]
+    reply_to_message_id: Option<String>,
+    /// A short quote of the message being answered.
+    #[serde(default)]
+    reply_quote: Option<String>,
 }
 
 /// `threads.messages` — a page of the thread's history, newest first.

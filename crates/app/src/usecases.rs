@@ -322,6 +322,10 @@ pub struct SendMessage {
     pub text: String,
     /// The nonce that makes the send idempotent.
     pub client_nonce: Option<String>,
+    /// The message this one answers, when it is a reply.
+    pub reply_to_message_id: Option<String>,
+    /// A short quote of the message being answered.
+    pub reply_quote: Option<String>,
 }
 
 /// Sends a message to a bot and starts the run that answers it.
@@ -362,6 +366,14 @@ pub async fn send_message(
     let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
     let now = app.services.clock.now();
 
+    // The message is written first; a reply carries the reference and the quote together.
+    let reply_to_message_id = request
+        .reply_to_message_id
+        .clone()
+        .map(|id| boma_domain::MessageId::new(id).map_err(|_| AppError::NotFound))
+        .transpose()?;
+    let reply_quote = request.reply_quote.clone();
+
     let message = app
         .stores
         .messages
@@ -380,6 +392,8 @@ pub async fn send_message(
                 run_id: None,
                 client_nonce: request.client_nonce.clone(),
                 created_at: now.clone(),
+                reply_to_message_id,
+                reply_quote,
             },
         )
         .await?;
@@ -664,6 +678,8 @@ pub async fn write_reply(
                 run_id: Some(run_id.clone()),
                 client_nonce: None,
                 created_at: app.services.clock.now(),
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await?;

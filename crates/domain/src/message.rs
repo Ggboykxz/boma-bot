@@ -125,6 +125,12 @@ pub struct Message {
     /// The run that produced it, when a run did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
+    /// The message this one answers, when it is a reply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<MessageId>,
+    /// A short quote of the message being answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_quote: Option<String>,
     /// The nonce that made the send idempotent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_nonce: Option<String>,

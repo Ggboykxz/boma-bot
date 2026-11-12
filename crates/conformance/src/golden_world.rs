@@ -394,6 +394,8 @@ fn text_message(id: &str, seq: i64, role: MessageRole, text: &str, user_id: &Use
         } else {
             None
         },
+        reply_to_message_id: None,
+        reply_quote: None,
         client_nonce: None,
         created_at: created_at_of(seq),
     }

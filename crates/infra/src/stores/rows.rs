@@ -95,6 +95,8 @@ pub(crate) struct MessageRow {
     pub(crate) run_id: Option<String>,
     pub(crate) client_nonce: Option<String>,
     pub(crate) created_at: String,
+    pub(crate) reply_to_message_id: Option<String>,
+    pub(crate) reply_quote: Option<String>,
 }
 
 /// A row of `runs`.
@@ -261,6 +263,8 @@ pub(crate) fn message(row: MessageRow) -> Result<Message, AppError> {
         bot_id: row.bot_id.map(BotId::new).transpose()?,
         author_user_id: row.author_user_id.map(UserId::new).transpose()?,
         run_id: row.run_id.map(RunId::new).transpose()?,
+        reply_to_message_id: row.reply_to_message_id.map(MessageId::new).transpose()?,
+        reply_quote: row.reply_quote,
         client_nonce: row.client_nonce,
         created_at: row.created_at,
     })

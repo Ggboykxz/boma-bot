@@ -28,6 +28,12 @@ pub struct MessageView {
     /// The run that produced it, when a run did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// The message this one answers, when it is a reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+    /// A short quote of the message being answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_quote: Option<String>,
     /// When it was written.
     pub created_at: String,
 }
@@ -41,6 +47,11 @@ impl From<&Message> for MessageView {
             blocks: message.blocks.clone(),
             run_id: message.run_id.as_ref().map(|id| id.as_str().to_owned()),
             created_at: message.created_at.clone(),
+            reply_to_message_id: message
+                .reply_to_message_id
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            reply_quote: message.reply_quote.clone(),
         }
     }
 }
@@ -220,6 +231,8 @@ mod tests {
             bot_id: None,
             author_user_id: None,
             run_id: None,
+            reply_to_message_id: None,
+            reply_quote: None,
             client_nonce: None,
             created_at: "2026-01-01T00:00:02Z".to_owned(),
         };

@@ -24,7 +24,7 @@ Status values:
 | REQ-005 | M1 | `crates/api/tests/rpc_surface.rs::req_005_the_message_page_is_newest_first_and_carries_a_cursor` | `crates/app/src/usecases.rs::page_messages`, `crates/domain/src/message.rs` |
 | REQ-006 | M2 | `crates/testkit/src/build.rs::req_006_a_stopped_run_absorbs_nothing_else`, `crates/api/tests/rpc_surface.rs::req_006_a_cancel_stops_the_run_and_is_idempotent` | `crates/app/src/usecases.rs::cancel_run`, `crates/api/src/rpc.rs::runs_cancel`, `crates/app/src/worker.rs` |
 | REQ-007 | M2 | `apps/web/tests/golden.spec.ts` (UI golden REQ-007-pending-card) | `apps/web/components/thread/message-blocks.tsx`, `apps/web/tests/fixtures.ts::SEED_CARD_MESSAGE` |
-| REQ-008 | M2 | — | `crates/domain/src/message.rs` |
+| REQ-008 | M2 | `crates/testkit/src/build.rs::req_008_a_reply_carries_the_message_it_answers_and_the_quote`, `apps/web/tests/reply.spec.ts` | `crates/domain/src/message.rs`, `crates/app/src/ports.rs` (NewMessage), `crates/app/src/usecases.rs::send_message`, `migrations/0007_replies.sql`, `apps/web/components/thread/thread-screen.tsx`, `apps/web/components/thread/thread-composer.tsx`, `apps/web/lib/api/rpc.ts` |
 | REQ-009 | M2 | — | — |
 | REQ-010 | M2 | — | — |
 | REQ-011 | M1 | `crates/api/src/wire.rs::req_011_a_run_always_carries_its_empty_fields` | `crates/app/src/usecases.rs::list_runs` |

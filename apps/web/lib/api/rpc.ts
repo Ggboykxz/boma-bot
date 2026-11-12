@@ -34,6 +34,8 @@ export interface MessageView {
   blocks: Block[];
   runId?: string;
   createdAt: string;
+  replyToMessageId?: string;
+  replyQuote?: string;
 }
 
 /** One frame of a thread's stream. */
@@ -218,7 +220,13 @@ export async function call<T>(
 
 /** `threads.send` — writes a message and starts the run that answers it. */
 export function threadsSend(
-  request: { botId: string; text: string; clientNonce?: string },
+  request: {
+    botId: string;
+    text: string;
+    clientNonce?: string;
+    replyToMessageId?: string;
+    replyQuote?: string;
+  },
   signal?: AbortSignal,
 ): Promise<SendReply> {
   return call<SendReply>("threads", "send", request, signal);
@@ -289,6 +297,10 @@ export function normalizeMessage(raw: unknown): MessageView | null {
     role: isMessageRole(role) ? role : "system",
     blocks,
     ...(typeof message.runId === "string" ? { runId: message.runId } : {}),
+    ...(typeof message.replyToMessageId === "string"
+      ? { replyToMessageId: message.replyToMessageId }
+      : {}),
+    ...(typeof message.replyQuote === "string" ? { replyQuote: message.replyQuote } : {}),
     createdAt: typeof message.createdAt === "string" ? message.createdAt : "",
   };
 }

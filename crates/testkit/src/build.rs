@@ -403,6 +403,8 @@ mod tests {
                 bot_id: bot.bot.id.to_string(),
                 text: "plan my week".to_owned(),
                 client_nonce: Some("nonce-1".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -419,6 +421,8 @@ mod tests {
                 bot_id: bot.bot.id.to_string(),
                 text: "plan my week".to_owned(),
                 client_nonce: Some("nonce-1".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -459,6 +463,8 @@ mod tests {
                 bot_id: bot.bot.id.to_string(),
                 text: "plan my week".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -522,6 +528,8 @@ mod tests {
                 bot_id: bot.bot.id.to_string(),
                 text: "plan my week".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -593,6 +601,8 @@ mod tests {
                 bot_id: bot.id.to_string(),
                 text: "Summarise my week.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -632,6 +642,8 @@ mod tests {
                 bot_id: bot.id.to_string(),
                 text: "And mention Friday's release.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -654,6 +666,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn req_003_the_worker_folds_a_steering_message_in_before_it_answers() {
         let test = TestApp::builder().build();
         let user_id = test
@@ -682,6 +695,8 @@ mod tests {
                 bot_id: bot.id.to_string(),
                 text: "Summarise my week.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -708,6 +723,8 @@ mod tests {
                 bot_id: bot.id.to_string(),
                 text: "And mention Friday's release.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -793,6 +810,8 @@ mod tests {
                 bot_id: created.bot.id.to_string(),
                 text: "Do the purchase.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -943,6 +962,8 @@ mod tests {
                 bot_id: bot_id.to_string(),
                 text: "Summarise my week.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await
@@ -970,6 +991,68 @@ mod tests {
             "the model never sees a tool the bot may not use"
         );
         let _ = thread_id;
+    }
+
+    #[tokio::test]
+    async fn req_008_a_reply_carries_the_message_it_answers_and_the_quote() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let first = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: created.bot.id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the first message is sent");
+
+        let reply = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: created.bot.id.to_string(),
+                text: "Friday too.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: Some(first.message.id.as_str().to_owned()),
+                reply_quote: Some("Summarise my week.".to_owned()),
+            },
+        )
+        .await
+        .expect("the reply is sent");
+
+        assert_eq!(
+            reply
+                .message
+                .reply_to_message_id
+                .as_ref()
+                .map(boma_domain::MessageId::as_str),
+            Some(first.message.id.as_str())
+        );
+        assert_eq!(
+            reply.message.reply_quote.as_deref(),
+            Some("Summarise my week.")
+        );
     }
 
     #[tokio::test]
@@ -1005,6 +1088,8 @@ mod tests {
                 bot_id: bot_id.to_string(),
                 text: "Summarise my week.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await;
@@ -1020,6 +1105,8 @@ mod tests {
                 bot_id: bot_id.to_string(),
                 text: "Summarise my week.".to_owned(),
                 client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await

@@ -1,6 +1,6 @@
 "use client";
 
-import { RiArrowLeftLine, RiErrorWarningLine } from "@remixicon/react";
+import { RiArrowLeftLine, RiErrorWarningLine, RiReplyLine } from "@remixicon/react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -49,6 +49,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
   const [sending, setSending] = useState(false);
   const [sendFailed, setSendFailed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const [replyTo, setReplyTo] = useState<MessageView | null>(null);
 
   const lastSeq = useRef(0);
   const threadIdRef = useRef<string | null>(null);
@@ -192,12 +193,22 @@ export function ThreadScreen({ botId }: { botId: string }) {
     setSending(true);
     setSendFailed(false);
     try {
+      const quoted = replyTo ?? null;
+      const quotedText =
+        quoted?.blocks.find((block) => block.type === "text")?.text.slice(0, 80) ?? "";
       const reply = await threadsSend({
         botId,
         text,
         clientNonce: `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        ...(quoted
+          ? {
+              replyToMessageId: quoted.id,
+              replyQuote: quotedText,
+            }
+          : {}),
       });
       setDraft("");
+      setReplyTo(null);
       setRunStatus(reply.status);
       applyMessage({
         id: reply.messageId,
@@ -212,7 +223,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
     } finally {
       setSending(false);
     }
-  }, [applyMessage, botId, draft, sending]);
+  }, [applyMessage, botId, draft, sending, replyTo]);
 
   const runKey = runStatus === null ? null : runStatusKey(runStatus);
   const runLabel = runStatus === null ? null : (runKey === null ? runStatus : t(runKey));
@@ -261,7 +272,19 @@ export function ThreadScreen({ botId }: { botId: string }) {
           <ul className="flex flex-col gap-4">
             {messages.map((message) => (
               <li key={message.id} className="flex flex-col gap-1">
-                <p className="text-text-tertiary text-caption-1-semibold">{t(`thread.role.${message.role}`)}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-text-tertiary text-caption-1-semibold">
+                    {t(`thread.role.${message.role}`)}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(message)}
+                    aria-label={t("thread.reply.button")}
+                    className="boma-focus rounded-md p-1 text-text-tertiary hover:bg-background-secondary-hover hover:text-text-primary"
+                  >
+                    <RiReplyLine size={14} aria-hidden />
+                  </button>
+                </div>
                 <div
                   className={
                     message.role === "user"
@@ -269,6 +292,11 @@ export function ThreadScreen({ botId }: { botId: string }) {
                       : "flex flex-col gap-1 self-start md:max-w-[80%]"
                   }
                 >
+                  {message.replyQuote ? (
+                    <blockquote className="border-border-button-default border-l-2 ps-2 text-text-secondary text-body-2-regular">
+                      {message.replyQuote}
+                    </blockquote>
+                  ) : null}
                   <MessageBlocks blocks={message.blocks} />
                 </div>
               </li>
@@ -303,7 +331,22 @@ export function ThreadScreen({ botId }: { botId: string }) {
         </p>
       ) : null}
 
-      <ThreadComposer value={draft} onChange={setDraft} onSend={() => void send()} sending={sending} />
+      <ThreadComposer
+        value={draft}
+        onChange={setDraft}
+        onSend={() => void send()}
+        sending={sending}
+        reply={
+          replyTo
+            ? {
+                id: replyTo.id,
+                quote:
+                  replyTo.blocks.find((block) => block.type === "text")?.text.slice(0, 80) ?? "",
+                onClear: () => setReplyTo(null),
+              }
+            : null
+        }
+      />
     </div>
   );
 }

@@ -65,11 +65,12 @@ impl MessageStore for PostgresMessageStore {
                 let row = sqlx::query_as::<_, MessageRow>(
                     "INSERT INTO messages (
                         id, space_id, thread_id, seq, role, blocks, bot_id, author_user_id,
-                        run_id, client_nonce, created_at
+                        run_id, client_nonce, created_at, reply_to_message_id, reply_quote
                      )
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13)
                      RETURNING id, thread_id, seq, role, blocks, bot_id, author_user_id, run_id,
-                               client_nonce, boma.rfc3339(created_at) AS created_at",
+                               client_nonce, boma.rfc3339(created_at) AS created_at,
+                               reply_to_message_id, reply_quote",
                 )
                 .bind(message.id.as_str())
                 .bind(message.space_id.as_str())
@@ -87,6 +88,13 @@ impl MessageStore for PostgresMessageStore {
                 .bind(message.run_id.as_ref().map(boma_domain::RunId::as_str))
                 .bind(nonce_key.as_deref())
                 .bind(&message.created_at)
+                .bind(
+                    message
+                        .reply_to_message_id
+                        .as_ref()
+                        .map(boma_domain::MessageId::as_str),
+                )
+                .bind(message.reply_quote.as_deref())
                 .fetch_one(&mut *conn)
                 .await;
 
@@ -135,7 +143,8 @@ impl MessageStore for PostgresMessageStore {
             Box::pin(async move {
                 sqlx::query_as::<_, MessageRow>(
                     "SELECT id, thread_id, seq, role, blocks, bot_id, author_user_id, run_id,
-                            client_nonce, boma.rfc3339(created_at) AS created_at
+                            client_nonce, boma.rfc3339(created_at) AS created_at,
+                            reply_to_message_id, reply_quote
                      FROM messages
                      WHERE thread_id = $1 AND client_nonce = $2",
                 )
@@ -164,7 +173,8 @@ impl MessageStore for PostgresMessageStore {
             Box::pin(async move {
                 sqlx::query_as::<_, MessageRow>(
                     "SELECT id, thread_id, seq, role, blocks, bot_id, author_user_id, run_id,
-                            client_nonce, boma.rfc3339(created_at) AS created_at
+                            client_nonce, boma.rfc3339(created_at) AS created_at,
+                            reply_to_message_id, reply_quote
                      FROM messages
                      WHERE thread_id = $1 AND ($2::bigint IS NULL OR seq < $2)
                      ORDER BY seq DESC

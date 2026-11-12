@@ -21,7 +21,6 @@
   action button and an answer textbox, so a pending question stays answerable while the composer
   keeps working. The pending-question-card UI golden replays.
 - **REQ-015 (model selection with fallbacks, MUST)** is done for its M2 slice: a bot may carry a
-  model preference (provider, model, pinned); a pinned model the deployment cannot reach fails
   visibly at `send_message` with the model named — never silently executes elsewhere; an unpinned
   choice falls back to the deployment default (`DeploymentModels` on `Services`, seeded from
   `Config` by the binary). Domain `resolve` has 5 unit tests; the testkit worker test asserts the
@@ -42,14 +41,22 @@
   memory, RPC surface, real Postgres) plus the `thread-answer` golden replay. The domain gains
   `Card`/`CardKind`/`CardStatus`/`ExternalEffect`; migration `0004_cards.sql` creates `cards` and
   `external_effects` with RLS.
+- **REQ-008 (replies and quotes, MUST)** is done for its send path: `SendMessage` carries
+  `reply_to_message_id` and `reply_quote`; a reply to a message references it and carries the
+  quote of its text. The wire `MessageView` exposes both fields; the composer shows a reply
+  banner with the quote; the transcript renders replies as a quoted block; the composer keeps a
+  reply context with a cancel button; a Playwright test covers the click-to-reply flow. Mentions
+  (REQ-008) wait on REQ-010 group chats, reactions wait on a `message_reactions` table — both
+  are deliberately left for the next slice.
 
-Remaining in M2, in dependency order: REQ-008 replies/reactions, REQ-019 delegation, REQ-009
-read state (SHOULD); the tool-call loop and the refusal audit event from REQ-016 are the last
-piece of REQ-016 and lands with the agent engine that makes the call (milestone M3/M5); the BYOK
-and provider OAuth login legs of REQ-015 land with M8 (models and credentials).
+Remaining in M2, in dependency order: REQ-019 delegation (helper runs), REQ-009 read state
+(SHOULD), reactions (REQ-008), mentions (REQ-008); the tool-call loop and the refusal audit event
+from REQ-016 are the last piece of REQ-016 and lands with the agent engine that makes the call
+(milestone M3/M5); the BYOK and provider OAuth login legs of REQ-015 land with M8 (models and
+credentials).
 
-The current commit carries REQ-003, REQ-006, REQ-007, REQ-015, REQ-016 and REQ-017; M2 is not
-done yet.
+The current commit carries REQ-003, REQ-006, REQ-007, REQ-008 (replies/quotes only), REQ-015,
+REQ-016 and REQ-017; M2 is not done yet.
 
 ## Done
 

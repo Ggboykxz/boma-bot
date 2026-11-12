@@ -344,6 +344,8 @@ pub async fn message(
                 run_id: None,
                 client_nonce: nonce.map(str::to_owned),
                 created_at: CREATED_AT.to_owned(),
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await

@@ -236,6 +236,8 @@ async fn req_001_a_send_writes_one_message_and_starts_one_run() {
                 run_id: None,
                 client_nonce: Some("nonce-1".to_owned()),
                 created_at: app.services.clock.now(),
+                reply_to_message_id: None,
+                reply_quote: None,
             },
         )
         .await

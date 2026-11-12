@@ -1100,6 +1100,8 @@ impl MessageStore for MemoryMessageStore {
             run_id: message.run_id.clone(),
             client_nonce: message.client_nonce.clone(),
             created_at: message.created_at.clone(),
+            reply_to_message_id: message.reply_to_message_id.clone(),
+            reply_quote: message.reply_quote.clone(),
         };
         state.messages.push(MessageRow {
             message: stored.clone(),
@@ -2140,6 +2142,8 @@ mod tests {
             run_id: None,
             client_nonce: nonce.map(str::to_owned),
             created_at: "2026-01-01T00:00:00Z".to_owned(),
+            reply_to_message_id: None,
+            reply_quote: None,
         }
     }
 

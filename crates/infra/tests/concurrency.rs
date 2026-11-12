@@ -43,6 +43,8 @@ async fn req_005_two_concurrent_sends_get_different_sequences() {
                         author_user_id: Some(user_id),
                         run_id: None,
                         client_nonce: None,
+                        reply_to_message_id: None,
+                        reply_quote: None,
                         created_at: "2026-01-01T00:00:00Z".to_owned(),
                     },
                 )
@@ -73,6 +75,8 @@ async fn req_005_two_concurrent_sends_get_different_sequences() {
                         author_user_id: Some(user_id),
                         run_id: None,
                         client_nonce: None,
+                        reply_to_message_id: None,
+                        reply_quote: None,
                         created_at: "2026-01-01T00:00:00Z".to_owned(),
                     },
                 )
@@ -121,6 +125,8 @@ async fn req_002_the_same_nonce_returns_the_same_message_and_run() {
         run_id: None,
         client_nonce: Some("the-same-nonce".to_owned()),
         created_at: "2026-01-01T00:00:00Z".to_owned(),
+        reply_to_message_id: None,
+        reply_quote: None,
     };
 
     let first = store

@@ -160,6 +160,10 @@ pub struct NewMessage {
     pub client_nonce: Option<String>,
     /// When it was written.
     pub created_at: String,
+    /// The message this one answers, when it is a reply.
+    pub reply_to_message_id: Option<boma_domain::MessageId>,
+    /// A short quote of the message being answered.
+    pub reply_quote: Option<String>,
 }
 
 /// The outcome of storing a message: the message, and whether it was new.

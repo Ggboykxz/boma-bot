@@ -296,6 +296,8 @@ mod tests {
             bot_id: None,
             author_user_id: None,
             run_id: None,
+            reply_to_message_id: None,
+            reply_quote: None,
             client_nonce: None,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
         }
@@ -324,6 +326,8 @@ mod tests {
                 bot_id: None,
                 author_user_id: None,
                 run_id: None,
+                reply_to_message_id: None,
+                reply_quote: None,
                 client_nonce: None,
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
             }
