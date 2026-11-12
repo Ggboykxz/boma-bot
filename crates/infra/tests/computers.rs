@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use boma_app::{App, ports::ComputerRuntime, usecases};
+use boma_domain::{SpaceId, TenantContext};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, DockerComputerRuntime, IdGenerator, Postgres,
     PostgresAccountStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
@@ -230,4 +231,204 @@ async fn req_026_a_computer_boots_stops_and_its_home_survives_in_docker() {
         .await;
     cleanup(database.pool(), "computers").await;
     fresh.dispose().await;
+}
+
+#[tokio::test]
+async fn req_028_the_computer_runs_a_shell_and_keeps_files_inside_the_home() {
+    let fresh = fresh_database().await;
+    let database = &fresh.database;
+
+    let host = host();
+    let docker = bollard::Docker::connect_with_local_defaults().expect("the docker defaults build");
+    match docker.ping().await {
+        Ok(_) => {}
+        Err(error) => panic!(
+            "req_028 needs a reachable docker daemon (BOMA_TEST_DOCKER_HOST, DOCKER_HOST, or the default socket): {error}"
+        ),
+    }
+    {
+        use futures_util::TryStreamExt;
+        let pull = docker
+            .create_image(
+                Some(bollard::query_parameters::CreateImageOptions {
+                    from_image: Some("alpine:3.21".to_owned()),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .try_collect::<Vec<_>>()
+            .await;
+        pull.expect("the image is pulled");
+    }
+
+    let runtime =
+        DockerComputerRuntime::new(&host, "alpine:3.21", None).expect("the runtime builds");
+    let app = app(database, Arc::new(runtime));
+    let fixture = fixture(database.pool(), "shell").await;
+    let context = fixture.context.clone();
+
+    // The computer is up: the first shell starts it.
+    usecases::ensure_computer(&app, &context, fixture.bot_id.as_str())
+        .await
+        .expect("the computer boots");
+
+    // A shell runs inside the container and answers on stdout.
+    let out = usecases::computer_shell(
+        &app,
+        &context,
+        fixture.bot_id.as_str(),
+        "echo hello-from-the-box",
+    )
+    .await
+    .expect("the shell answers");
+    assert_eq!(out.trim(), "hello-from-the-box");
+
+    // The output is capped; a hostile flood of bytes cannot drown the caller.
+    let out = usecases::computer_shell(
+        &app,
+        &context,
+        fixture.bot_id.as_str(),
+        "yes | head -c 131072",
+    )
+    .await
+    .expect("the shell answers");
+    assert!(out.len() <= 64 * 1024, "the shell output is capped");
+
+    // Files written inside the home are readable back.
+    usecases::computer_write_file(
+        &app,
+        &context,
+        fixture.bot_id.as_str(),
+        "/home/bot/notes.txt",
+        "boma home marker\n",
+    )
+    .await
+    .expect("the file is written");
+    let read = usecases::computer_read_file(
+        &app,
+        &context,
+        fixture.bot_id.as_str(),
+        "/home/bot/notes.txt",
+    )
+    .await
+    .expect("the file reads back");
+    assert!(read.contains("boma home marker"));
+
+    // A path outside the home is refused, wherever the caller asks from.
+    let refused =
+        usecases::computer_read_file(&app, &context, fixture.bot_id.as_str(), "/etc/passwd").await;
+    assert!(matches!(refused, Err(boma_app::AppError::Rule(_))));
+
+    let rel = usecases::computer_write_file(
+        &app,
+        &context,
+        fixture.bot_id.as_str(),
+        "../outside.txt",
+        "x",
+    )
+    .await;
+    assert!(matches!(rel, Err(boma_app::AppError::Rule(_))));
+
+    cleanup(database.pool(), "shell").await;
+    fresh.dispose().await;
+}
+
+#[tokio::test]
+async fn req_029_a_member_holds_the_screen_and_the_computer_refuses_other_input() {
+    let fresh = fresh_database().await;
+    let database = &fresh.database;
+
+    let host = host();
+    let docker = bollard::Docker::connect_with_local_defaults().expect("the docker defaults build");
+    match docker.ping().await {
+        Ok(_) => {}
+        Err(error) => panic!(
+            "req_029 needs a reachable docker daemon (BOMA_TEST_DOCKER_HOST, DOCKER_HOST, or the default socket): {error}"
+        ),
+    }
+    {
+        use futures_util::TryStreamExt;
+        let pull = docker
+            .create_image(
+                Some(bollard::query_parameters::CreateImageOptions {
+                    from_image: Some("alpine:3.21".to_owned()),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .try_collect::<Vec<_>>()
+            .await;
+        pull.expect("the image is pulled");
+    }
+
+    let runtime =
+        DockerComputerRuntime::new(&host, "alpine:3.21", None).expect("the runtime builds");
+    let app = app(database, Arc::new(runtime));
+    let fixture = fixture(database.pool(), "takeover").await;
+    let context = fixture.context.clone();
+    let other = boma_domain::UserId::new("takeover_otherusr".to_owned()).expect("an id is valid");
+
+    usecases::ensure_computer(&app, &context, fixture.bot_id.as_str())
+        .await
+        .expect("the computer boots");
+
+    // The hold takes place, and while it holds, the computer refuses to act.
+    let held = usecases::computer_takeover(&app, &context, fixture.bot_id.as_str())
+        .await
+        .expect("the takeover answers");
+    assert_eq!(
+        held.takeover_by_user
+            .as_ref()
+            .map(boma_domain::UserId::as_str),
+        Some(fixture.user_id.as_str())
+    );
+
+    let refused = usecases::computer_shell(
+        &app,
+        &context,
+        fixture.bot_id.as_str(),
+        "echo should_not_run",
+    )
+    .await;
+    assert!(matches!(refused, Err(boma_app::AppError::Rule(_))));
+
+    // A different member may not break the hold.
+    let other_context = TenantContext::Member {
+        space_id: space_id_of(&fixture),
+        user_id: other,
+    };
+    let outsider = usecases::computer_takeover(&app, &other_context, fixture.bot_id.as_str()).await;
+    assert!(matches!(
+        outsider,
+        Err(boma_app::AppError::NotFound | boma_app::AppError::Conflict)
+    ));
+
+    // The holder releases; the computer acts again.
+    let released = usecases::computer_release(&app, &context, fixture.bot_id.as_str())
+        .await
+        .expect("the release answers");
+    assert!(released.takeover_by_user.is_none());
+    let out = usecases::computer_shell(
+        &app,
+        &context,
+        fixture.bot_id.as_str(),
+        "echo after_release",
+    )
+    .await
+    .expect("the computer acts after release");
+    assert_eq!(out.trim(), "after_release");
+
+    cleanup(database.pool(), "takeover").await;
+    fresh.dispose().await;
+}
+
+/// Finds the space id of a fixture, for a context acting as another member.
+fn space_id_of(fixture: &common::Fixture) -> SpaceId {
+    fixture
+        .context
+        .space_id()
+        .cloned()
+        .expect("the fixture has a member context")
 }

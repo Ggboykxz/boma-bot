@@ -106,6 +106,10 @@ pub struct Computer {
     pub screen_generation: u64,
     /// The provider-side storage this computer's home lives in.
     pub home_id: Option<String>,
+    /// The member holding exclusive control of the screen, when one is holding it (REQ-029).
+    pub takeover_by_user: Option<crate::ids::UserId>,
+    /// When the takeover hold began.
+    pub takeover_at: Option<String>,
     /// Whether the computer is isolated from the space's trust boundary (REQ-031).
     pub private: bool,
     /// RAM cap for the computer, in megabytes.

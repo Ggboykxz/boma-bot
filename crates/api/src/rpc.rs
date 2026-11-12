@@ -24,7 +24,8 @@ use crate::{
     state::AppState,
     wire::{
         AnswerReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
-        ComputerStatusReply, InvitationReply, MemoryDocumentReply, MemoryDocumentsReply,
+        ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
+        ComputerTakeoverReply, InvitationReply, MemoryDocumentReply, MemoryDocumentsReply,
         MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply,
         RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
         RoutinesReply, RunRetryReply, RunView, RunsReply, SendReply, SnoozeReply, SpaceReply,
@@ -87,6 +88,10 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::COMPUTER, "start"),
         (namespaces::COMPUTER, "stop"),
         (namespaces::COMPUTER, "openScreen"),
+        (namespaces::COMPUTER, "takeover"),
+        (namespaces::COMPUTER, "release"),
+        (namespaces::COMPUTER, "settings"),
+        (namespaces::COMPUTER, "provider"),
     ]
 }
 
@@ -204,6 +209,18 @@ async fn dispatch(
         (namespaces::COMPUTER, "openScreen") => computer_open_screen(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "takeover") => computer_takeover(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "release") => computer_release(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "settings") => computer_settings(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "provider") => {
+            Ok::<_, ApiError>(Json(computer_provider(state.app())).into_response())
+        }
         _ => Err(ApiError::not_found()),
     };
 
@@ -762,6 +779,198 @@ async fn routines_remove(
         routine_id: outcome.routine_id.as_str().to_owned(),
         removed: outcome.removed,
     })
+}
+
+/// The body shared by the bot-scoped computer procedures.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComputerRequest {
+    /// The bot whose computer is asked about.
+    bot_id: String,
+}
+
+/// `computer.takeover` — take exclusive control of the bot's screen (REQ-029).
+///
+/// While a member holds the screen, computer-driven input refuses to act. The hold is
+/// exclusive: only the holder may release it. Idempotent for the holder.
+async fn computer_takeover(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ComputerTakeoverReply, ApiError> {
+    let request: ComputerRequest = parse(&body)?;
+    let app = state.app();
+    if app
+        .services
+        .computer
+        .as_deref()
+        .is_none_or(|runtime| runtime.provider() == "none")
+    {
+        return Err(ApiError::computers_unavailable());
+    }
+    let computer = usecases::computer_takeover(app, &auth.actor.context, &request.bot_id).await?;
+    Ok(ComputerTakeoverReply::for_computer(&computer))
+}
+
+/// `computer.release` — hand the screen back (REQ-029).
+///
+/// Only the holder may release.
+async fn computer_release(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ComputerTakeoverReply, ApiError> {
+    let request: ComputerRequest = parse(&body)?;
+    let app = state.app();
+    if app
+        .services
+        .computer
+        .as_deref()
+        .is_none_or(|runtime| runtime.provider() == "none")
+    {
+        return Err(ApiError::computers_unavailable());
+    }
+    let computer = usecases::computer_release(app, &auth.actor.context, &request.bot_id).await?;
+    Ok(ComputerTakeoverReply::for_computer(&computer))
+}
+
+/// The body of `computer.settings` (REQ-026).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ComputerSettingsRequest {
+    /// The bot whose computer to configure.
+    bot_id: String,
+    /// The RAM cap, in megabytes, when the computer may use more.
+    #[serde(default)]
+    memory_limit_mb: Option<u64>,
+    /// The CPU cap, in CPUs.
+    #[serde(default)]
+    cpu_limit: Option<f64>,
+    /// Minutes of idleness before release.
+    #[serde(default)]
+    idle_minutes: Option<u64>,
+}
+
+/// `computer.settings` — read or adjust the computer's configuration (REQ-026).
+///
+/// With no fields beyond `botId` the call is a read. Fields present are applied, within the
+/// deployment limits; anything outside is refused.
+async fn computer_settings(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ComputerSettingsReply, ApiError> {
+    let request: ComputerSettingsRequest = parse(&body)?;
+    let app = state.app();
+    let context = &auth.actor.context;
+    let bot_id =
+        boma_domain::BotId::new(request.bot_id.clone()).map_err(|_| ApiError::not_found())?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(ApiError::not_found)?;
+    let is_update = request.memory_limit_mb.is_some()
+        || request.cpu_limit.is_some()
+        || request.idle_minutes.is_some();
+    if !is_update {
+        let computer = usecases::computer_status(app, context, &request.bot_id).await?;
+        return Ok(match computer {
+            Some(computer) => ComputerSettingsReply {
+                memory_limit_mb: computer.memory_limit_mb,
+                cpu_limit: computer.cpu_limit,
+                idle_minutes: computer.idle_minutes,
+            },
+            None => ComputerSettingsReply {
+                memory_limit_mb: 512,
+                cpu_limit: 1.0,
+                idle_minutes: 10,
+            },
+        });
+    }
+    let runtime = app
+        .services
+        .computer
+        .as_deref()
+        .filter(|runtime| runtime.provider() != "none")
+        .ok_or_else(ApiError::computers_unavailable)?;
+    let _ = runtime; // settings validate against the deployment limits regardless of provider
+    let mut computer = usecases::computer_status(app, context, &request.bot_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    if let Some(mb) = request.memory_limit_mb {
+        boma_domain::validate_memory_limit(mb).map_err(|_| ApiError::bad_request())?;
+        computer.memory_limit_mb = mb;
+    }
+    if let Some(cpu) = request.cpu_limit {
+        boma_domain::validate_cpu_limit(cpu).map_err(|_| ApiError::bad_request())?;
+        computer.cpu_limit = cpu;
+    }
+    if let Some(minutes) = request.idle_minutes {
+        boma_domain::validate_idle_minutes(minutes).map_err(|_| ApiError::bad_request())?;
+        computer.idle_minutes = minutes;
+    }
+    computer.updated_at = app.services.clock.now();
+    app.stores
+        .computers
+        .update(context, &computer)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(ComputerSettingsReply {
+        memory_limit_mb: computer.memory_limit_mb,
+        cpu_limit: computer.cpu_limit,
+        idle_minutes: computer.idle_minutes,
+    })
+}
+
+/// `computer.provider` — which providers this deployment can run (REQ-027).
+///
+/// `frame` is true only when a frame command is configured for the image; `screenshot` is the
+/// same capability under its wire name. `shell` is true for every non-`none` provider.
+fn computer_provider(app: &boma_app::App) -> ComputerProviderReply {
+    let active = app.services.computer.as_deref().map_or_else(
+        || "none".to_owned(),
+        |runtime| runtime.provider().to_owned(),
+    );
+    let (frame, screenshot) = app
+        .services
+        .computer
+        .as_deref()
+        .map_or((false, false), |runtime| {
+            (
+                runtime.frame_command().is_some(),
+                runtime.frame_command().is_some(),
+            )
+        });
+    let shell = app
+        .services
+        .computer
+        .as_deref()
+        .is_some_and(|runtime| runtime.provider() != "none");
+    ComputerProviderReply {
+        active,
+        providers: vec![
+            ComputerProviderInfo {
+                name: "none".to_owned(),
+                available: true,
+                frame: false,
+                shell: false,
+                screenshot: false,
+            },
+            ComputerProviderInfo {
+                name: "docker".to_owned(),
+                available: app
+                    .services
+                    .computer
+                    .as_deref()
+                    .is_some_and(|runtime| runtime.provider() == "docker"),
+                frame,
+                shell,
+                screenshot,
+            },
+        ],
+    }
 }
 
 /// The body of `computer.status` (REQ-027).

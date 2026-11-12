@@ -2,6 +2,59 @@
 
 ## Current milestone
 
+**M4 — computers, in progress.** Landed so far (each with the full gate suite green at push):
+
+- **REQ-027 (provider-agnostic computers, fail-closed, MUST)** is done: `SANDBOX_PROVIDER`
+  selects the backend at startup — absent means `none` (valid), `docker` selects the local
+  supervisor and the process pings the daemon before binding; `novita` is refused naming
+  `NOVITA_API_KEY` when absent and refused as not supported by this build when present; anything
+  else is refused naming `SANDBOX_PROVIDER` and the supported values. `/ready` carries the
+  configured provider in `sandbox`. Wire answers `COMPUTERS_UNAVAILABLE` (503) under `none` and
+  `computeComputer.status` answers `stopped` (never an error) for a bot with no computer yet.
+- **REQ-026 (a computer per bot, lazy, released when idle, MUST)** is done: migration
+  `0017_computers.sql` (computers/flags, computer_runs with at most one open per computer,
+  computer_execution_leases, agent_homes, browser_profiles, all RLS); the Docker supervisor boots
+  `boma-computer-<id>` from `BOMA_COMPUTER_IMAGE` (default `alpine:3.21`) sleep-infinity with a
+  RAM/CPU cap and a home volume at `/home/bot`, reuses a running/stopped container and bumps a
+  screen generation on every real boot; `computer.start`/`computer.stop`/`computer.status`/
+  `computer.settings`/`computer.provider` procedures; idle sweeper in the worker loop releases a
+  computer after `BOMA_COMPUTER_IDLE_MINUTES` (default 10) of no use and preserves the home.
+  Golden `computer-status` replays byte for byte.
+- **REQ-030 (screen access without a session, MUST)** is done: migration `0018_screen_capabilities.sql`
+  (hash-only bearer storage, RLS); `computer.openScreen` mints a secret bound to (computer,
+  generation); `POST /api/internal/screen-target` (16 KiB cap) opens the frame through the sealed
+  bearer and *only* through it — no session, no cookie, nothing else grants pixels. Bytes come
+  from the frame command run inside the container; absent one, the answer is 403, never fake
+  pixels. `meta` + one `frame` event then the stream closes; bumping screen generation kills every
+  outstanding capability.
+- **REQ-029 (user takeover, MUST)** is done: a member holds exclusive control of the screen
+  (`takeover_by_user`); while the hold is in effect every computer-driven input path refuses; only
+  the holder may release; a different member cannot take or shed the hold; `computer.takeover` /
+  `computer.release` RPC procedures, `ComputerTakeoverReply` wire shape
+  (`status`, `provider`, `takeoverByUser?`, `takeoverAt?`).
+- **REQ-028 (observe and act on the computer, MUST)** is *partially* done, honestly: the tool
+  surface that runs against a shell-image computer exists — `computer_shell` (arbitrary `sh -c`,
+  output capped at 64 KiB), `computer_read_file`, `computer_write_file`
+  (base64-pipe write), all refused while a takeover hold is in effect, with path confinement to
+  `/home/` (no `..`, no shell meta-characters) — proved against a real rootless Docker daemon.
+  DOM / click / type / scroll / open-apps have **not** landed: the alpine image carries no
+  browser, so a laptop-local fake is the only thing they could run against, and that would be
+  theatre, not a proof. They need the browser image decision first; recorded as blocked on that
+  choice.
+
+Honest gaps carried in M4:
+
+- **REQ-031 (team vs private computers, SHOULD)** — private isolation is satisfied structurally
+  (per-bot container + per-bot home volume), but the *team* shape (one browser identity shared
+  within a space's trust boundary) is not implemented yet; mode selection through
+  `computer.settings` is deferred alongside it.
+- The **agent-driven tool loop** (the model calling computer tools by itself) is not part of this
+  milestone yet: the scripted provider does not call tools at all. Computer tools are proved at
+  the use-case boundary (RPC + shell integration), not by an agent run.
+- **Idle release exists but has no UI surface** — the RPC is in place; the web panel is M10.
+
+## M3 — done, hardened
+
 **M3 — done, hardened.** M3 (Memory and schedules) closed at `9d812a4` and was hardened at
 `ca0af8e` after a self-review caught two missed acceptance criteria and one silent bug:
 REQ-022 (memory documents with append-only revisions and `memory.write`/`read`/`list`/`remove`/
@@ -45,17 +98,17 @@ Slices delivered:
 
 ## Environment notes
 
-- Docker, for M4 (Computers), runs **rootless** on the developer box: `dockerd-rootless`
-  (docker 29.9.2 via nixpkgs, `fuse-overlayfs` storage driver — native overlayfs with
-  `userxattr` is rejected by the sandbox kernel). XDG_RUNTIME_DIR=/tmp/opencode/xdg,
+- Docker, for M4 (Computers), runs **rootless** on the developer box: `dockerd-rootless` 29.9.3
+  (docker, rootlesskit, slirp4netns, runc, fuse-overlayfs via nixpkgs). XDG_RUNTIME_DIR=/tmp/opencode/xdg,
   socket `unix:///tmp/opencode/docker.sock`, data-root `/tmp/opencode/docker-data`.
   Verified: images pull through slirp4netns and containers run (hello-world, alpine).
-  The daemon is not under systemd; it does not survive a reboot and needs the env vars above.
-  No cgroups in rootless mode (expected without a systemd user session).
+  The daemon is not under systemd; it does not survive a reboot and must be restarted by hand.
+  The sandbox `/tmp` and `~/.nix-profile` were wiped twice this milestone; the environment is
+  documented here so a wipe can be recovered: rustup toolchain into /tmp/opencode/{rustup,cargo},
+  CARGO_TARGET_DIR=/tmp/opencode/target, Postgres recreated from /nix/store pg binaries on 5433.
 - The sandbox disk (`/home`) is nearly full; keep builds in `/tmp/opencode` and clean
   regenerable caches there. Deleting `node_modules` is safe: `npm ci` restores it.
 
-## Done
 
 - **REQ-006 (stop work, MUST)** is done (`e453df1`): `runs.cancel` stops a run wherever it is, the
   worker stops producing into it (pre-check, per-chunk check, per-write terminal guard), a

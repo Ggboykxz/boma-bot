@@ -3741,6 +3741,8 @@ impl boma_app::ports::ComputerStore for MemoryComputerStore {
             status: boma_domain::ComputerStatus::Stopped,
             screen_generation: 0,
             home_id: None,
+            takeover_by_user: None,
+            takeover_at: None,
             private: computer.private,
             memory_limit_mb: computer.memory_limit_mb,
             cpu_limit: computer.cpu_limit,

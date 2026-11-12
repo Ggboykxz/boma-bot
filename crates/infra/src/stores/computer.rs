@@ -127,6 +127,12 @@ impl ComputerStore for PostgresComputerStore {
         let last_used_at = computer_in.last_used_at.clone();
         let stopped_at = computer_in.stopped_at.clone();
         let updated = computer_in.updated_at.clone();
+        let takeover_by = computer_in
+            .takeover_by_user
+            .as_ref()
+            .map(boma_domain::UserId::as_str)
+            .map(str::to_owned);
+        let takeover_at = computer_in.takeover_at.clone();
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
                 sqlx::query(
@@ -143,6 +149,8 @@ impl ComputerStore for PostgresComputerStore {
                          started_at = $11::timestamptz,
                          last_used_at = $12::timestamptz,
                          stopped_at = $13::timestamptz,
+                         takeover_by = $15,
+                         takeover_at = $16::timestamptz,
                          updated_at = $14::timestamptz
                      WHERE id = $1",
                 )
@@ -160,6 +168,8 @@ impl ComputerStore for PostgresComputerStore {
                 .bind(last_used_at.as_deref())
                 .bind(stopped_at.as_deref())
                 .bind(updated.as_str())
+                .bind(takeover_by.as_deref())
+                .bind(takeover_at.as_deref())
                 .execute(&mut *conn)
                 .await
                 .map_err(tenant::unavailable)

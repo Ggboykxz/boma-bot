@@ -1497,6 +1497,8 @@ pub async fn stop_computer(
             status: boma_domain::ComputerStatus::Stopped,
             screen_generation: 0,
             home_id: None,
+            takeover_by_user: None,
+            takeover_at: None,
             private: false,
             memory_limit_mb: 512,
             cpu_limit: 1.0,
@@ -1581,6 +1583,250 @@ pub async fn sweep_idle_computers(app: &App) -> Result<u64, AppError> {
         released += 1;
     }
     Ok(released)
+}
+
+/// Confines a computer-side path to the bot's home (REQ-028).
+///
+/// Only absolute paths under `/home/` without `..` segments are accepted; anything else is refused
+/// with [`AppError::Rule`].
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the path escapes the home.
+pub fn confine_home_path(path: &str) -> Result<&str, AppError> {
+    if path.is_empty() || path.len() > 4096 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the path is not usable".to_owned(),
+        )));
+    }
+    if !path.starts_with('/') || path.contains('\0') {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the path is not absolute".to_owned(),
+        )));
+    }
+    let home = "/home/".to_string();
+    let rest = path.strip_prefix(&home).unwrap_or(path);
+    if !path.starts_with(&home) || rest.contains("..") {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the path escapes the computer's home".to_owned(),
+        )));
+    }
+    Ok(path)
+}
+
+/// A bot's screen under human control (REQ-029).
+///
+/// While a member holds the screen, computer-driven input refuses to act. The hold is exclusive:
+/// only the holder may release it.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
+/// [`AppError::Conflict`] when another member holds the screen or the computer is not running.
+pub async fn computer_takeover(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<boma_domain::Computer, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
+    let mut computer = app
+        .stores
+        .computers
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if computer.status != boma_domain::ComputerStatus::Running {
+        return Err(AppError::Conflict);
+    }
+    if let Some(holder) = computer.takeover_by_user.as_ref() {
+        if holder == &user_id {
+            return Ok(computer); // idempotent: the member already holds the screen
+        }
+        return Err(AppError::Conflict);
+    }
+    computer.takeover_by_user = Some(user_id);
+    computer.takeover_at = Some(app.services.clock.now());
+    computer.updated_at = app.services.clock.now();
+    app.stores.computers.update(context, &computer).await?;
+    Ok(computer)
+}
+
+/// Releases the human hold on a bot's screen (REQ-029).
+///
+/// Only the holder may release. Releasing a hold that does not exist is a conflict, not an error.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
+/// [`AppError::Conflict`] when another member holds the screen.
+pub async fn computer_release(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<boma_domain::Computer, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
+    let mut computer = app
+        .stores
+        .computers
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    match computer.takeover_by_user.as_ref() {
+        None => return Err(AppError::Conflict),
+        Some(holder) if holder != &user_id => return Err(AppError::Conflict),
+        Some(_) => {}
+    }
+    computer.takeover_by_user = None;
+    computer.takeover_at = None;
+    computer.updated_at = app.services.clock.now();
+    app.stores.computers.update(context, &computer).await?;
+    Ok(computer)
+}
+
+/// Runs a shell command inside the bot's computer (REQ-028).
+///
+/// Refused while a member holds the screen. The command runs as the computer's user and its
+/// stdout, capped at 64 KiB, comes back lossy-decoded.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
+/// [`AppError::Rule`] when the computer is not running or a takeover hold is in effect.
+pub async fn computer_shell(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    command: &str,
+) -> Result<String, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    if command.is_empty() || command.len() > 4096 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the command is not usable".to_owned(),
+        )));
+    }
+    let computer = app
+        .stores
+        .computers
+        .find(
+            context,
+            &boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?,
+        )
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let runtime = app
+        .services
+        .computer
+        .as_deref()
+        .filter(|runtime| runtime.provider() != "none")
+        .ok_or(AppError::Unavailable)?;
+    let Some(external_id) = computer.external_id else {
+        return Err(AppError::Unavailable);
+    };
+    runtime.exec(&external_id, command, 64 * 1024).await
+}
+
+/// Reads a file from the bot's computer (REQ-028).
+///
+/// Refused while a member holds the screen. The path must stay inside `/home/`.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the path escapes the home or the command fails, and
+/// [`AppError::NotFound`] when the bot does not exist in the caller's tenant.
+pub async fn computer_read_file(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    path: &str,
+) -> Result<String, AppError> {
+    let command = format!("cat -- {path}");
+    confine_home_path(path)?;
+    computer_shell(app, context, bot_id, &command).await
+}
+
+/// Writes a file inside the bot's computer (REQ-028).
+///
+/// Refused while a member holds the screen. The path must stay inside `/home/`. Content larger
+/// than 64 KiB is refused.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the path escapes the home or the content is too large.
+pub async fn computer_write_file(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    path: &str,
+    file_content: &str,
+) -> Result<(), AppError> {
+    confine_home_path(path)?;
+    if file_content.len() > 64 * 1024 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the file content is too large".to_owned(),
+        )));
+    }
+    let encoded = base64_encode(file_content.as_bytes());
+    let script = format!(
+        "mkdir -p \"$(dirname -- '{path}')\" && printf '%s' '{encoded}' | base64 -d > '{path}'",
+    );
+    computer_shell(app, context, bot_id, &script)
+        .await
+        .map(|_| ())
+}
+
+/// Base64 encoder: the standard alphabet, no line wrapping.
+fn base64_encode(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Checks the caller can drive the bot's computer: member of the space, computer running, no
+/// takeover hold (REQ-029).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
+/// [`AppError::Rule`] when the computer is not running or a hold is in effect.
+pub async fn computer_caller(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<(), AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let computer = app
+        .stores
+        .computers
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::Unavailable)?;
+    if computer.status != boma_domain::ComputerStatus::Running {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the computer is not running".to_owned(),
+        )));
+    }
+    if computer.takeover_by_user.is_some() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the screen is under human control".to_owned(),
+        )));
+    }
+    Ok(())
 }
 
 /// A screen capability freshly minted for a computer (REQ-030).

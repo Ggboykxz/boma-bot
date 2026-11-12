@@ -358,6 +358,22 @@ pub struct ComputerStatusReply {
     pub screen_generation: Option<u64>,
 }
 
+impl ComputerTakeoverReply {
+    /// Builds the takeover-shaped reply of a computer the stores hold.
+    #[must_use]
+    pub fn for_computer(computer: &boma_domain::Computer) -> Self {
+        Self {
+            status: computer.status.as_str().to_owned(),
+            provider: computer.provider.clone(),
+            takeover_by_user: computer
+                .takeover_by_user
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            takeover_at: computer.takeover_at.clone(),
+        }
+    }
+}
+
 impl ComputerStatusReply {
     /// Builds the reply of a computer the stores hold; a stopped computer carries no timestamps.
     #[must_use]
@@ -370,6 +386,64 @@ impl ComputerStatusReply {
             screen_generation: running.then_some(computer.screen_generation),
         }
     }
+}
+
+/// The reply of `computer.takeover` and `computer.release` (REQ-029).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerTakeoverReply {
+    /// Where the computer is.
+    pub status: String,
+    /// The provider configured for this deployment.
+    pub provider: String,
+    /// Who holds the screen, when someone does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub takeover_by_user: Option<String>,
+    /// When the hold began, when one is in effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub takeover_at: Option<String>,
+}
+
+/// One provider the deployment could run computers on (REQ-027).
+///
+/// Four booleans rather than a state machine: each names one honest capability of that provider
+/// on this deployment — none of them implies another.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerProviderInfo {
+    /// The provider name: `none`, `docker`, or a cloud provider the deployment recognises.
+    pub name: String,
+    /// Whether this deployment is configured for it.
+    pub available: bool,
+    /// Whether a frame command is configured (docker only).
+    pub frame: bool,
+    /// Whether shell tools run (anything other than `none`).
+    pub shell: bool,
+    /// Whether screenshots can be produced (a frame command is required).
+    pub screenshot: bool,
+}
+
+/// The reply of `computer.provider` (REQ-027).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerProviderReply {
+    /// The provider this deployment is configured with.
+    pub active: String,
+    /// Every provider the deployment recognises.
+    pub providers: Vec<ComputerProviderInfo>,
+}
+
+/// The reply of `computer.settings` (REQ-026).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerSettingsReply {
+    /// The RAM cap, in megabytes.
+    pub memory_limit_mb: u64,
+    /// The CPU cap, in CPUs.
+    pub cpu_limit: f64,
+    /// Minutes the computer may sit idle before it is released.
+    pub idle_minutes: u64,
 }
 
 /// The reply of `routines.runNow` (REQ-025).

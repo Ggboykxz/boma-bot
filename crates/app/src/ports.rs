@@ -1193,6 +1193,26 @@ pub trait ComputerRuntime: Send + Sync {
     /// Returns [`AppError::Unavailable`] when the provider cannot be reached or no frame command
     /// is configured, and [`AppError::Rule`] when the command produced no usable frame.
     async fn screenshot(&self, external_id: &str) -> Result<Vec<u8>, AppError>;
+
+    /// Runs a shell command inside the computer and returns stdout (REQ-028).
+    ///
+    /// Output is capped at `output_cap` bytes. The exit code is not an error condition: the
+    /// caller reads stdout or nothing, exactly like a shell tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] when the provider cannot be reached.
+    async fn exec(
+        &self,
+        external_id: &str,
+        command: &str,
+        output_cap: usize,
+    ) -> Result<String, AppError>;
+
+    /// Whether a frame command is configured for the images this runtime boots.
+    ///
+    /// `None` means the runtime cannot produce frames; the deployment reports so honestly.
+    fn frame_command(&self) -> Option<&str>;
 }
 
 /// A computer row as a store writes it (REQ-026).

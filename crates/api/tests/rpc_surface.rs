@@ -1450,3 +1450,142 @@ async fn req_026_a_bot_asks_for_a_computer_is_answered_and_the_answer_holds() {
         serde_json::json!({ "status": "stopped", "provider": "docker" })
     );
 }
+
+#[tokio::test]
+async fn req_027_computer_provider_lists_what_this_build_can_run() {
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/computer/provider",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["active"], serde_json::json!("docker"));
+    let providers = body["providers"].as_array().expect("providers are listed");
+    let docker = providers
+        .iter()
+        .find(|provider| provider["name"] == serde_json::json!("docker"))
+        .expect("docker is listed");
+    assert_eq!(docker["available"], serde_json::json!(true));
+    assert_eq!(docker["shell"], serde_json::json!(true));
+    let none = providers
+        .iter()
+        .find(|provider| provider["name"] == serde_json::json!("none"))
+        .expect("none is listed");
+    assert_eq!(none["available"], serde_json::json!(true));
+    assert_eq!(none["shell"], serde_json::json!(false));
+}
+
+#[tokio::test]
+async fn req_026_computer_settings_read_and_update_within_deployment_limits() {
+    let world = world().await;
+
+    // A fresh world has no computer; settings read the defaults.
+    let response = post(
+        state(&world.app),
+        "/rpc/computer/settings",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["memoryLimitMb"], serde_json::json!(512));
+    assert_eq!(body["cpuLimit"], serde_json::json!(1.0));
+    assert_eq!(body["idleMinutes"], serde_json::json!(10));
+}
+
+#[tokio::test]
+async fn req_029_a_member_takes_control_and_releases_it() {
+    let test_app = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "cmp_1".to_owned(),
+        ])
+        .computer_answers(vec![boma_testkit::ComputerAnswer::Started {
+            external_id: "ctr_1".to_owned(),
+            home_id: "vol_1".to_owned(),
+        }])
+        .fixed_clock("2026-01-01T00:00:00Z")
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot_id, _thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let bot_id = bot_id.as_str().to_owned();
+
+    // The computer is not started yet: takeover is refused.
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/takeover",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/start",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/takeover",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["status"], serde_json::json!("running"));
+    let holder = body["takeoverByUser"]
+        .as_str()
+        .expect("the holder is named");
+    assert_ne!(holder, "");
+
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/release",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert!(body.get("takeoverByUser").is_none());
+
+    // Release is a one-way door: releasing again is a conflict.
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/release",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}

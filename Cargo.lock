@@ -316,6 +316,7 @@ name = "boma-app"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "boma-domain",
  "serde_json",
  "thiserror",

@@ -17,6 +17,8 @@ pub(crate) struct ComputerRow {
     pub(crate) status: String,
     pub(crate) screen_generation: i32,
     pub(crate) home_id: Option<String>,
+    pub(crate) takeover_by: Option<String>,
+    pub(crate) takeover_at: Option<String>,
     pub(crate) private: bool,
     pub(crate) memory_limit_mb: i32,
     pub(crate) cpu_limit: f64,
@@ -30,10 +32,12 @@ pub(crate) struct ComputerRow {
 
 /// The columns every computer row projects.
 pub(crate) const COMPUTER_COLUMNS: &str = "id, space_id, bot_id, provider, external_id, status,
-       screen_generation, home_id, private, memory_limit_mb, cpu_limit, idle_minutes,
+       screen_generation, home_id, takeover_by, takeover_at, private,
+       memory_limit_mb, cpu_limit, idle_minutes,
        boma.rfc3339(started_at) AS started_at,
        boma.rfc3339(last_used_at) AS last_used_at,
        boma.rfc3339(stopped_at) AS stopped_at,
+       boma.rfc3339(takeover_at) AS takeover_at,
        boma.rfc3339(created_at) AS created_at,
        boma.rfc3339(updated_at) AS updated_at";
 
@@ -48,6 +52,8 @@ pub(crate) fn computer(row: ComputerRow) -> Result<Computer, AppError> {
         status: ComputerStatus::from_str(&row.status)?,
         screen_generation: u64::try_from(row.screen_generation).unwrap_or(u64::MAX),
         home_id: row.home_id,
+        takeover_by_user: row.takeover_by.map(boma_domain::UserId::new).transpose()?,
+        takeover_at: row.takeover_at,
         private: row.private,
         memory_limit_mb: u64::try_from(row.memory_limit_mb).unwrap_or(u64::MAX),
         cpu_limit: row.cpu_limit,

@@ -63,6 +63,10 @@ impl ComputerRuntime for DockerComputerRuntime {
         "docker"
     }
 
+    fn frame_command(&self) -> Option<&str> {
+        self.frame_command.as_deref()
+    }
+
     async fn ping(&self) -> Result<(), AppError> {
         self.docker.ping().await.map(|_| ()).map_err(|error| {
             tracing::warn!(%error, "the docker daemon did not answer the ping");
@@ -188,6 +192,64 @@ impl ComputerRuntime for DockerComputerRuntime {
         }
     }
 
+    async fn exec(
+        &self,
+        external_id: &str,
+        command: &str,
+        output_cap: usize,
+    ) -> Result<String, AppError> {
+        let exec = self
+            .docker
+            .create_exec(
+                external_id,
+                ExecConfig {
+                    cmd: Some(vec!["sh".to_owned(), "-c".to_owned(), command.to_owned()]),
+                    attach_stdout: Some(true),
+                    attach_stdin: Some(false),
+                    attach_stderr: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the command could not be prepared");
+                AppError::Unavailable
+            })?;
+        let output = self
+            .docker
+            .start_exec(
+                &exec.id,
+                Some(bollard::exec::StartExecOptions {
+                    detach: false,
+                    tty: false,
+                    output_capacity: None,
+                }),
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the command could not run");
+                AppError::Unavailable
+            })?;
+        let bollard::exec::StartExecResults::Attached { mut output, .. } = output else {
+            tracing::warn!(%external_id, "the command detached before producing output");
+            return Err(AppError::Unavailable);
+        };
+        let mut bytes = Vec::new();
+        while let Some(item) = futures_util::StreamExt::next(&mut output).await {
+            let item = item.map_err(|error| {
+                tracing::warn!(%error, %external_id, "the output stream died");
+                AppError::Unavailable
+            })?;
+            if let bollard::container::LogOutput::StdOut { message } = item {
+                let remaining = output_cap.saturating_sub(bytes.len());
+                if remaining > 0 {
+                    bytes.extend_from_slice(&message[..message.len().min(remaining)]);
+                }
+            }
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     async fn screenshot(&self, external_id: &str) -> Result<Vec<u8>, AppError> {
         let Some(frame_command) = self.frame_command.as_deref() else {
             tracing::warn!("no frame command is configured for this image");
@@ -299,6 +361,10 @@ impl ComputerRuntime for NoneComputerRuntime {
         "none"
     }
 
+    fn frame_command(&self) -> Option<&str> {
+        None
+    }
+
     async fn ping(&self) -> Result<(), AppError> {
         Ok(())
     }
@@ -314,6 +380,15 @@ impl ComputerRuntime for NoneComputerRuntime {
 
     async fn screenshot(&self, _external_id: &str) -> Result<Vec<u8>, AppError> {
         // A deployment without computers answers honestly, not with fake pixels.
+        Err(AppError::Unavailable)
+    }
+
+    async fn exec(
+        &self,
+        _external_id: &str,
+        _command: &str,
+        _output_cap: usize,
+    ) -> Result<String, AppError> {
         Err(AppError::Unavailable)
     }
 }

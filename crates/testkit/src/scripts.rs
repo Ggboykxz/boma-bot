@@ -454,6 +454,11 @@ impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
         "docker"
     }
 
+    fn frame_command(&self) -> Option<&str> {
+        // The memory runtime replays canned bytes; it claims no frame command.
+        None
+    }
+
     async fn ping(&self) -> Result<(), boma_app::AppError> {
         Ok(())
     }
@@ -488,6 +493,15 @@ impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
     async fn stop(&self, external_id: &str) -> Result<(), boma_app::AppError> {
         lock(&self.stops).push(external_id.to_owned());
         Ok(())
+    }
+
+    async fn exec(
+        &self,
+        _external_id: &str,
+        _command: &str,
+        _output_cap: usize,
+    ) -> Result<String, boma_app::AppError> {
+        Ok(String::new())
     }
 
     async fn screenshot(&self, _external_id: &str) -> Result<Vec<u8>, boma_app::AppError> {
