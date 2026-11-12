@@ -97,6 +97,12 @@ REQ-009 (read state), REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton).
   dbus, X11/xcb/composite/damage/ext/fixes/randr, xkbcommon, alsa, expat, gbm, udev) restored
   through nix and referenced by `LD_LIBRARY_PATH` in `/tmp/opencode/ldpath.sh`; the Playwright
   suite passes with `FONTCONFIG_FILE=/tmp/opencode/fonts.conf`.
+- 2026-11-12 — **REQ-009 (read state) committed locally (`f3a9bc6`) but PUSH BLOCKED**: the
+  `git push` to `origin` hung at the credential step every time (read timeout at 55 s and 600 s),
+  `git credential fill` returns nothing and VS Code's askpass answers "Missing or invalid
+  credentials." — i.e. no token is currently available on this machine. `ls-remote` works
+  anonymously (public repo); the network is up. The user needs to restore the git credentials in
+  VS Code (or paste a PAT); the commit is safe locally on `main`, one ahead of `origin/main`.
 - 2026-11-12 — **M1 walking skeleton implemented and committed** (`feat(app,api,infra,bin,conformance): M1 walking skeleton`).
   - `boma-domain`: runs gained lease fields (`lease_owner`, `lease_fence`, `lease_expires_at`) and
     `holds_lease`; tenancy, ids, password validation, cursor helpers, event and message models,
