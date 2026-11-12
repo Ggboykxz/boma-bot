@@ -64,7 +64,7 @@ impl RunStore for PostgresRunStore {
                                boma.rfc3339(completed_at) AS completed_at, error,
                                steering_from_seq, steering_consumed_seq, attempt,
                                model_provider, model_id, model_pinned,
-                               parent_run_id,
+                               parent_run_id, routine_id,
                                boma.rfc3339(created_at) AS created_at",
                 )
                 .bind(run.id.as_str())
@@ -127,7 +127,7 @@ impl RunStore for PostgresRunStore {
                             source_message_id, lease_owner, lease_fence,
                             steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
-                            parent_run_id,
+                            parent_run_id, routine_id,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -161,7 +161,7 @@ impl RunStore for PostgresRunStore {
                             source_message_id, lease_owner, lease_fence,
                             steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
-                            parent_run_id,
+                            parent_run_id, routine_id,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -194,7 +194,7 @@ impl RunStore for PostgresRunStore {
                             source_message_id, lease_owner, lease_fence,
                             steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
-                            parent_run_id,
+                            parent_run_id, routine_id,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -279,6 +279,40 @@ impl RunStore for PostgresRunStore {
         Ok(())
     }
 
+    async fn find_open_routine(
+        &self,
+        context: &TenantContext,
+        routine_id: &boma_domain::RoutineId,
+    ) -> Result<Option<Run>, AppError> {
+        let routine_key = routine_id.as_str().to_owned();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                let row = sqlx::query_as::<_, RunRow>(
+                    "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger,
+                            client_nonce, source_message_id, lease_owner, lease_fence,
+                            steering_from_seq, steering_consumed_seq, attempt,
+                            model_provider, model_id, model_pinned,
+                            parent_run_id, routine_id,
+                            boma.rfc3339(lease_expires_at) AS lease_expires_at,
+                            boma.rfc3339(started_at) AS started_at,
+                            boma.rfc3339(completed_at) AS completed_at, error,
+                            boma.rfc3339(created_at) AS created_at
+                     FROM runs
+                     WHERE routine_id = $1
+                       AND status NOT IN ('completed', 'failed', 'cancelled')
+                     ORDER BY created_at ASC
+                     LIMIT 1",
+                )
+                .bind(routine_key.as_str())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                row.map(rows::run).transpose()
+            })
+        })
+        .await
+    }
+
     async fn claim_next_queued(&self, owner: &str) -> Result<Option<Run>, AppError> {
         let owner_key = owner.to_owned();
         // The claim crosses tenants: a worker takes the oldest queued run wherever it is. It is
@@ -314,7 +348,7 @@ impl RunStore for PostgresRunStore {
                                r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
                                r.steering_from_seq, r.steering_consumed_seq, r.attempt,
                                r.model_provider, r.model_id, r.model_pinned,
-                               r.parent_run_id,
+                               r.parent_run_id, r.routine_id,
                                boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                                boma.rfc3339(r.started_at) AS started_at,
                                boma.rfc3339(r.completed_at) AS completed_at, r.error,
@@ -404,7 +438,7 @@ impl RunStore for PostgresRunStore {
                                boma.rfc3339(completed_at) AS completed_at, error,
                                steering_from_seq, steering_consumed_seq, attempt,
                                model_provider, model_id, model_pinned,
-                               parent_run_id,
+                               parent_run_id, routine_id,
                                boma.rfc3339(created_at) AS created_at",
                 )
                 .bind(id.as_str())
@@ -426,7 +460,7 @@ impl RunStore for PostgresRunStore {
                                     boma.rfc3339(completed_at) AS completed_at, error,
                                     steering_from_seq, steering_consumed_seq, attempt,
                                     model_provider, model_id, model_pinned,
-                                    parent_run_id,
+                                    parent_run_id, routine_id,
                                     boma.rfc3339(created_at) AS created_at
                              FROM runs WHERE id = $1 AND space_id = $2",
                     )
@@ -463,7 +497,7 @@ impl RunStore for PostgresRunStore {
                             r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
                             r.steering_from_seq, r.steering_consumed_seq, r.attempt,
                             r.model_provider, r.model_id, r.model_pinned,
-                            r.parent_run_id,
+                            r.parent_run_id, r.routine_id,
                             boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(r.started_at) AS started_at,
                             boma.rfc3339(r.completed_at) AS completed_at, r.error,

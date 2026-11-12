@@ -406,6 +406,7 @@ pub fn new_run(fixture: &Fixture, suffix: &str, nonce: Option<&str>) -> boma_app
         model_id: None,
         model_pinned: false,
         parent_run_id: None,
+        routine_id: None,
     }
 }
 

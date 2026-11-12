@@ -304,6 +304,9 @@ pub struct Run {
     /// The run that delegated to this one, when this run is a helper (REQ-019).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_run_id: Option<RunId>,
+    /// The routine this run wakes for (REQ-023), when it woke for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine_id: Option<crate::RoutineId>,
 }
 
 impl Run {

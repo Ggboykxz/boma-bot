@@ -204,6 +204,8 @@ pub struct NewRun {
     pub model_pinned: bool,
     /// The run that delegated to this one, when this run is a helper (REQ-019).
     pub parent_run_id: Option<boma_domain::RunId>,
+    /// The routine this run wakes for (REQ-023), when it woke for one.
+    pub routine_id: Option<boma_domain::RoutineId>,
 }
 
 /// An event to append.
@@ -606,6 +608,17 @@ pub trait RunStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn claim_next_queued(&self, owner: &str) -> Result<Option<Run>, AppError>;
+
+    /// Finds a routine-trigger run for `routine_id` that is not terminal, if any (REQ-024).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_open_routine(
+        &self,
+        context: &boma_domain::TenantContext,
+        routine_id: &boma_domain::RoutineId,
+    ) -> Result<Option<Run>, AppError>;
 
     /// Moves a run to a new status, if the lease still holds.
     ///
@@ -1073,11 +1086,27 @@ pub trait RoutineStore: Send + Sync {
         threshold: u32,
     ) -> Result<Routine, AppError>;
 
-    /// Records one skipped wake (coalesced, deactivated, paused).
+    /// Marks the routine healthy: after a successful fire its failure counter resets to zero.
     ///
     /// # Errors
     ///
     /// Returns an error when the database cannot answer.
+    async fn record_completed(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RoutineId,
+        occurred_at: &str,
+        run_id: Option<&boma_domain::RunId>,
+    ) -> Result<(), AppError>;
+
+    /// Records one skipped wake (coalesced, deactivated, paused) and advances the wake.
+    ///
+    /// `next_run_at: None` means this was a `@once` routine and it is now spent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    #[allow(clippy::too_many_arguments)]
     async fn record_skip(
         &self,
         context: &boma_domain::TenantContext,
@@ -1085,6 +1114,7 @@ pub trait RoutineStore: Send + Sync {
         outcome: RoutineOutcome,
         occurred_at: &str,
         run_id: Option<&boma_domain::RunId>,
+        next_run_at: Option<&str>,
         detail: Option<&str>,
     ) -> Result<(), AppError>;
 }

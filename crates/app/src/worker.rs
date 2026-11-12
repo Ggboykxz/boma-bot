@@ -142,6 +142,9 @@ impl Worker {
             None,
         )
         .await?;
+        // A routine that woke this run: reset its failure counter, so one clean run unpauses
+        // the routine at the next threshold crossing (REQ-024).
+        usecases::record_routine_completed(&self.app, &run).await?;
 
         Ok(true)
     }
@@ -212,6 +215,9 @@ impl Worker {
             Err(error) => {
                 tracing::warn!(run = %run.id, %error, "a run failed");
                 self.fail_run(context, &run, error).await?;
+                // A routine-woken run that failed counts toward the routine's failure budget;
+                // past the threshold the routine pauses itself (REQ-024).
+                usecases::record_routine_failed(&self.app, &run).await?;
                 Ok(PassOutcome::Failed)
             }
         }

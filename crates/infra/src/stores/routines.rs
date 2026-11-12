@@ -304,6 +304,47 @@ impl RoutineStore for PostgresRoutineStore {
         .await
     }
 
+    async fn record_completed(
+        &self,
+        context: &TenantContext,
+        id: &RoutineId,
+        occurred_at: &str,
+        run_id: Option<&RunId>,
+    ) -> Result<(), AppError> {
+        let id_key = id.as_str().to_owned();
+        let at = occurred_at.to_owned();
+        let run_key = run_id.map(|run| run.as_str().to_owned());
+        let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let space_key = space_id.as_str().to_owned();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                sqlx::query(
+                    "UPDATE routines
+                     SET account_failures = 0, updated_at = now()
+                     WHERE id = $1 AND space_id = $2",
+                )
+                .bind(id_key.as_str())
+                .bind(space_key.as_str())
+                .execute(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                sqlx::query(
+                    "INSERT INTO routine_runs (routine_id, space_id, run_id, outcome, occurred_at)
+                     VALUES ($1, $2, $3, 'fired', $4::timestamptz)",
+                )
+                .bind(id_key.as_str())
+                .bind(space_key.as_str())
+                .bind(run_key.as_deref())
+                .bind(at.as_str())
+                .execute(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn record_skip(
         &self,
         context: &TenantContext,
@@ -311,11 +352,13 @@ impl RoutineStore for PostgresRoutineStore {
         outcome: RoutineOutcome,
         occurred_at: &str,
         run_id: Option<&RunId>,
+        next_run_at: Option<&str>,
         detail: Option<&str>,
     ) -> Result<(), AppError> {
         let id_key = id.as_str().to_owned();
         let at = occurred_at.to_owned();
         let run_key = run_id.map(|run| run.as_str().to_owned());
+        let next = next_run_at.map(str::to_owned);
         let detail_key = detail.map(str::to_owned);
         let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
         let space_key = space_id.as_str().to_owned();
@@ -328,6 +371,19 @@ impl RoutineStore for PostgresRoutineStore {
         };
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
+                sqlx::query(
+                    "UPDATE routines
+                     SET next_run_at = $3::timestamptz,
+                         active = CASE WHEN $3::timestamptz IS NULL THEN false ELSE active END,
+                         updated_at = now()
+                     WHERE id = $1 AND space_id = $2",
+                )
+                .bind(&id_key)
+                .bind(&space_key)
+                .bind(next.as_deref())
+                .execute(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
                 sqlx::query(
                     "INSERT INTO routine_runs (routine_id, space_id, run_id, outcome, detail, occurred_at)
                      VALUES ($1, $2, $3, $4, $5, $6::timestamptz)",

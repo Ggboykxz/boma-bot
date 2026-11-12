@@ -901,6 +901,7 @@ async fn req_012_retry_only_from_failed() {
         model_id: None,
         model_pinned: false,
         parent_run_id: None,
+        routine_id: None,
     });
 
     let response = post(

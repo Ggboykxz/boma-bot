@@ -1450,6 +1450,7 @@ impl RunStore for MemoryRunStore {
             model_id: run.model_id,
             model_pinned: run.model_pinned,
             parent_run_id: run.parent_run_id,
+            routine_id: run.routine_id,
         };
         state.runs.push(RunRow {
             run: stored.clone(),
@@ -1671,6 +1672,30 @@ impl RunStore for MemoryRunStore {
             row.run.error = Some(error);
         }
         Ok(())
+    }
+
+    async fn find_open_routine(
+        &self,
+        context: &TenantContext,
+        routine_id: &boma_domain::RoutineId,
+    ) -> Result<Option<Run>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .runs
+            .iter()
+            .find(|row| {
+                row.run.routine_id.as_ref() == Some(routine_id)
+                    && matches!(
+                        row.run.status,
+                        RunStatus::Queued
+                            | RunStatus::Leased
+                            | RunStatus::Running
+                            | RunStatus::WaitingInput
+                            | RunStatus::WaitingTakeover
+                    )
+                    && visible(context, &row.run.space_id)
+            })
+            .map(|row| row.run.clone()))
     }
 
     async fn list(
@@ -2770,6 +2795,35 @@ impl RoutineStore for MemoryRoutineStore {
         Ok(updated)
     }
 
+    async fn record_completed(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::RoutineId,
+        occurred_at: &str,
+        run_id: Option<&RunId>,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let Some(record) = state
+            .routines
+            .iter_mut()
+            .find(|row| row.routine.id == *id && visible(context, &row.routine.space_id))
+        else {
+            return Err(AppError::NotFound);
+        };
+        record.routine.account_failures = 0;
+        occurred_at.clone_into(&mut record.routine.updated_at);
+        let space_id = record.routine.space_id.clone();
+        state.routine_runs.push(RoutineRunRow {
+            routine_id: id.clone(),
+            space_id,
+            run_id: run_id.cloned(),
+            outcome: "fired".to_owned(),
+            detail: None,
+            occurred_at: occurred_at.to_owned(),
+        });
+        Ok(())
+    }
+
     async fn record_skip(
         &self,
         context: &TenantContext,
@@ -2777,17 +2831,23 @@ impl RoutineStore for MemoryRoutineStore {
         outcome: RoutineOutcome,
         occurred_at: &str,
         run_id: Option<&RunId>,
+        next_run_at: Option<&str>,
         detail: Option<&str>,
     ) -> Result<(), AppError> {
         let mut state = write(&self.state);
-        let Some(routine) = state
+        let Some(record) = state
             .routines
-            .iter()
+            .iter_mut()
             .find(|row| row.routine.id == *id && visible(context, &row.routine.space_id))
-            .map(|row| row.routine.clone())
         else {
             return Err(AppError::NotFound);
         };
+        record.routine.next_run_at = next_run_at.map(str::to_owned);
+        if next_run_at.is_none() {
+            record.routine.active = false;
+        }
+        occurred_at.clone_into(&mut record.routine.updated_at);
+        let space_id = record.routine.space_id.clone();
         let outcome = match outcome {
             RoutineOutcome::Fired => "fired",
             RoutineOutcome::Coalesced => "coalesced",
@@ -2797,7 +2857,7 @@ impl RoutineStore for MemoryRoutineStore {
         };
         state.routine_runs.push(RoutineRunRow {
             routine_id: id.clone(),
-            space_id: routine.space_id.clone(),
+            space_id,
             run_id: run_id.cloned(),
             outcome: outcome.to_owned(),
             detail: detail.map(str::to_owned),
@@ -3089,6 +3149,7 @@ mod tests {
             model_id: None,
             model_pinned: false,
             parent_run_id: None,
+            routine_id: None,
         }
     }
 

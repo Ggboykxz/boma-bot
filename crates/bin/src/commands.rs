@@ -112,10 +112,20 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         Postgres::connect_lazy(&config.database).context("the database pool cannot be built")?;
     let app = Arc::new(build_app(&database));
     let provider = Arc::new(ScriptedProvider::default());
+    let dispatcher_app = Arc::clone(&app);
     let worker = Worker::new(app, provider, worker_owner());
 
     tracing::info!(owner = %worker_owner(), "the worker is draining the queue");
     loop {
+        // Sweep the routines before claiming work: a due routine is real work the space
+        // asked for, and the queue order is by wake time.
+        let dispatched = boma_app::usecases::dispatch_routines(&dispatcher_app)
+            .await
+            .context("the worker could not sweep the routines")?;
+        if dispatched > 0 {
+            tracing::info!(dispatched, "the worker enqueued routine wakes");
+            continue;
+        }
         let stepped = worker
             .step()
             .await

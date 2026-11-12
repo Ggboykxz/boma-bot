@@ -461,6 +461,7 @@ pub async fn send_message(
             model_id: Some(choice.model),
             model_pinned: choice.pinned,
             parent_run_id: None,
+            routine_id: None,
         })
         .await?;
 
@@ -922,6 +923,155 @@ pub async fn routines_remove(
         routine_id: routine.id,
         removed: true,
     })
+}
+
+/// The failure threshold at which a routine pauses itself (REQ-024).
+///
+/// Five consecutive account-level failures pause the routine: a cron that keeps blowing up stops
+/// flooding the space with model errors.
+const ROUTINE_FAILURE_THRESHOLD: u32 = 5;
+
+/// The context a routine-run acts for, derived from its owner.
+fn routine_context(
+    user_id: &boma_domain::UserId,
+    space_id: &boma_domain::SpaceId,
+) -> TenantContext {
+    TenantContext::Member {
+        space_id: space_id.clone(),
+        user_id: user_id.clone(),
+    }
+}
+
+/// Marks a routine run as completed: the routine's failure counter resets (REQ-024).
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+pub async fn record_routine_completed(app: &App, run: &boma_domain::Run) -> Result<(), AppError> {
+    let Some(routine_id) = &run.routine_id else {
+        return Ok(());
+    };
+    app.stores
+        .routines
+        .record_completed(
+            &routine_context(&run.user_id, &run.space_id),
+            routine_id,
+            &app.services.clock.now(),
+            Some(&run.id),
+        )
+        .await
+}
+
+/// Marks a routine run as failed: the failure counter grows, and past the threshold the routine
+/// pauses itself (REQ-024).
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+pub async fn record_routine_failed(app: &App, run: &boma_domain::Run) -> Result<(), AppError> {
+    let Some(routine_id) = &run.routine_id else {
+        return Ok(());
+    };
+    app.stores
+        .routines
+        .record_failure(
+            &routine_context(&run.user_id, &run.space_id),
+            routine_id,
+            &app.services.clock.now(),
+            Some(&run.id),
+            ROUTINE_FAILURE_THRESHOLD,
+        )
+        .await
+        .map(|_| ())
+}
+
+/// The context the dispatcher acts under for a routine-run.
+fn dispatch_context(routine: &crate::ports::Routine) -> TenantContext {
+    TenantContext::Member {
+        space_id: routine.space_id.clone(),
+        user_id: routine.user_id.clone(),
+    }
+}
+
+/// Claims every routine that is due and enqueues a run for each of them (REQ-024).
+///
+/// A due routine with an already open routine-run in the same thread is coalesced instead of
+/// firing again; the skip is recorded in the routine's audit log and the wake is rescheduled.
+///
+/// Returns the number of runs the call enqueued.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer, and [`AppError::Rule`] when a
+/// cron expression stopped being valid.
+pub async fn dispatch_routines(app: &App) -> Result<u64, AppError> {
+    let now = app.services.clock.now();
+    let due = app.stores.routines.due(&now).await?;
+    let mut dispatched = 0;
+    for routine in due {
+        // `@once` has no next wake; otherwise compute the next one from the cron.
+        let next = if routine.crons.iter().any(|entry| entry == boma_domain::ONCE) {
+            None
+        } else {
+            Some(boma_domain::next_run_at(
+                &routine.crons,
+                &routine.timezone,
+                &now,
+            )?)
+        };
+        let context = dispatch_context(&routine);
+
+        // A routine that already has an open routine-trigger run must not fire a second one: the
+        // attempt joins the open one when it finishes, and the skip is recorded.
+        if app
+            .stores
+            .runs
+            .find_open_routine(&context, &routine.id)
+            .await?
+            .is_some()
+        {
+            app.stores
+                .routines
+                .record_skip(
+                    &context,
+                    &routine.id,
+                    crate::ports::RoutineOutcome::Coalesced,
+                    &now,
+                    None,
+                    next.as_deref(),
+                    Some("a routine run was already open"),
+                )
+                .await?;
+            continue;
+        }
+
+        let run = app
+            .stores
+            .runs
+            .create(crate::ports::NewRun {
+                id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+                space_id: routine.space_id.clone(),
+                bot_id: routine.bot_id.clone(),
+                thread_id: routine.thread_id.clone(),
+                user_id: routine.user_id.clone(),
+                trigger: boma_domain::RunTrigger::Routine,
+                client_nonce: None,
+                source_message_id: None,
+                created_at: now.clone(),
+                model_provider: None,
+                model_id: None,
+                model_pinned: false,
+                parent_run_id: None,
+                routine_id: Some(routine.id.clone()),
+            })
+            .await?;
+        dispatched += 1;
+        app.stores
+            .routines
+            .record_fired(&context, &routine.id, &now, Some(&run.id), next.as_deref())
+            .await?;
+    }
+    Ok(dispatched)
 }
 
 /// The outcome of one snooze call (REQ-009).
@@ -1427,6 +1577,7 @@ pub async fn delegate_helper_run(
             model_id: Some(choice.model),
             model_pinned: choice.pinned,
             parent_run_id: Some(parent.id.clone()),
+            routine_id: None,
         })
         .await?;
 

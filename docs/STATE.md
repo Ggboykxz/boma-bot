@@ -16,9 +16,22 @@
   the model prompt; the scripted provider ignores context until then, which is honestly currently
   everywhere (same story as REQ-016's tool-call loop).
 
-Row order matches implementation order. Slices still to land this milestone: REQ-024 (dispatch,
-retry backoff, coalescing, pause at threshold), REQ-025 (run now).
+Row order matches implementation order. Slices still to land this milestone: REQ-025 (run now).
 
+- **REQ-024 (dispatch, retry, coalescing, MUST)** is done: the worker's poll loop sweeps due
+  routines before claiming runs (`boma_app::usecases::dispatch_routines`), creates a
+  `trigger: routine` run per fire, reschedules to the next cron occurrence (`next_run_at` on the
+  routine row), deactivates a spent `@once`, and resets the failure counter on completion. A
+  routine whose previous run is still open is **not** fired a second time: the wake is recorded
+  as `coalesced` and the schedule advances (no stampede). A failed routine-woken run counts into
+  the routine's `account_failures`; past a threshold of 5 consecutive failures the routine pauses
+  itself and stops firing. Failures reset on a clean completion via `record_completed`. No
+  backoff multiplier curve is implemented in this slice: consecutive failures re-fire on each
+  due cron interval, which is the honest default until the spec names a formula. Any run ending
+  `failed` counts (including account-level provider refusals). Routine-woken runs carry
+  `routine_id` on `runs` (migration `0015_run_routine_id.sql`). The worker tracks it on
+  completion/failure paths to move the routines store counters. The single-flight check is
+  `find_open_routine`: a co-worker may skip a wake whose run is already open elsewhere.
 - **REQ-023 (routines as cron definitions, MUST)** is done for its create path: a bot wakes on
   cron expressions in its own IANA timezone (`croner` + `chrono` + `chrono-tz`, MIT), and `@once`
   fires exactly once five minutes after the request drops. Migration `0014_routines.sql` creates

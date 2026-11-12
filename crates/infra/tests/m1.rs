@@ -267,6 +267,7 @@ async fn req_001_a_send_writes_one_message_and_starts_one_run() {
             model_id: None,
             model_pinned: false,
             parent_run_id: None,
+            routine_id: None,
         })
         .await
         .expect("the run is created");
@@ -346,6 +347,7 @@ async fn req_012_the_claim_moves_a_run_to_leased_and_the_fence_guards_the_write(
             model_id: None,
             model_pinned: false,
             parent_run_id: None,
+            routine_id: None,
         })
         .await
         .expect("the run is created");
@@ -563,6 +565,7 @@ async fn req_014_an_expired_lease_is_reclaimed_by_another_worker() {
             model_id: None,
             model_pinned: false,
             parent_run_id: None,
+            routine_id: None,
         })
         .await
         .expect("the run is created");
@@ -662,6 +665,7 @@ async fn req_017_answer_a_card_and_record_its_effect_once_in_postgres() {
             model_id: None,
             model_pinned: false,
             parent_run_id: None,
+            routine_id: None,
         })
         .await
         .expect("the run is created");
@@ -1186,6 +1190,90 @@ async fn req_022_memory_revisions_are_append_only_in_postgres() {
             .await
             .expect("the count is read");
     assert_eq!(chain, 0);
+
+    cleanup(&database, &organization_id, &email).await;
+}
+
+#[tokio::test]
+async fn req_024_a_due_routine_is_claimed_and_a_once_fire_deactivates_postgres() {
+    let database = common::database().await;
+    let app = app(&database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "routine").await;
+
+    let bot_id = BotId::new(ids().new_id("bot")).expect("an id is valid");
+    let thread_id = ThreadId::new(ids().new_id("thr")).expect("an id is valid");
+    let (bot, thread) = app
+        .stores
+        .bots
+        .create_with_thread(
+            NewBot {
+                id: bot_id.clone(),
+                space_id: space_id.clone(),
+                user_id: user_id.clone(),
+                name: "Analyst".to_owned(),
+                description: None,
+                color: None,
+                created_at: app.services.clock.now(),
+            },
+            NewThread {
+                id: thread_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot_id.clone(),
+                user_id: user_id.clone(),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+        .expect("the bot is created");
+
+    let routine_id = boma_domain::RoutineId::new(ids().new_id("rtn")).expect("an id is valid");
+    let created_at = app.services.clock.now();
+    app.stores
+        .routines
+        .create(
+            &context,
+            NewRoutine {
+                id: routine_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot.id.clone(),
+                thread_id: thread.id.clone(),
+                user_id: user_id.clone(),
+                name: "Morning digest".to_owned(),
+                prompt: "Summarise overnight commits.".to_owned(),
+                crons: vec!["@once".to_owned()],
+                timezone: "UTC".to_owned(),
+                active: true,
+                notify: false,
+                next_run_at: Some("2000-01-01T00:00:00Z".to_owned()),
+                created_at: created_at.clone(),
+            },
+        )
+        .await
+        .expect("the routine is created");
+
+    // The dispatch claims it and, because it is @once, deactivates it.
+    let dispatched = boma_app::usecases::dispatch_routines(&app)
+        .await
+        .expect("the dispatch answers");
+    assert_eq!(dispatched, 1);
+
+    let routine = app
+        .stores
+        .routines
+        .find(&context, &routine_id)
+        .await
+        .expect("the routine answers")
+        .expect("the routine exists");
+    assert!(!routine.active, "the @once routine is spent");
+    assert_eq!(routine.next_run_at, None);
+
+    let due = app
+        .stores
+        .routines
+        .due(&created_at)
+        .await
+        .expect("the due scan answers");
+    assert!(due.is_empty(), "the spent routine never comes due again");
 
     cleanup(&database, &organization_id, &email).await;
 }

@@ -1232,3 +1232,272 @@ mod tests {
         assert_eq!(bot.thread_id, thread_id);
     }
 }
+
+#[tokio::test]
+async fn req_024_a_due_routine_fires_into_a_routine_run() {
+    let test = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "rtn_1".to_owned(),
+            "run_1".to_owned(),
+        ])
+        .fixed_clock("2026-01-01T00:02:00Z")
+        .build();
+    let user_id = test
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space = test
+        .app()
+        .stores
+        .spaces
+        .default_for(&user_id)
+        .await
+        .expect("the store answers")
+        .expect("the space exists");
+    let context = TestApp::member_context(&space.id, &user_id);
+
+    let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+
+    // An overdue routine: its next wake already passed, so the dispatch claims it.
+    let routine = test
+        .app()
+        .stores
+        .routines
+        .create(
+            &context,
+            boma_app::ports::NewRoutine {
+                id: boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+                space_id: space.id.clone(),
+                bot_id: bot.bot.id.clone(),
+                thread_id: bot.bot.thread_id.clone(),
+                user_id: user_id.clone(),
+                name: "Morning digest".to_owned(),
+                prompt: "Summarise overnight commits.".to_owned(),
+                crons: vec!["* * * * *".to_owned()],
+                timezone: "UTC".to_owned(),
+                active: true,
+                notify: false,
+                next_run_at: Some("2026-01-01T00:01:00Z".to_owned()),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the routine is created");
+
+    let dispatched = boma_app::usecases::dispatch_routines(test.app())
+        .await
+        .expect("the dispatch answers");
+    assert_eq!(dispatched, 1);
+
+    let activity = test
+        .app()
+        .stores
+        .runs
+        .list(&context, Some(&bot.bot.id), None, 10)
+        .await
+        .expect("the activity answers");
+    let run = activity
+        .runs
+        .into_iter()
+        .next()
+        .expect("the routine's run is listed")
+        .run;
+    assert_eq!(run.trigger, boma_domain::RunTrigger::Routine);
+    assert_eq!(
+        run.routine_id.map(|id| id.as_str().to_owned()).as_deref(),
+        Some("rtn_1")
+    );
+
+    assert!(routine.active, "the routine is still active");
+}
+
+#[tokio::test]
+async fn req_024_a_once_routine_fires_once_and_deactivates_itself() {
+    let test = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "rtn_1".to_owned(),
+            "run_1".to_owned(),
+        ])
+        .fixed_clock("2026-01-01T00:02:00Z")
+        .build();
+    let user_id = test
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space = test
+        .app()
+        .stores
+        .spaces
+        .default_for(&user_id)
+        .await
+        .expect("the store answers")
+        .expect("the space exists");
+    let context = TestApp::member_context(&space.id, &user_id);
+
+    let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+
+    test.app()
+        .stores
+        .routines
+        .create(
+            &context,
+            boma_app::ports::NewRoutine {
+                id: boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+                space_id: space.id.clone(),
+                bot_id: bot.bot.id.clone(),
+                thread_id: bot.bot.thread_id.clone(),
+                user_id: user_id.clone(),
+                name: "One shot".to_owned(),
+                prompt: "Do it once.".to_owned(),
+                crons: vec!["@once".to_owned()],
+                timezone: "UTC".to_owned(),
+                active: true,
+                notify: false,
+                next_run_at: Some("2026-01-01T00:01:00Z".to_owned()),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the routine is created");
+
+    let dispatched = boma_app::usecases::dispatch_routines(test.app())
+        .await
+        .expect("the dispatch answers");
+    assert_eq!(dispatched, 1);
+
+    let routine = test
+        .app()
+        .stores
+        .routines
+        .find(
+            &context,
+            &boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+        )
+        .await
+        .expect("the routine answers")
+        .expect("the routine exists");
+    assert!(!routine.active, "the @once routine is spent");
+    assert_eq!(routine.next_run_at, None);
+
+    // The spent one-shot is not claimed again.
+    let dispatched = boma_app::usecases::dispatch_routines(test.app())
+        .await
+        .expect("the dispatch answers");
+    assert_eq!(dispatched, 0);
+}
+
+#[tokio::test]
+async fn req_024_a_coalesced_routine_records_the_skip_instead_of_stampeding() {
+    let test = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "rtn_1".to_owned(),
+            "run_open".to_owned(),
+            "run_skip".to_owned(),
+        ])
+        .fixed_clock("2026-01-01T00:02:00Z")
+        .build();
+    let user_id = test
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space = test
+        .app()
+        .stores
+        .spaces
+        .default_for(&user_id)
+        .await
+        .expect("the store answers")
+        .expect("the space exists");
+    let context = TestApp::member_context(&space.id, &user_id);
+
+    let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+
+    test.app()
+        .stores
+        .routines
+        .create(
+            &context,
+            boma_app::ports::NewRoutine {
+                id: boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+                space_id: space.id.clone(),
+                bot_id: bot.bot.id.clone(),
+                thread_id: bot.bot.thread_id.clone(),
+                user_id: user_id.clone(),
+                name: "Morning digest".to_owned(),
+                prompt: "Summarise overnight commits.".to_owned(),
+                crons: vec!["* * * * *".to_owned()],
+                timezone: "UTC".to_owned(),
+                active: true,
+                notify: false,
+                next_run_at: Some("2026-01-01T00:01:00Z".to_owned()),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the routine is created");
+
+    // An open routine run already holds the wake; the dispatcher must not stamped a second run.
+    test.app()
+        .stores
+        .runs
+        .create(boma_app::ports::NewRun {
+            id: boma_domain::RunId::new("run_open".to_owned()).expect("the id is valid"),
+            space_id: space.id.clone(),
+            bot_id: bot.bot.id.clone(),
+            thread_id: bot.bot.thread_id.clone(),
+            user_id: user_id.clone(),
+            trigger: boma_domain::RunTrigger::Routine,
+            client_nonce: None,
+            source_message_id: None,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            model_provider: None,
+            model_id: None,
+            model_pinned: false,
+            parent_run_id: None,
+            routine_id: Some(
+                boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+            ),
+        })
+        .await
+        .expect("the open routine run is created");
+
+    let dispatched = boma_app::usecases::dispatch_routines(test.app())
+        .await
+        .expect("the dispatch answers");
+    assert_eq!(dispatched, 0, "the open run coalesces the new wake");
+
+    let routine = test
+        .app()
+        .stores
+        .routines
+        .find(
+            &context,
+            &boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+        )
+        .await
+        .expect("the routine answers")
+        .expect("the routine exists");
+    // The coalesced wake is scheduled onward: it is not due anymore.
+    assert_eq!(routine.next_run_at.as_deref(), Some("2026-01-01T00:03:00Z"));
+}
