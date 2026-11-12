@@ -2,16 +2,22 @@
 
 ## Current milestone
 
-**M3 — done.** M3 (Memory and schedules) closed at `9d812a4`: REQ-022 (memory documents with
-append-only revisions and `memory.write`/`read`/`list`/`remove`/`provider`), REQ-023 (cron-style
-routines with `@once`, next-run computation in the routine's IANA timezone, `routines.create`/
-`list`/`remove`), REQ-024 (the worker sweeps due routines into runs, `@once` fires once and
-deactivates, overlapping wakes coalesce, account-failure threshold of five pauses the routine
-and resets on a clean completion, `routine_id` attributed to runs) and REQ-025 (`routines.runNow`
-fires the routine once as a normal turn, attributed but moving no counters). CI green for both
-jobs at `9d812a4`; nextest 188/188; clippy, fmt, deny, machete, trace (27/40), secret scan clean.
+**M3 — done, hardened.** M3 (Memory and schedules) closed at `9d812a4` and was hardened at
+`ca0af8e` after a self-review caught two missed acceptance criteria and one silent bug:
+REQ-022 (memory documents with append-only revisions and `memory.write`/`read`/`list`/`remove`/
+`provider`), REQ-023 (cron-style routines with `@once`, next-run computation in the routine's IANA
+timezone, `routines.create`/`list`/`remove`), REQ-024 (the worker sweeps due routines into runs;
+`@once` fires once and deactivates; overlapping wakes coalesce; a retryable failure re-tries with
+backoff — 3 attempts, 60s doubling to a 1800s cap, `runs.not_before` gates the claim; past a
+threshold of five counted failures the routine pauses itself and **the owner is told** in the
+thread; a clean completion resets the budget) and REQ-025 (`routines.runNow` fires the routine
+once as a normal turn, attributed but moving no counters). The Postgres `INSERT INTO runs`
+never wrote `routine_id` (the in-memory adapter masked it): fixed, with a fresh-queue Postgres
+regression test. CI green for both jobs at `ca0af8e`; nextest 192/192; clippy, fmt, deny,
+machete, trace (27/40), secret scan clean; web suite re-verified locally at `ca0af8e` (build,
+typecheck, lint, 20 passed / 3 skipped).
 
-Row order matches implementation order within M3: REQ-022 → REQ-023 → REQ-024 → REQ-025.
+Row order matches implementation order within M3: REQ-022 → REQ-023 → REQ-024 → REQ-024 (hardening) → REQ-025.
 
 Slices delivered:
 
