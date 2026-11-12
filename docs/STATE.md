@@ -16,7 +16,14 @@
   the model prompt; the scripted provider ignores context until then, which is honestly currently
   everywhere (same story as REQ-016's tool-call loop).
 
-Row order matches implementation order. Slices still to land this milestone: REQ-025 (run now).
+- **REQ-025 (run now, SHOULD)** is done: `routines.runNow` fires a routine once as a normal
+  turn. The trial run is attributed to the routine (`routine_id`, trigger `User` so the failure
+  counters do not move) but it does not depend on or advance the cron schedule — the routine
+  keeps its `active` state and `nextRunAt` untouched. The provider pass uses the routine's
+  prompt when a run carries `routine_id`, because a routine-woken history carries no person
+  message. The wire body is `{routineId}`; the reply is `{routineId, runId, status}`.
+
+Row order matches implementation order.
 
 - **REQ-024 (dispatch, retry, coalescing, MUST)** is done: the worker's poll loop sweeps due
   routines before claiming runs (`boma_app::usecases::dispatch_routines`), creates a

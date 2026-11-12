@@ -1166,3 +1166,98 @@ async fn req_023_a_created_routine_wakes_on_its_next_instant_the_wire_agrees_on(
     assert_eq!(routines.len(), 2);
     assert_eq!(routines[0]["name"], serde_json::json!("Morning digest"));
 }
+
+#[tokio::test]
+async fn req_025_an_on_demand_trial_runs_the_routine_as_a_normal_turn() {
+    let world = world().await;
+    let create = post(
+        state(&world.app),
+        "/rpc/routines/create",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "name": "Trial",
+            "prompt": "Summarise the week.",
+            "crons": ["@once"],
+            "timezone": "UTC",
+            "active": true,
+            "notify": false
+        }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::OK);
+    let created = json(create).await;
+    let routine_id = created["id"].as_str().expect("a routine id").to_owned();
+
+    // Firing it on demand starts a queued run — a normal turn, not a cron tick.
+    let fired = post(
+        state(&world.app),
+        "/rpc/routines/runNow",
+        Some(&world.caller),
+        serde_json::json!({"routineId": routine_id}),
+    )
+    .await;
+    assert_eq!(fired.status(), StatusCode::OK);
+    let body = json(fired).await;
+    assert_eq!(body["routineId"], serde_json::json!(routine_id));
+    assert_eq!(body["status"], serde_json::json!("queued"));
+
+    // The run exists, attributed to the routine; a member can see what fired and why.
+    let run_id = boma_domain::RunId::new(body["runId"].as_str().expect("a run id").to_owned())
+        .expect("an id is valid");
+    let context = TestApp::member_context(
+        &boma_domain::SpaceId::new(world.caller.space_id.clone()).expect("an id is valid"),
+        &test_app_seed_user_id(&world.app, "person@example.com").await,
+    );
+    let run = world
+        .app
+        .app()
+        .stores
+        .runs
+        .find(&context, &run_id)
+        .await
+        .expect("the run answers")
+        .expect("the run exists");
+    assert_eq!(run.trigger, boma_domain::RunTrigger::User);
+    assert_eq!(
+        run.routine_id.map(|id| id.as_str().to_owned()).as_deref(),
+        Some(routine_id.as_str())
+    );
+
+    // The trial does not move the routine: it is still active, next wake unchanged.
+    let after = post(
+        state(&world.app),
+        "/rpc/routines/list",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    let body = json(after).await;
+    let routine = &body["routines"][0];
+    assert_eq!(routine["id"], serde_json::json!(routine_id));
+    assert_eq!(routine["active"], serde_json::json!(true));
+
+    // A routine the caller cannot see is not found: a trial cannot leak to another space.
+    let missing = post(
+        state(&world.app),
+        "/rpc/routines/runNow",
+        Some(&world.caller),
+        serde_json::json!({"routineId": "rtn_does_not_exist"}),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+/// Reads the seeded user id back out of the in-memory store, as the member context needs it.
+async fn test_app_seed_user_id(test_app: &TestApp, email: &str) -> boma_domain::UserId {
+    test_app
+        .app()
+        .stores
+        .users
+        .find_by_email(&boma_domain::Email::new(email).expect("the address is valid"))
+        .await
+        .expect("the lookup answers")
+        .expect("the person exists")
+        .0
+        .id
+}

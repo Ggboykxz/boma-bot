@@ -25,9 +25,9 @@ use crate::{
     wire::{
         AnswerReply, BotReply, BotsListReply, CancelReply, InvitationReply, MemoryDocumentReply,
         MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
-        MessagesReply, ReactReply, RosterBotView, RoutineRemoveReply, RoutineView,
-        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SendReply,
-        SnoozeReply, SpaceReply, ThreadHeadReply,
+        MessagesReply, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
+        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
+        SendReply, SnoozeReply, SpaceReply, ThreadHeadReply,
     },
 };
 
@@ -79,6 +79,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::ROUTINES, "create"),
         (namespaces::ROUTINES, "list"),
         (namespaces::ROUTINES, "remove"),
+        (namespaces::ROUTINES, "runNow"),
     ]
 }
 
@@ -178,6 +179,9 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::ROUTINES, "remove") => routines_remove(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ROUTINES, "runNow") => routines_run_now(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -738,6 +742,26 @@ async fn routines_remove(
         routine_id: outcome.routine_id.as_str().to_owned(),
         removed: outcome.removed,
     })
+}
+
+/// The body of `routines.runNow` (REQ-025).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RoutinesRunNowRequest {
+    /// The routine to fire, once, as a normal turn.
+    routine_id: String,
+}
+
+/// `routines.runNow` — fire a routine once as a normal turn (REQ-025).
+async fn routines_run_now(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<RoutineRunNowReply, ApiError> {
+    let request: RoutinesRunNowRequest = parse(&body)?;
+    let outcome =
+        usecases::routines_run_now(state.app(), &auth.actor.context, &request.routine_id).await?;
+    Ok(RoutineRunNowReply::from(&outcome))
 }
 
 /// The body of `threads.react`.

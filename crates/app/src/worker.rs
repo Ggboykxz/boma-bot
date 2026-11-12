@@ -168,7 +168,17 @@ impl Worker {
             .map(|page| page.messages)
             .unwrap_or_default();
         let latest = history.iter().map(|message| message.seq).max().unwrap_or(0);
-        let prompt = prompt_of(&history);
+        // A routine-woken run has no person message in the history: the prompt is the routine's.
+        let prompt = match &run.routine_id {
+            Some(routine_id) => self
+                .app
+                .stores
+                .routines
+                .find(context, routine_id)
+                .await?
+                .map_or_else(|| prompt_of(&history), |routine| routine.prompt),
+            None => prompt_of(&history),
+        };
         // The catalogue is built per pass: the bot's grant and the space's installs can change
         // between one pass and the next (REQ-016).
         let tools = usecases::tool_catalogue(&self.app, context, claimed.bot.id.as_str()).await?;

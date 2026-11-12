@@ -327,6 +327,28 @@ pub struct RoutineWriteReply {
     pub timezone: Option<String>,
 }
 
+/// The reply of `routines.runNow` (REQ-025).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineRunNowReply {
+    /// The routine that was fired.
+    pub routine_id: String,
+    /// The run the trial started.
+    pub run_id: String,
+    /// Where that run is.
+    pub status: String,
+}
+
+impl From<&boma_app::usecases::RoutineRunNowOutcome> for RoutineRunNowReply {
+    fn from(outcome: &boma_app::usecases::RoutineRunNowOutcome) -> Self {
+        Self {
+            routine_id: outcome.routine.id.as_str().to_owned(),
+            run_id: outcome.run.id.as_str().to_owned(),
+            status: outcome.run.status.as_str().to_owned(),
+        }
+    }
+}
+
 impl From<&boma_app::ports::Routine> for RoutineWriteReply {
     fn from(routine: &boma_app::ports::Routine) -> Self {
         Self {

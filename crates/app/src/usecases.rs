@@ -951,6 +951,11 @@ pub async fn record_routine_completed(app: &App, run: &boma_domain::Run) -> Resu
     let Some(routine_id) = &run.routine_id else {
         return Ok(());
     };
+    if run.trigger != boma_domain::RunTrigger::Routine {
+        // A trial run starts from the routine but is a normal turn: it does not move the
+        // failure counters (REQ-025).
+        return Ok(());
+    }
     app.stores
         .routines
         .record_completed(
@@ -972,6 +977,11 @@ pub async fn record_routine_failed(app: &App, run: &boma_domain::Run) -> Result<
     let Some(routine_id) = &run.routine_id else {
         return Ok(());
     };
+    if run.trigger != boma_domain::RunTrigger::Routine {
+        // A trial run starts from the routine but is a normal turn: it does not move the
+        // failure counters (REQ-025).
+        return Ok(());
+    }
     app.stores
         .routines
         .record_failure(
@@ -1072,6 +1082,59 @@ pub async fn dispatch_routines(app: &App) -> Result<u64, AppError> {
             .await?;
     }
     Ok(dispatched)
+}
+
+/// The outcome of `routines.runNow` — a one-shot turn with the routine's prompt (REQ-025).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineRunNowOutcome {
+    /// The routine that was fired.
+    pub routine: crate::ports::Routine,
+    /// The run the trial started.
+    pub run: boma_domain::Run,
+}
+
+/// Starts one turn with the routine's prompt, without changing the schedule (REQ-025).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the routine does not exist in the caller's tenant, and
+/// [`AppError::Rule`] when the run cannot be started.
+pub async fn routines_run_now(
+    app: &App,
+    context: &TenantContext,
+    routine_id: &str,
+) -> Result<RoutineRunNowOutcome, AppError> {
+    let routine = app
+        .stores
+        .routines
+        .find(
+            context,
+            &boma_domain::RoutineId::new(routine_id.to_owned()).map_err(|_| AppError::NotFound)?,
+        )
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let run = app
+        .stores
+        .runs
+        .create(crate::ports::NewRun {
+            id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+            space_id: routine.space_id.clone(),
+            bot_id: routine.bot_id.clone(),
+            thread_id: routine.thread_id.clone(),
+            user_id: context.user_id().cloned().ok_or(AppError::NotFound)?,
+            // A trial run is a normal member-initiated turn; the counters don't move (REQ-025).
+            trigger: boma_domain::RunTrigger::User,
+            client_nonce: None,
+            source_message_id: None,
+            created_at: app.services.clock.now(),
+            model_provider: None,
+            model_id: None,
+            model_pinned: false,
+            parent_run_id: None,
+            routine_id: Some(routine.id.clone()),
+        })
+        .await?;
+    Ok(RoutineRunNowOutcome { routine, run })
 }
 
 /// The outcome of one snooze call (REQ-009).
