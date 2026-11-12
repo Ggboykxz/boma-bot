@@ -289,6 +289,9 @@ fn seed_history(
         lease_expires_at: None,
         steering_from_seq: None,
         steering_consumed_seq: 0,
+        model_provider: None,
+        model_id: None,
+        model_pinned: false,
     });
 }
 

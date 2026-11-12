@@ -268,6 +268,9 @@ mod tests {
             lease_expires_at: None,
             steering_from_seq: None,
             steering_consumed_seq: 0,
+            model_provider: None,
+            model_id: None,
+            model_pinned: false,
         };
         let json = serde_json::to_value(RunView::new(&run, None)).expect("the view serialises");
         assert_eq!(json["promptSnippet"], serde_json::Value::Null);

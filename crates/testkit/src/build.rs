@@ -326,6 +326,13 @@ impl TestAppBuilder {
             Arc::clone(&tokens) as Arc<dyn TokenGenerator>,
             Arc::clone(&ids) as Arc<dyn IdGenerator>,
             Arc::clone(&clock) as Arc<dyn Clock>,
+            boma_domain::model::DeploymentModels {
+                reachable: vec![
+                    "openai/gpt-5".to_owned(),
+                    "anthropic/claude-sonnet".to_owned(),
+                ],
+                default: "anthropic/claude-sonnet".to_owned(),
+            },
         );
 
         TestApp {
@@ -963,6 +970,62 @@ mod tests {
             "the model never sees a tool the bot may not use"
         );
         let _ = thread_id;
+    }
+
+    #[tokio::test]
+    async fn req_015_a_pinned_model_the_deployment_cannot_reach_fails_visibly() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        // The bot is pinned to a model this deployment cannot reach: the send must refuse,
+        // and the run must never execute elsewhere silently (REQ-015).
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Pinned", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+        let database = test.database();
+        database.seed_bot_model(&bot_id, "openai/gpt-6", true);
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await;
+        assert!(outcome.is_err(), "an unreachable pinned model must not run");
+
+        // A reachable unpinned choice falls back to itself: the run executes on the bot's
+        // preference, not silently on the deployment default (REQ-015).
+        database.seed_bot_model(&bot_id, "openai/gpt-5", false);
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the fallback resolves");
+        assert_eq!(outcome.run.model_provider.as_deref(), Some("openai"));
+        assert_eq!(outcome.run.model_id.as_deref(), Some("gpt-5"));
     }
 
     #[tokio::test]

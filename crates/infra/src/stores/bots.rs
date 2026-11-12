@@ -37,8 +37,9 @@ impl BotStore for PostgresBotStore {
             Box::pin(async move {
                 // The bot first: the thread points at it.
                 sqlx::query(
-                    "INSERT INTO bots (id, space_id, user_id, name, description, color, thread_id, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)",
+                    "INSERT INTO bots (id, space_id, user_id, name, description, color, thread_id,
+                                     created_at, model_provider, model_id, model_pinned)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10, $11)",
                 )
                 .bind(bot.id.as_str())
                 .bind(bot.space_id.as_str())
@@ -48,6 +49,9 @@ impl BotStore for PostgresBotStore {
                 .bind(&bot.color)
                 .bind(thread.id.as_str())
                 .bind(&bot.created_at)
+                .bind(Option::<String>::None)
+                .bind(Option::<String>::None)
+                .bind(false)
                 .execute(&mut *conn)
                 .await
                 .map_err(tenant::unavailable)?;
@@ -77,6 +81,9 @@ impl BotStore for PostgresBotStore {
                         archived_at: None,
                         created_at: bot.created_at.clone(),
                         enabled_tools: Vec::new(),
+                        model_provider: None,
+                        model_id: None,
+                        model_pinned: false,
                     },
                     Thread {
                         id: thread.id,
@@ -105,7 +112,7 @@ impl BotStore for PostgresBotStore {
                     "SELECT id, space_id, user_id, name, description, color, thread_id,
                             boma.rfc3339(archived_at) AS archived_at,
                             boma.rfc3339(created_at) AS created_at,
-                            enabled_tools
+                            enabled_tools, model_provider, model_id, model_pinned
                      FROM bots
                      WHERE id = $1",
                 )

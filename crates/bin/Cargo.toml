@@ -27,4 +27,5 @@ tracing-subscriber = { workspace = true }
 
 boma-api = { workspace = true }
 boma-app = { workspace = true }
+boma-domain = { workspace = true }
 boma-infra = { workspace = true }

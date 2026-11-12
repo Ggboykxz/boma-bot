@@ -16,6 +16,7 @@ pub mod error;
 pub mod event;
 pub mod ids;
 pub mod message;
+pub mod model;
 pub mod run;
 pub mod tenancy;
 pub mod thread;
@@ -32,6 +33,7 @@ pub use ids::{
 pub use message::{
     Block, Message, MessagePage, MessageRole, cursor_from_seq, parse_cursor, validate_message_text,
 };
+pub use model::{DeploymentModels, ModelChoice, ModelPreferences, resolve};
 pub use run::{Run, RunStatus, RunTrigger};
 pub use tenancy::{SystemReason, TenantContext};
 pub use thread::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Thread, validate_page_size};

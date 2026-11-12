@@ -44,6 +44,8 @@ pub enum DomainError {
     InvalidNonce,
     /// An event type string that is not part of the vocabulary.
     UnknownEventType(String),
+    /// A pinned model is not reachable on this deployment (REQ-015).
+    PinnedModelUnreachable(String),
     /// A bot that is archived cannot receive a message.
     ArchivedBot,
     /// A user already exists with that address.
@@ -78,6 +80,12 @@ impl fmt::Display for DomainError {
             Self::InvalidCursor(_) => write!(f, "the cursor is not one this product wrote"),
             Self::InvalidNonce => write!(f, "the client nonce is not acceptable"),
             Self::UnknownEventType(value) => write!(f, "unknown event type: {value}"),
+            Self::PinnedModelUnreachable(value) => {
+                write!(
+                    f,
+                    "the pinned model {value} is not reachable on this deployment"
+                )
+            }
             Self::ArchivedBot => write!(f, "the bot is archived"),
             Self::EmailAlreadyTaken => write!(f, "the address is already registered"),
             Self::UnknownSystemReason(value) => write!(f, "unknown system reason: {value}"),

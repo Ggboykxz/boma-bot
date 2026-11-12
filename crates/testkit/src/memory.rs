@@ -488,6 +488,26 @@ impl MemoryDatabase {
         bot.bot.enabled_tools = enabled_tools;
     }
 
+    /// Sets a bot's model preference: the catalogue key and whether it is pinned.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the bot does not exist; a test that seeds a model for a bot that was never
+    /// created is a bug in the seed.
+    pub fn seed_bot_model(&self, bot_id: &BotId, key: &str, pinned: bool) {
+        let (provider, model) = key.split_once('/').unwrap_or(("custom", key));
+        let mut state = write(&self.state);
+        #[allow(clippy::expect_used)]
+        let bot = state
+            .bots
+            .iter_mut()
+            .find(|row| row.bot.id == *bot_id)
+            .expect("the bot exists");
+        bot.bot.model_provider = Some(provider.to_owned());
+        bot.bot.model_id = Some(model.to_owned());
+        bot.bot.model_pinned = pinned;
+    }
+
     /// The organization the spaces of a person belong to.
     ///
     /// It is the organization of the first space the person belongs to, and `None` when the person
@@ -903,6 +923,9 @@ impl BotStore for MemoryBotStore {
             archived_at: None,
             created_at: bot.created_at.clone(),
             enabled_tools: Vec::new(),
+            model_provider: None,
+            model_id: None,
+            model_pinned: false,
         };
         let stored_thread = Thread {
             id: thread.id.clone(),
@@ -1262,6 +1285,9 @@ impl RunStore for MemoryRunStore {
             lease_expires_at: None,
             steering_from_seq: None,
             steering_consumed_seq: 0,
+            model_provider: run.model_provider,
+            model_id: run.model_id,
+            model_pinned: run.model_pinned,
         };
         state.runs.push(RunRow {
             run: stored.clone(),
@@ -2129,6 +2155,9 @@ mod tests {
             client_nonce: nonce.map(str::to_owned),
             source_message_id: None,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
+            model_provider: None,
+            model_id: None,
+            model_pinned: false,
         }
     }
 

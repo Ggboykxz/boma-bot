@@ -53,15 +53,16 @@ impl RunStore for PostgresRunStore {
                 let row = sqlx::query_as::<_, RunRow>(
                     "INSERT INTO runs (
                         id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
-                        source_message_id, created_at
+                        source_message_id, created_at, model_provider, model_id, model_pinned
                      )
-                     VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9::timestamptz)
+                     VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9::timestamptz, $10, $11, $12)
                      RETURNING id, space_id, bot_id, thread_id, user_id, status, trigger,
                                client_nonce, source_message_id, lease_owner, lease_fence,
                                boma.rfc3339(lease_expires_at) AS lease_expires_at,
                                boma.rfc3339(started_at) AS started_at,
                                boma.rfc3339(completed_at) AS completed_at, error,
                                steering_from_seq, steering_consumed_seq,
+                               model_provider, model_id, model_pinned,
                                boma.rfc3339(created_at) AS created_at",
                 )
                 .bind(run.id.as_str())
@@ -77,6 +78,9 @@ impl RunStore for PostgresRunStore {
                         .map(boma_domain::MessageId::as_str),
                 )
                 .bind(&run.created_at)
+                .bind(run.model_provider.clone())
+                .bind(run.model_id.clone())
+                .bind(run.model_pinned)
                 .fetch_one(&mut *conn)
                 .await;
 
@@ -119,6 +123,7 @@ impl RunStore for PostgresRunStore {
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
                             steering_from_seq, steering_consumed_seq,
+                            model_provider, model_id, model_pinned,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -151,6 +156,7 @@ impl RunStore for PostgresRunStore {
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
                             steering_from_seq, steering_consumed_seq,
+                            model_provider, model_id, model_pinned,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -182,6 +188,7 @@ impl RunStore for PostgresRunStore {
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
                             steering_from_seq, steering_consumed_seq,
+                            model_provider, model_id, model_pinned,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -300,6 +307,7 @@ impl RunStore for PostgresRunStore {
                      RETURNING r.id, r.space_id, r.bot_id, r.thread_id, r.user_id, r.status, r.trigger,
                                r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
                                r.steering_from_seq, r.steering_consumed_seq,
+                               r.model_provider, r.model_id, r.model_pinned,
                                boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                                boma.rfc3339(r.started_at) AS started_at,
                                boma.rfc3339(r.completed_at) AS completed_at, r.error,
@@ -379,6 +387,7 @@ impl RunStore for PostgresRunStore {
                     "SELECT r.id, r.space_id, r.bot_id, r.thread_id, r.user_id, r.status, r.trigger,
                             r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
                             r.steering_from_seq, r.steering_consumed_seq,
+                            r.model_provider, r.model_id, r.model_pinned,
                             boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(r.started_at) AS started_at,
                             boma.rfc3339(r.completed_at) AS completed_at, r.error,

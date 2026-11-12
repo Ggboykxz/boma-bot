@@ -290,6 +290,15 @@ pub struct Run {
     /// Anything newer is still pending steering (REQ-003).
     #[serde(default)]
     pub steering_consumed_seq: i64,
+    /// The provider the run resolved this model to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    /// The model identifier the run resolved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Whether the resolved model was pinned: a pinned model is never substituted silently.
+    #[serde(default)]
+    pub model_pinned: bool,
 }
 
 impl Run {
@@ -307,6 +316,16 @@ impl Run {
     #[must_use]
     pub fn holds_lease(&self, owner: &str, fence: i64) -> bool {
         self.lease_owner.as_deref() == Some(owner) && self.lease_fence == fence
+    }
+
+    /// The model the run asked for, pinned or not (REQ-015).
+    #[must_use]
+    pub fn model(&self) -> Option<(&str, &str, bool)> {
+        Some((
+            self.model_provider.as_deref()?,
+            self.model_id.as_deref()?,
+            self.model_pinned,
+        ))
     }
 }
 

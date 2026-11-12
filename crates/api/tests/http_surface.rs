@@ -97,6 +97,13 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::ScriptedTokens::default()),
                 std::sync::Arc::new(boma_testkit::ScriptedIds::counter()),
                 std::sync::Arc::new(boma_testkit::ScriptedClock::fixed("2026-01-01T00:00:00Z")),
+                boma_domain::model::DeploymentModels {
+                    reachable: vec![
+                        "openai/gpt-5".to_owned(),
+                        "anthropic/claude-sonnet".to_owned(),
+                    ],
+                    default: "anthropic/claude-sonnet".to_owned(),
+                },
             ),
         ),
     )

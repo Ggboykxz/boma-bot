@@ -403,6 +403,21 @@ pub async fn send_message(
         });
     }
 
+    // The model is picked before the run exists (REQ-015): a pinned choice the deployment cannot
+    // reach fails visibly instead of silently running elsewhere.
+    let preferences = boma_domain::model::ModelPreferences {
+        bot: bot.model_id.clone().map(|model| {
+            let provider = bot
+                .model_provider
+                .clone()
+                .unwrap_or_else(|| "custom".to_owned());
+            (format!("{provider}/{model}"), bot.model_pinned)
+        }),
+        space: None,
+        person: None,
+    };
+    let choice = boma_domain::model::resolve(&preferences, &app.services.models)?;
+
     let run = app
         .stores
         .runs
@@ -416,6 +431,9 @@ pub async fn send_message(
             client_nonce: request.client_nonce.clone(),
             source_message_id: Some(message.message.id.clone()),
             created_at: now,
+            model_provider: Some(choice.provider),
+            model_id: Some(choice.model),
+            model_pinned: choice.pinned,
         })
         .await?;
 

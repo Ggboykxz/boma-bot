@@ -100,6 +100,8 @@ pub struct Services {
     pub ids: Arc<dyn IdGenerator>,
     /// Tells the time.
     pub clock: Arc<dyn Clock>,
+    /// The models this deployment can reach, and the fallback it executes on.
+    pub models: boma_domain::model::DeploymentModels,
 }
 
 impl Services {
@@ -111,6 +113,7 @@ impl Services {
         tokens: Arc<dyn TokenGenerator>,
         ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
+        models: boma_domain::model::DeploymentModels,
     ) -> Self {
         Self {
             publisher,
@@ -118,6 +121,7 @@ impl Services {
             tokens,
             ids,
             clock,
+            models,
         }
     }
 }

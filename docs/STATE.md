@@ -20,8 +20,15 @@
 - **REQ-007 (pending cards, MUST)** is done (`29bc3cb`): the card block renders as a region with an
   action button and an answer textbox, so a pending question stays answerable while the composer
   keeps working. The pending-question-card UI golden replays.
-- **REQ-016 (per-run tool catalogue, MUST)** is done in its M2 slice (`0648403`-descendant, not yet
-  committed separately): a run receives only the tools its bot may use. The catalogue anchors on
+- **REQ-015 (model selection with fallbacks, MUST)** is done for its M2 slice: a bot may carry a
+  model preference (provider, model, pinned); a pinned model the deployment cannot reach fails
+  visibly at `send_message` with the model named — never silently executes elsewhere; an unpinned
+  choice falls back to the deployment default (`DeploymentModels` on `Services`, seeded from
+  `Config` by the binary). Domain `resolve` has 5 unit tests; the testkit worker test asserts the
+  resolved provider/model on the run. Migration `0006_model.sql` adds the three model columns on
+  `bots` and `runs`; migration `0005_tools.sql` (REQ-016) is already in; `model.rs` is the new
+  pure-rules module. BYOK / OAuth provider credentials are M8 (money and models), not wired in M2.
+- **REQ-016 (per-run tool catalogue, MUST)** is done in its M2 slice: a run receives only the tools its bot may use. The catalogue anchors on
   the bot (a `TenantContext::System` worker may ask), reads the space's enabled installs and the
   bot's grant, and a bot with an empty grant sees every enabled install. The catalogue is built
   per provider pass, never cached, and the model receives only what it may use. `BUILTIN_TOOLS`
@@ -36,11 +43,13 @@
   `Card`/`CardKind`/`CardStatus`/`ExternalEffect`; migration `0004_cards.sql` creates `cards` and
   `external_effects` with RLS.
 
-Remaining in M2, in dependency order: REQ-015 model fallback, REQ-008 replies/reactions, REQ-019
-delegation, REQ-009 read state (SHOULD); the tool-call loop and the refusal audit event from
-REQ-016 land with the agent engine that makes the call (milestone M3/M5).
+Remaining in M2, in dependency order: REQ-008 replies/reactions, REQ-019 delegation, REQ-009
+read state (SHOULD); the tool-call loop and the refusal audit event from REQ-016 are the last
+piece of REQ-016 and lands with the agent engine that makes the call (milestone M3/M5); the BYOK
+and provider OAuth login legs of REQ-015 land with M8 (models and credentials).
 
-The current commit carries REQ-003, REQ-006, REQ-007, REQ-016 and REQ-017; M2 is not done yet.
+The current commit carries REQ-003, REQ-006, REQ-007, REQ-015, REQ-016 and REQ-017; M2 is not
+done yet.
 
 ## Done
 

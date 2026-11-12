@@ -192,6 +192,12 @@ pub struct NewRun {
     pub source_message_id: Option<boma_domain::MessageId>,
     /// When it was created.
     pub created_at: String,
+    /// The provider the run resolved, or `None` when the resolver has not run yet.
+    pub model_provider: Option<String>,
+    /// The model the run resolved, or `None` when the resolver has not run yet.
+    pub model_id: Option<String>,
+    /// Whether the resolved model is pinned: a pinned decision never falls back silently.
+    pub model_pinned: bool,
 }
 
 /// An event to append.

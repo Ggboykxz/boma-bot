@@ -82,6 +82,13 @@ fn build_app(database: &Postgres) -> App {
             Arc::new(TokenGenerator),
             Arc::new(IdGenerator),
             Arc::new(SystemClock),
+            boma_domain::model::DeploymentModels {
+                reachable: vec![
+                    "openai/gpt-5".to_owned(),
+                    "anthropic/claude-sonnet".to_owned(),
+                ],
+                default: "anthropic/claude-sonnet".to_owned(),
+            },
         ),
     )
 }

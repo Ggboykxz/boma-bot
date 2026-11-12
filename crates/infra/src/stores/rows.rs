@@ -65,6 +65,9 @@ pub(crate) struct BotRow {
     pub(crate) archived_at: Option<String>,
     pub(crate) created_at: String,
     pub(crate) enabled_tools: Vec<String>,
+    pub(crate) model_provider: Option<String>,
+    pub(crate) model_id: Option<String>,
+    pub(crate) model_pinned: bool,
 }
 
 /// A row of `threads`.
@@ -114,6 +117,9 @@ pub(crate) struct RunRow {
     pub(crate) error: Option<String>,
     pub(crate) steering_from_seq: Option<i64>,
     pub(crate) steering_consumed_seq: i64,
+    pub(crate) model_provider: Option<String>,
+    pub(crate) model_id: Option<String>,
+    pub(crate) model_pinned: bool,
     pub(crate) created_at: String,
 }
 
@@ -221,6 +227,9 @@ pub(crate) fn bot(row: BotRow) -> Result<Bot, AppError> {
         archived_at: row.archived_at,
         created_at: row.created_at,
         enabled_tools: row.enabled_tools,
+        model_provider: row.model_provider,
+        model_id: row.model_id,
+        model_pinned: row.model_pinned,
     })
 }
 
@@ -278,6 +287,9 @@ pub(crate) fn run(row: RunRow) -> Result<Run, AppError> {
         lease_expires_at: row.lease_expires_at,
         steering_from_seq: row.steering_from_seq,
         steering_consumed_seq: row.steering_consumed_seq,
+        model_provider: row.model_provider,
+        model_id: row.model_id,
+        model_pinned: row.model_pinned,
     })
 }
 

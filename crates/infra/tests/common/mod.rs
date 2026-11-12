@@ -400,6 +400,9 @@ pub fn new_run(fixture: &Fixture, suffix: &str, nonce: Option<&str>) -> boma_app
         client_nonce: nonce.map(str::to_owned),
         source_message_id: None,
         created_at: CREATED_AT.to_owned(),
+        model_provider: None,
+        model_id: None,
+        model_pinned: false,
     }
 }
 

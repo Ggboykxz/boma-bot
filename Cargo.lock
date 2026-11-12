@@ -278,6 +278,7 @@ dependencies = [
  "axum",
  "boma-api",
  "boma-app",
+ "boma-domain",
  "boma-infra",
  "clap",
  "thiserror",

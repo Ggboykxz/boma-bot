@@ -40,6 +40,15 @@ pub struct Bot {
     /// is the grant: the catalogue contains only these keys.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enabled_tools: Vec<String>,
+    /// The provider this bot is pinned to, when it is not allowed to fall back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    /// The model this bot asks for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Whether the bot's model is pinned: a pinned choice never falls back (REQ-015).
+    #[serde(default)]
+    pub model_pinned: bool,
 }
 
 impl Bot {
