@@ -63,7 +63,9 @@ rules to load.
   - The traceability ratchet moved **down again** as requirements landed: 39 missing of 58 named
     (budget unchanged at 40). The M1 web goldens are counted by the Playwright manifest, and the
     two new ones (`REQ-001-send-message`, `REQ-012-run-statuses`) replay implemented.
-  - DEC-14 (the licence) is still the owner's decision; nothing was pushed (no remote configured).
+  - **DEC-14 is closed**: the owner accepted the MIT licence on 2026-11-12.
+  - The repository was pushed to a **public** GitHub remote (`boma-bot`) on 2026-11-12, with the
+    board's approval to publish everything, including `spec/` and the vendored BoardUI docs.
 - 2026-11-12 — Product name fixed by the owner: **Boma Bot** (`@boma/*`, `BOMA_*`, `com.boma.app`).
   Rebuild of the target analysed in `../re-workspace`. The analysed tree keeps its own identifiers so
   `file:line` citations stay valid.
@@ -285,6 +287,9 @@ Any other externally visible difference would be a DEVIATION needing owner appro
 
 ## Decisions needed
 
+Resolved since the first draft: **DEC-14** (MIT accepted by the owner, 2026-11-12).
+
+
 From `spec/06-decisions-needed.md`. Each has a recommendation recorded in an ADR; silence means the
 recommendation stands.
 
@@ -303,7 +308,7 @@ recommendation stands.
 | DEC-11 | Locales at v1 | en + fr + he | 014 |
 | DEC-12 | Asset reuse | Nothing visual reused | 015 |
 | DEC-13 | Keep RPC procedure names | Yes, for the documented ones | 003 |
-| DEC-14 | **Project licence** | MIT for now; the owner may change it | — (`docs/DEPENDENCIES.md`) |
+| DEC-14 | **Project licence** | MIT (owner accepted 2026-11-12) | — (`docs/DEPENDENCIES.md`) |
 
 ## Deferred requirements
 
