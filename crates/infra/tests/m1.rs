@@ -1277,3 +1277,155 @@ async fn req_024_a_due_routine_is_claimed_and_a_once_fire_deactivates_postgres()
 
     cleanup(&database, &organization_id, &email).await;
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the setup mirrors the dispatch fixture of the sibling tests
+async fn req_024_a_backoff_queued_run_waits_for_its_window_in_postgres() {
+    // The queue is global by design; this test depends on what the queue holds, so it gets
+    // a queue of its own.
+    let fresh = common::fresh_database().await;
+    let database = &fresh.database;
+    let app = app(database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "backoff").await;
+
+    let bot_id = BotId::new(ids().new_id("bot")).expect("an id is valid");
+    let thread_id = ThreadId::new(ids().new_id("thr")).expect("an id is valid");
+    let (bot, thread) = app
+        .stores
+        .bots
+        .create_with_thread(
+            NewBot {
+                id: bot_id.clone(),
+                space_id: space_id.clone(),
+                user_id: user_id.clone(),
+                name: "Analyst".to_owned(),
+                description: None,
+                color: None,
+                created_at: app.services.clock.now(),
+            },
+            NewThread {
+                id: thread_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot_id.clone(),
+                user_id: user_id.clone(),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+        .expect("the bot is created");
+
+    let routine_id = boma_domain::RoutineId::new(ids().new_id("rtn")).expect("an id is valid");
+    let created_at = app.services.clock.now();
+    app.stores
+        .routines
+        .create(
+            &context,
+            NewRoutine {
+                id: routine_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot.id.clone(),
+                thread_id: thread.id.clone(),
+                user_id: user_id.clone(),
+                name: "Morning digest".to_owned(),
+                prompt: "Summarise overnight commits.".to_owned(),
+                crons: vec!["* * * * *".to_owned()],
+                timezone: "UTC".to_owned(),
+                active: true,
+                notify: false,
+                next_run_at: Some("2000-01-01T00:00:00Z".to_owned()),
+                created_at: created_at.clone(),
+            },
+        )
+        .await
+        .expect("the routine is created");
+    assert_eq!(
+        boma_app::usecases::dispatch_routines(&app)
+            .await
+            .expect("the dispatch answers"),
+        1
+    );
+
+    // A worker claims the wake, the turn blows up with a dependency error, the automatic retry
+    // holds the re-queued run back.
+    let mut claimed = None;
+    for _ in 0..100 {
+        match app
+            .stores
+            .runs
+            .claim_next_queued("worker-backoff-1")
+            .await
+            .expect("the claim answers")
+        {
+            None => break,
+            Some(candidate) => {
+                if candidate.routine_id.as_ref() == Some(&routine_id) {
+                    claimed = Some(candidate);
+                    break;
+                }
+            }
+        }
+    }
+    let claimed = claimed.expect("the routine's run is claimed");
+    app.stores
+        .runs
+        .set_status(
+            &context,
+            &claimed.id,
+            RunStatus::Failed,
+            &app.services.clock.now(),
+            Some(claimed.lease_fence),
+            Some("a dependency is unavailable".to_owned()),
+        )
+        .await
+        .expect("the failure is recorded");
+    assert!(
+        boma_app::usecases::auto_retry_routine_run(&app, &claimed)
+            .await
+            .expect("the retry answers"),
+        "the schedule owes the wake another attempt"
+    );
+
+    // The backoff holds in the database, not just in the in-memory store: the claim predicate
+    // does not see the run at all (asserted as the predicate itself, so this test never leases
+    // another tenant's queued run out from under a parallel test).
+    let claimable: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM runs \
+         WHERE id = $1 AND status = 'queued' \
+           AND (not_before IS NULL OR not_before <= now())",
+    )
+    .bind(claimed.id.as_str())
+    .fetch_one(database.pool())
+    .await
+    .expect("the claim predicate answers");
+    assert_eq!(claimable, 0, "a backoff-queued run is not claimable");
+
+    // Once the window passes, the run is claimable again, one attempt on.
+    sqlx::query("UPDATE runs SET not_before = now() - interval '1 minute' WHERE id = $1")
+        .bind(claimed.id.as_str())
+        .execute(database.pool())
+        .await
+        .expect("the window is over");
+    let mut reclaimed = None;
+    for _ in 0..100 {
+        match app
+            .stores
+            .runs
+            .claim_next_queued("worker-backoff-3")
+            .await
+            .expect("the claim answers")
+        {
+            None => break,
+            Some(candidate) => {
+                if candidate.id == claimed.id {
+                    reclaimed = Some(candidate);
+                    break;
+                }
+            }
+        }
+    }
+    let reclaimed = reclaimed.expect("the backoff window passed and the run is claimable");
+    assert_eq!(reclaimed.attempt, 2);
+
+    cleanup(database, &organization_id, &email).await;
+    fresh.dispose().await;
+}

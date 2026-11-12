@@ -486,20 +486,25 @@ None. Anything proposed during the build goes here first, with the REQ it would 
 | `../re-workspace/notes/spec/**` | the contract itself |
 | `../re-workspace/target/rakazo/packages/core/src/run-state.ts` | the authoritative run-state table, to settle the `leased → queued` transition (2026-11-12) |
 | `../re-workspace/target/rakazo` (other paths) | only through the citations already recorded in the spec; not re-read in this session |
-- **REQ-024 (dispatch, retry, coalescing, MUST)** is done: the worker's poll loop sweeps due
-  routines before claiming runs (`boma_app::usecases::dispatch_routines`), creates a
-  `trigger: routine` run per fire, reschedules to the next cron occurrence (`next_run_at` on the
-  routine row), deactivates a spent `@once`, and resets the failure counter on completion. A
-  routine whose previous run is still open is **not** fired a second time: the wake is recorded
-  as `coalesced` and the schedule advances (no stampede). A failed routine-woken run counts into
-  the routine's `account_failures`; past a threshold of 5 consecutive failures the routine pauses
-  itself and stops firing. Failures reset on a clean completion via `record_completed`. No
-  backoff multiplier curve is implemented in this slice: consecutive failures re-fire on each
-  due cron interval, which is the honest default until the spec names a formula. Any run ending
-  `failed` counts (including account-level provider refusals). Routine-woken runs carry
-  `routine_id` on `runs` (migration `0015_run_routine_id.sql`). The worker tracks it on
-  completion/failure paths to move the routines store counters. The single-flight check is
-  `find_open_routine`: a co-worker may skip a wake whose run is already open elsewhere.
+- **REQ-024 (dispatch, retry, coalescing, MUST)** is done, including the two acceptance criteria
+  the first cut missed. The worker's poll loop sweeps due routines before claiming runs
+  (`boma_app::usecases::dispatch_routines`), creates a `trigger: routine` run per fire,
+  reschedules to the next cron occurrence (`next_run_at` on the routine row), deactivates a spent
+  `@once`, and resets the failure counter on completion. A routine whose previous run is still
+  open is **not** fired a second time: the wake is recorded as `coalesced` and the schedule
+  advances (no stampede). A failed routine-woken run whose failure is **retryable** retries with
+  backoff (migration `0016_run_not_before.sql`; `runs.not_before` gates the claim): up to
+  [`MAX_ATTEMPTS`] = 3 attempts, 60 s × 2^(n-1) capped at 1800 s
+  (`boma_domain::run::retry_delay_seconds`); only then does the failure count toward
+  `account_failures`. Past a threshold of 5 consecutive failures the routine pauses itself and
+  **the owner is told** — a `System` message lands in the thread with the failure story, always
+  on pause, and per run for routines created with `notify: true`. Failures reset on a clean
+  completion via `record_completed`. A run ending `failed` whose failure is **not** retryable
+  counts immediately. Routine-woken runs carry `routine_id` on `runs` (migration
+  `0015_run_routine_id.sql`) — and the Postgres `INSERT INTO runs` forgot to write it (fixed in
+  the same slice; the in-memory adapter masked the omission, so dispatch/coalescing/attribution
+  only ever worked in tests). The single-flight check is `find_open_routine`: a co-worker may
+  skip a wake whose run is already open elsewhere.
 - **REQ-025 (run now, SHOULD)** is done: `routines.runNow` fires a routine once as a normal
   turn. The trial run is attributed to the routine (`routine_id`, trigger `User` so the failure
   counters do not move) but it does not depend on or advance the cron schedule — the routine

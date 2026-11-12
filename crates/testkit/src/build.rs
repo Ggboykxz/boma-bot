@@ -1501,3 +1501,257 @@ async fn req_024_a_coalesced_routine_records_the_skip_instead_of_stampeding() {
     // The coalesced wake is scheduled onward: it is not due anymore.
     assert_eq!(routine.next_run_at.as_deref(), Some("2026-01-01T00:03:00Z"));
 }
+
+#[cfg(test)]
+mod routine_retry_tests {
+    //! The retry-with-backoff and pause-notice behaviour of routine dispatch (REQ-024).
+
+    use super::*;
+
+    /// What a seeded overdue routine hands back to the tests below.
+    struct SeededRoutine {
+        context: TenantContext,
+        routine_id: boma_domain::RoutineId,
+        thread_id: boma_domain::ThreadId,
+    }
+
+    /// Seeds a member, a bot and one overdue hourly-grade routine in UTC.
+    async fn seed_overdue_routine(
+        test: &TestApp,
+        name: &str,
+        prompt: &str,
+        notify: bool,
+    ) -> SeededRoutine {
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the space exists");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let routine_id = boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid");
+
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+            .await
+            .expect("the bot is created");
+        test.app()
+            .stores
+            .routines
+            .create(
+                &context,
+                boma_app::ports::NewRoutine {
+                    id: routine_id.clone(),
+                    space_id: space.id.clone(),
+                    bot_id: bot.bot.id.clone(),
+                    thread_id: bot.bot.thread_id.clone(),
+                    user_id: user_id.clone(),
+                    name: name.to_owned(),
+                    prompt: prompt.to_owned(),
+                    crons: vec!["0 7 * * *".to_owned()],
+                    timezone: "UTC".to_owned(),
+                    active: true,
+                    notify,
+                    next_run_at: Some("2025-12-31T23:59:00Z".to_owned()),
+                    created_at: "2026-01-01T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the routine is created");
+        SeededRoutine {
+            context,
+            routine_id,
+            thread_id: bot.bot.thread_id,
+        }
+    }
+
+    /// Reads the newest run the space holds.
+    async fn reload_latest_run(test: &TestApp, context: &TenantContext) -> boma_domain::Run {
+        let page = test
+            .app()
+            .stores
+            .runs
+            .list(context, None, None, 10)
+            .await
+            .expect("the activity answers");
+        page.runs.into_iter().next().expect("the run is listed").run
+    }
+
+    #[tokio::test]
+    async fn req_024_a_retryable_failure_backs_off_before_it_counts() {
+        let test = TestApp::builder()
+            .ids(vec![
+                "usr_1".to_owned(),
+                "org_1".to_owned(),
+                "spc_1".to_owned(),
+                "bot_1".to_owned(),
+                "thr_1".to_owned(),
+                "rtn_1".to_owned(),
+                "run_1".to_owned(),
+            ])
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let seeded = seed_overdue_routine(
+            &test,
+            "Morning digest",
+            "Summarise overnight commits.",
+            false,
+        )
+        .await;
+        let context = seeded.context;
+
+        assert_eq!(
+            boma_app::usecases::dispatch_routines(test.app())
+                .await
+                .expect("the dispatch answers"),
+            1
+        );
+
+        // An unscripted provider fails every pass with a dependency error: retryable.
+        let app = std::sync::Arc::new(test.app().clone());
+        let worker = boma_app::worker::Worker::new(
+            app,
+            std::sync::Arc::new(crate::ScriptedProvider::default()),
+            "worker-1".to_owned(),
+        );
+
+        // Attempt one fails and is retried with backoff, not counted.
+        assert!(worker.step().await.expect("the worker answers"));
+        let run = reload_latest_run(&test, &context).await;
+        assert_eq!(run.status, boma_domain::RunStatus::Queued);
+        assert_eq!(run.attempt, 2);
+        assert_eq!(run.not_before.as_deref(), Some("2026-01-01T00:01:00Z"));
+
+        // The backoff holds: the queue looks empty to a worker standing at the same instant.
+        assert!(!worker.step().await.expect("the worker answers"));
+
+        // Attempt two fails the same way; the backoff doubles.
+        test.clock().advance_to("2026-01-01T00:02:00Z");
+        assert!(worker.step().await.expect("the worker answers"));
+        let run = reload_latest_run(&test, &context).await;
+        assert_eq!(run.attempt, 3);
+        assert_eq!(run.not_before.as_deref(), Some("2026-01-01T00:04:00Z"));
+
+        // Attempt three burns the last retry the schedule owes: the failure counts.
+        test.clock().advance_to("2026-01-01T00:05:00Z");
+        assert!(worker.step().await.expect("the worker answers"));
+        let run = reload_latest_run(&test, &context).await;
+        assert_eq!(run.status, boma_domain::RunStatus::Failed);
+        let routine = test
+            .app()
+            .stores
+            .routines
+            .find(&context, &seeded.routine_id)
+            .await
+            .expect("the store answers")
+            .expect("the routine exists");
+        assert_eq!(routine.account_failures, 1);
+        assert!(
+            routine.active,
+            "one counted failure does not pause the routine"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_024_a_pausing_routine_tells_the_owner_in_the_thread() {
+        let test = TestApp::builder()
+            .ids(vec![
+                "usr_1".to_owned(),
+                "org_1".to_owned(),
+                "spc_1".to_owned(),
+                "bot_1".to_owned(),
+                "thr_1".to_owned(),
+                "rtn_1".to_owned(),
+                "run_1".to_owned(),
+                "msg_1".to_owned(),
+                "msg_2".to_owned(),
+                "msg_3".to_owned(),
+                "msg_4".to_owned(),
+                "msg_5".to_owned(),
+            ])
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let seeded =
+            seed_overdue_routine(&test, "Nightly triage", "Triage the unassigned bugs.", true)
+                .await;
+        let context = seeded.context;
+
+        // The dispatch fires the routine into a routine-woken run.
+        assert_eq!(
+            boma_app::usecases::dispatch_routines(test.app())
+                .await
+                .expect("the dispatch answers"),
+            1
+        );
+        let run = reload_latest_run(&test, &context).await;
+
+        // Five counted failures: per-run notices until the pause, then the pause notice, once.
+        for _ in 0..5 {
+            boma_app::usecases::record_routine_failed(test.app(), &run)
+                .await
+                .expect("the failure is recorded");
+        }
+
+        let routine = test
+            .app()
+            .stores
+            .routines
+            .find(&context, &seeded.routine_id)
+            .await
+            .expect("the store answers")
+            .expect("the routine exists");
+        assert!(!routine.active, "the routine paused itself");
+        assert_eq!(routine.account_failures, 5);
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &seeded.thread_id, None, 50)
+            .await
+            .expect("the thread answers");
+        let notices: Vec<String> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::System)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(|block| match block {
+                boma_domain::Block::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            notices.iter().any(|text| text.contains("failed (1")),
+            "the owner reads the failures as they land: {notices:?}"
+        );
+        assert_eq!(
+            notices
+                .iter()
+                .filter(|text| text.contains("paused"))
+                .count(),
+            1,
+            "exactly one pause notice is posted: {notices:?}"
+        );
+        let pause = notices
+            .iter()
+            .find(|text| text.contains("paused"))
+            .expect("the pause notice exists");
+        assert!(
+            pause.contains("Nightly triage"),
+            "the notice names the routine: {pause}"
+        );
+
+        // The paused routine no longer wakes.
+        assert_eq!(
+            boma_app::usecases::dispatch_routines(test.app())
+                .await
+                .expect("the dispatch answers"),
+            0
+        );
+    }
+}

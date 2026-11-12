@@ -26,6 +26,15 @@ pub enum AppError {
 }
 
 impl AppError {
+    /// Whether the failure is caused by the deployment, and a retry could plausibly succeed.
+    ///
+    /// REQ-024: a failed routine wake whose failure is retryable is tried again with backoff
+    /// before it counts toward the routine's failure budget.
+    #[must_use]
+    pub const fn is_retryable(&self) -> bool {
+        matches!(self, Self::Unavailable)
+    }
+
     /// Whether the failure is caused by the caller rather than by the deployment.
     #[must_use]
     pub const fn is_client_fault(&self) -> bool {

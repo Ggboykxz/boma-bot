@@ -329,6 +329,7 @@ fn seed_history(
         model_pinned: false,
         parent_run_id: None,
         routine_id: None,
+        not_before: None,
     });
 }
 
@@ -439,6 +440,7 @@ fn seed_failed_run(
         model_pinned: false,
         parent_run_id: None,
         routine_id: None,
+        not_before: None,
     });
 }
 

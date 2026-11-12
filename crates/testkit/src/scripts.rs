@@ -160,6 +160,17 @@ impl ScriptedClock {
         }
     }
 
+    /// Moves the clock to `instant`: every later read stands at it.
+    ///
+    /// A test that fast-forwards an automatic retry (REQ-024) cannot wait the backoff out in
+    /// real time; this is the honest way across it.
+    pub fn advance_to(&self, instant: &str) {
+        let mut state = lock(&self.state);
+        state.queue.clear();
+        instant.clone_into(&mut state.fallback);
+        instant.clone_into(&mut state.current);
+    }
+
     /// The instant the clock currently stands at.
     #[must_use]
     pub fn current(&self) -> String {

@@ -223,10 +223,21 @@ impl Worker {
                 })
             }
             Err(error) => {
+                let retryable = error.is_retryable();
                 tracing::warn!(run = %run.id, %error, "a run failed");
                 self.fail_run(context, &run, error).await?;
-                // A routine-woken run that failed counts toward the routine's failure budget;
-                // past the threshold the routine pauses itself (REQ-024).
+                // A routine-woken run whose failure is retryable is tried again with backoff
+                // before it burns the schedule's attempts; only then does it count toward the
+                // routine's failure budget (REQ-024).
+                if run.trigger == boma_domain::RunTrigger::Routine
+                    && retryable
+                    && usecases::auto_retry_routine_run(&self.app, &run).await?
+                {
+                    tracing::warn!(run = %run.id, "the routine wake failed retryable; re-queued with backoff");
+                    return Ok(PassOutcome::Failed);
+                }
+                // Past the threshold the routine pauses itself, and the owner is told;
+                // otherwise a per-run notice rides the thread when the routine asks for one.
                 usecases::record_routine_failed(&self.app, &run).await?;
                 Ok(PassOutcome::Failed)
             }

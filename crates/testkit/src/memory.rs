@@ -1451,6 +1451,7 @@ impl RunStore for MemoryRunStore {
             model_pinned: run.model_pinned,
             parent_run_id: run.parent_run_id,
             routine_id: run.routine_id,
+            not_before: None,
         };
         state.runs.push(RunRow {
             run: stored.clone(),
@@ -1458,7 +1459,12 @@ impl RunStore for MemoryRunStore {
         Ok(stored)
     }
 
-    async fn retry(&self, context: &TenantContext, id: &RunId) -> Result<Run, AppError> {
+    async fn retry(
+        &self,
+        context: &TenantContext,
+        id: &RunId,
+        not_before: Option<&str>,
+    ) -> Result<Run, AppError> {
         let mut state = write(&self.state);
         let Some(row) = state
             .runs
@@ -1480,6 +1486,7 @@ impl RunStore for MemoryRunStore {
         row.run.lease_expires_at = None;
         row.run.steering_from_seq = None;
         row.run.steering_consumed_seq = 0;
+        row.run.not_before = not_before.map(str::to_owned);
         Ok(row.run.clone())
     }
 
@@ -1610,6 +1617,13 @@ impl RunStore for MemoryRunStore {
         let mut candidate: Option<usize> = None;
         for (index, row) in state.runs.iter().enumerate() {
             if row.run.status != RunStatus::Queued && !expired_lease(&row.run) {
+                continue;
+            }
+            if row.run.status == RunStatus::Queued
+                && let Some(not_before) = row.run.not_before.as_deref()
+                && not_before > now.as_str()
+            {
+                // The automatic retry scheduled it for later (REQ-024): not yet due.
                 continue;
             }
             match candidate {

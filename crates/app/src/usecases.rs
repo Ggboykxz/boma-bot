@@ -942,6 +942,99 @@ fn routine_context(
     }
 }
 
+/// Formats `now + delay` as the RFC3339 instant at second precision, `Z`, like the clock writes.
+fn render_utc_plus(now: &str, delay_secs: u64) -> Result<String, AppError> {
+    use time::{Duration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+
+    let at = OffsetDateTime::parse(now, &Rfc3339).map_err(|_| AppError::Unavailable)?
+        + Duration::seconds(i64::try_from(delay_secs).unwrap_or(i64::MAX));
+    at.replace_nanosecond(0)
+        .map_err(|_| AppError::Unavailable)?
+        .to_offset(UtcOffset::UTC)
+        .format(&Rfc3339)
+        .map_err(|_| AppError::Unavailable)
+}
+
+/// Re-queues a routine-woken run for its next attempt, with backoff (REQ-024).
+///
+/// Returns `true` when the run was re-queued, `false` when it burned the attempts the schedule
+/// owes it and the failure must count toward the routine's budget instead. The re-queued run
+/// may not be claimed before `not_before`: a failing backend is not stampeded by its own
+/// routine.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the run is not in the caller's tenant,
+/// [`AppError::Conflict`] when it is not `failed`, and [`AppError::Unavailable`] when the clock
+/// or the store cannot answer.
+pub async fn auto_retry_routine_run(app: &App, run: &boma_domain::Run) -> Result<bool, AppError> {
+    if run.attempt >= boma_domain::run::MAX_ATTEMPTS {
+        return Ok(false);
+    }
+    let delay = boma_domain::run::retry_delay_seconds(run.attempt);
+    let not_before = render_utc_plus(&app.services.clock.now(), delay)?;
+    app.stores
+        .runs
+        .retry(
+            &routine_context(&run.user_id, &run.space_id),
+            &run.id,
+            Some(&not_before),
+        )
+        .await?;
+    Ok(true)
+}
+
+/// Posts a system notice into the routine's thread (REQ-024: the owner is told).
+///
+/// The notice is a `System` message: it lands in the thread like any other line and it never
+/// starts a run of its own. It carries no text a person wrote, so no redaction is due.
+async fn post_routine_notice(
+    app: &App,
+    context: &TenantContext,
+    routine: &crate::ports::Routine,
+    run: &boma_domain::Run,
+    text: String,
+) -> Result<(), AppError> {
+    let stored = app
+        .stores
+        .messages
+        .insert(
+            context,
+            crate::ports::NewMessage {
+                id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                space_id: routine.space_id.clone(),
+                thread_id: routine.thread_id.clone(),
+                role: boma_domain::MessageRole::System,
+                blocks: vec![boma_domain::Block::Text { text }],
+                bot_id: Some(routine.bot_id.clone()),
+                author_user_id: None,
+                run_id: Some(run.id.clone()),
+                client_nonce: None,
+                created_at: app.services.clock.now(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await?;
+    app.stores
+        .events
+        .append(
+            context,
+            crate::ports::NewEvent {
+                space_id: routine.space_id.clone(),
+                thread_id: routine.thread_id.clone(),
+                kind: boma_domain::EventType::Message,
+                payload: serde_json::json!({
+                    "messageId": stored.message.id.as_str(),
+                    "seq": stored.message.seq,
+                }),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(())
+}
+
 /// Marks a routine run as completed: the routine's failure counter resets (REQ-024).
 ///
 /// # Errors
@@ -956,15 +1049,30 @@ pub async fn record_routine_completed(app: &App, run: &boma_domain::Run) -> Resu
         // failure counters (REQ-025).
         return Ok(());
     }
+    let context = routine_context(&run.user_id, &run.space_id);
+    let routine = app.stores.routines.find(&context, routine_id).await?;
     app.stores
         .routines
         .record_completed(
-            &routine_context(&run.user_id, &run.space_id),
+            &context,
             routine_id,
             &app.services.clock.now(),
             Some(&run.id),
         )
-        .await
+        .await?;
+    if let Some(routine) = routine
+        && routine.notify
+    {
+        post_routine_notice(
+            app,
+            &context,
+            &routine,
+            run,
+            format!("Routine notice: '{}' finished.", routine.name),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Marks a routine run as failed: the failure counter grows, and past the threshold the routine
@@ -982,17 +1090,53 @@ pub async fn record_routine_failed(app: &App, run: &boma_domain::Run) -> Result<
         // failure counters (REQ-025).
         return Ok(());
     }
-    app.stores
+    let context = routine_context(&run.user_id, &run.space_id);
+    let before = app.stores.routines.find(&context, routine_id).await?;
+    let updated = app
+        .stores
         .routines
         .record_failure(
-            &routine_context(&run.user_id, &run.space_id),
+            &context,
             routine_id,
             &app.services.clock.now(),
             Some(&run.id),
             ROUTINE_FAILURE_THRESHOLD,
         )
-        .await
-        .map(|_| ())
+        .await?;
+    let paused_now = before.is_some_and(|routine| routine.active) && !updated.active;
+    if paused_now {
+        // REQ-024: when the threshold pauses the routine, the owner is told — this notice does
+        // not depend on the routine's `notify` preference.
+        post_routine_notice(
+            app,
+            &context,
+            &updated,
+            run,
+            format!(
+                "Routine notice: '{}' was paused after {} consecutive failures. Re-enable it to keep the schedule.",
+                updated.name, updated.account_failures
+            ),
+        )
+        .await?;
+    } else if updated.notify {
+        let plural = if updated.account_failures == 1 {
+            ""
+        } else {
+            "s"
+        };
+        post_routine_notice(
+            app,
+            &context,
+            &updated,
+            run,
+            format!(
+                "Routine notice: '{}' failed ({} consecutive failure{plural}).",
+                updated.name, updated.account_failures
+            ),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// The context the dispatcher acts under for a routine-run.
@@ -1221,7 +1365,7 @@ fn validate_until(until: &str) -> Result<(), AppError> {
 /// [`AppError::Conflict`] when the run is not `failed`.
 pub async fn retry_run(app: &App, context: &TenantContext, run_id: &str) -> Result<Run, AppError> {
     let id = boma_domain::RunId::new(run_id.to_owned()).map_err(|_| AppError::NotFound)?;
-    app.stores.runs.retry(context, &id).await
+    app.stores.runs.retry(context, &id, None).await
 }
 
 /// The activity projection: the runs of a bot, newest first (REQ-011).

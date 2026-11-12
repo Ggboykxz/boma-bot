@@ -54,9 +54,9 @@ impl RunStore for PostgresRunStore {
                     "INSERT INTO runs (
                         id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                         source_message_id, created_at, model_provider, model_id, model_pinned,
-                        parent_run_id
+                        parent_run_id, routine_id
                      )
-                     VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9::timestamptz, $10, $11, $12, $13)
+                     VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9::timestamptz, $10, $11, $12, $13, $14)
                      RETURNING id, space_id, bot_id, thread_id, user_id, status, trigger,
                                client_nonce, source_message_id, lease_owner, lease_fence,
                                boma.rfc3339(lease_expires_at) AS lease_expires_at,
@@ -65,6 +65,7 @@ impl RunStore for PostgresRunStore {
                                steering_from_seq, steering_consumed_seq, attempt,
                                model_provider, model_id, model_pinned,
                                parent_run_id, routine_id,
+                               boma.rfc3339(not_before) AS not_before,
                                boma.rfc3339(created_at) AS created_at",
                 )
                 .bind(run.id.as_str())
@@ -84,6 +85,7 @@ impl RunStore for PostgresRunStore {
                 .bind(run.model_id.clone())
                 .bind(run.model_pinned)
                 .bind(run.parent_run_id.as_ref().map(boma_domain::RunId::as_str))
+                .bind(run.routine_id.as_ref().map(boma_domain::RoutineId::as_str))
                 .fetch_one(&mut *conn)
                 .await;
 
@@ -128,6 +130,7 @@ impl RunStore for PostgresRunStore {
                             steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
                             parent_run_id, routine_id,
+                            boma.rfc3339(not_before) AS not_before,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -162,6 +165,7 @@ impl RunStore for PostgresRunStore {
                             steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
                             parent_run_id, routine_id,
+                            boma.rfc3339(not_before) AS not_before,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -195,6 +199,7 @@ impl RunStore for PostgresRunStore {
                             steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
                             parent_run_id, routine_id,
+                            boma.rfc3339(not_before) AS not_before,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -293,6 +298,7 @@ impl RunStore for PostgresRunStore {
                             steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
                             parent_run_id, routine_id,
+                            boma.rfc3339(not_before) AS not_before,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
@@ -320,7 +326,8 @@ impl RunStore for PostgresRunStore {
         let row = tenant::as_system(&self.pool, SystemReason::ScheduledJob, |conn| {
             Box::pin(async move {
                 // One statement: the row is locked, skipped when another worker holds it, and
-                // updated in place. Two workers therefore never claim the same run.
+                // updated in place. Two workers therefore never claim the same run. A run the
+                // automatic retry scheduled (REQ-024) is not visible until its not_before passes.
                 //
                 // An expired lease is no longer held: its worker disappeared mid-turn and the
                 // run is handed out again with the fence grown (REQ-013, REQ-014).
@@ -328,7 +335,8 @@ impl RunStore for PostgresRunStore {
                     "WITH candidate AS (
                         SELECT id
                         FROM runs
-                        WHERE status = 'queued'
+                        WHERE (status = 'queued'
+                               AND (not_before IS NULL OR not_before <= now()))
                            OR (status IN ('leased', 'running')
                                AND lease_expires_at IS NOT NULL
                                AND lease_expires_at <= now())
@@ -349,6 +357,7 @@ impl RunStore for PostgresRunStore {
                                r.steering_from_seq, r.steering_consumed_seq, r.attempt,
                                r.model_provider, r.model_id, r.model_pinned,
                                r.parent_run_id, r.routine_id,
+                               boma.rfc3339(r.not_before) AS not_before,
                                boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                                boma.rfc3339(r.started_at) AS started_at,
                                boma.rfc3339(r.completed_at) AS completed_at, r.error,
@@ -411,10 +420,16 @@ impl RunStore for PostgresRunStore {
         Ok(())
     }
 
-    async fn retry(&self, context: &TenantContext, id: &RunId) -> Result<Run, AppError> {
+    async fn retry(
+        &self,
+        context: &TenantContext,
+        id: &RunId,
+        not_before: Option<&str>,
+    ) -> Result<Run, AppError> {
         let id = id.as_str().to_owned();
         let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
         let space_id_key = space_id.as_str().to_owned();
+        let not_before = not_before.map(str::to_owned);
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
                 // The only transition out of a terminal state, atomically: failed → queued,
@@ -429,7 +444,8 @@ impl RunStore for PostgresRunStore {
                          lease_fence = 0,
                          lease_expires_at = NULL,
                          steering_from_seq = NULL,
-                         steering_consumed_seq = 0
+                         steering_consumed_seq = 0,
+                         not_before = $3::timestamptz
                      WHERE id = $1 AND status = 'failed' AND space_id = $2
                      RETURNING id, space_id, bot_id, thread_id, user_id, status, trigger,
                                client_nonce, source_message_id, lease_owner, lease_fence,
@@ -439,10 +455,12 @@ impl RunStore for PostgresRunStore {
                                steering_from_seq, steering_consumed_seq, attempt,
                                model_provider, model_id, model_pinned,
                                parent_run_id, routine_id,
+                               boma.rfc3339(not_before) AS not_before,
                                boma.rfc3339(created_at) AS created_at",
                 )
                 .bind(id.as_str())
                 .bind(space_id_key.as_str())
+                .bind(not_before.as_deref())
                 .fetch_one(&mut *conn)
                 .await
                 .map_err(tenant::unavailable);
@@ -461,6 +479,7 @@ impl RunStore for PostgresRunStore {
                                     steering_from_seq, steering_consumed_seq, attempt,
                                     model_provider, model_id, model_pinned,
                                     parent_run_id, routine_id,
+                                    boma.rfc3339(not_before) AS not_before,
                                     boma.rfc3339(created_at) AS created_at
                              FROM runs WHERE id = $1 AND space_id = $2",
                     )
@@ -498,6 +517,7 @@ impl RunStore for PostgresRunStore {
                             r.steering_from_seq, r.steering_consumed_seq, r.attempt,
                             r.model_provider, r.model_id, r.model_pinned,
                             r.parent_run_id, r.routine_id,
+                            boma.rfc3339(r.not_before) AS not_before,
                             boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(r.started_at) AS started_at,
                             boma.rfc3339(r.completed_at) AS completed_at, r.error,

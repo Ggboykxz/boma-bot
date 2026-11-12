@@ -538,10 +538,14 @@ pub trait RunStore: Send + Sync {
     /// Returns [`AppError::NotFound`] when the run does not exist in the tenant,
     /// [`AppError::Conflict`] when it is not `failed`, and an error when the database cannot
     /// answer.
+    ///
+    /// `not_before` lets the automatic retry hold the re-queued run back (REQ-024); `None`
+    /// makes it due immediately, which is what a member-triggered retry wants.
     async fn retry(
         &self,
         context: &boma_domain::TenantContext,
         id: &boma_domain::RunId,
+        not_before: Option<&str>,
     ) -> Result<Run, AppError>;
 
     /// The run a nonce already started, if any.

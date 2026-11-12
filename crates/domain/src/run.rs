@@ -307,6 +307,34 @@ pub struct Run {
     /// The routine this run wakes for (REQ-023), when it woke for one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routine_id: Option<crate::RoutineId>,
+    /// When this run may be claimed, for a retry the system scheduled (REQ-024).
+    ///
+    /// `None` for everything a person or the scheduler created: they are due as soon as they
+    /// are queued. Only the automatic retry after a failed routine wake carries a delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<String>,
+}
+
+/// How many attempts a routine-woken run may consume before its failure counts (REQ-024).
+pub const MAX_ATTEMPTS: u32 = 3;
+
+/// The first delay the automatic retry waits, in seconds (REQ-024).
+pub const RETRY_BASE_SECONDS: u64 = 60;
+
+/// The longest delay the automatic retry waits, in seconds (REQ-024).
+pub const RETRY_CAP_SECONDS: u64 = 1_800;
+
+/// The delay before the next attempt of a routine-woken run (REQ-024).
+///
+/// Exponential backoff from one minute up to half an hour. `attempt_consumed` is what the run
+/// has already burned, so the first retry waits one base unit. No curve is smaller: unattended
+/// schedules must not stampede a failing backend.
+#[must_use]
+pub fn retry_delay_seconds(attempt_consumed: u32) -> u64 {
+    let shift = attempt_consumed.saturating_sub(1).min(10);
+    RETRY_BASE_SECONDS
+        .saturating_mul(1u64 << shift)
+        .min(RETRY_CAP_SECONDS)
 }
 
 impl Run {
@@ -370,6 +398,22 @@ mod tests {
         (RunStatus::WaitingTakeover, RunStatus::Cancelled),
         (RunStatus::Failed, RunStatus::Queued),
     ];
+
+    #[test]
+    fn req_024_the_retry_delay_ladder_doubles_and_caps() {
+        use super::{MAX_ATTEMPTS, retry_delay_seconds};
+
+        assert_eq!(retry_delay_seconds(1), 60);
+        assert_eq!(retry_delay_seconds(2), 120);
+        assert_eq!(retry_delay_seconds(3), 240);
+        assert_eq!(retry_delay_seconds(4), 480);
+        assert_eq!(retry_delay_seconds(5), 960);
+        // 1920 and everything past it: the cap.
+        assert_eq!(retry_delay_seconds(6), 1_800);
+        assert_eq!(retry_delay_seconds(20), 1_800);
+        // The ladder leaves the schedule three chances, then gives up.
+        assert_eq!(MAX_ATTEMPTS, 3);
+    }
 
     #[test]
     fn req_012_transition_table_is_exhaustive() {

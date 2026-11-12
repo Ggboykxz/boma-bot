@@ -632,6 +632,7 @@ mod tests {
             model_pinned: false,
             parent_run_id: None,
             routine_id: None,
+            not_before: None,
         };
         let json = serde_json::to_value(RunView::new(&run, None)).expect("the view serialises");
         assert_eq!(json["promptSnippet"], serde_json::Value::Null);
