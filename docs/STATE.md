@@ -91,6 +91,17 @@ REQ-009 (read state and snooze), REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton
 
 ## Done
 
+- 2026-11-12 — **CI diagnosis: both workflows green.** The repo has `.github/workflows/ci.yml`
+  (two jobs: `rust` — fmt, clippy, nextest, llvm-cov `--fail-under-lines 80`, deny, machete,
+  trace, secret scan; `web` — build, typecheck, lint, playwright/golden/axe). It runs on every
+  push. Three pushes had failed without anyone looking: `405e276` (clippy `too_many_lines` on
+  the pinned 1.99.1 toolchain), `3716c35` (a line over rustfmt's limit), and `03616ab`/`a891f54`
+  (`react-hooks/set-state-in-effect` in `bot-rail.tsx` — fixed by turning the roster into a tiny
+  external store consumed through `useSyncExternalStore` and calling `refreshRoster()` from the
+  effect; `apps/web/lib/roster.ts`). Also tightened the CI trace budget from 50 to 40 to match the
+  documented ratchet. Both jobs verified green at `bce104c` via the Actions API (the repo is
+  public; anonymous API reads statuses but not logs — logs were read with the owner's PAT, never
+  persisted). Local gates did not cover `npm run lint` — the gap that let the lint fail slip.
 - 2026-11-12 — **M2 sweep: `runs.retry` closed (REQ-012), the last stale pending golden.** The
   manifest carried `run-retry` as pending with the reason « retry is implemented once leases and
   fence tokens exist » — both had existed since M1, so the reason was stale and the owner's
