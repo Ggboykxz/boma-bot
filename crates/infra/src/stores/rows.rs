@@ -406,6 +406,17 @@ pub(crate) struct BotSummaryRow {
     pub(crate) unread_count: i64,
 }
 
+/// A row of `memory_documents` (REQ-022).
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct MemoryDocumentRow {
+    pub(crate) space_id: String,
+    pub(crate) bot_id: String,
+    pub(crate) path: String,
+    pub(crate) content: String,
+    pub(crate) revision: i64,
+    pub(crate) updated_at: String,
+}
+
 /// A row of `tool_installs`.
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct ToolInstallRow {
@@ -467,3 +478,21 @@ pub(crate) fn prompt_snippet(blocks: &Value) -> Option<String> {
 
 /// How many characters of a prompt the activity list shows.
 const PROMPT_SNIPPET_LENGTH: usize = 120;
+
+/// Turns a stored memory row into the document it describes (REQ-022).
+pub(crate) fn memory_document(
+    row: MemoryDocumentRow,
+) -> Result<boma_domain::MemoryDocument, AppError> {
+    Ok(boma_domain::MemoryDocument {
+        space_id: SpaceId::new(row.space_id)?,
+        bot_id: if row.bot_id.is_empty() {
+            None
+        } else {
+            Some(BotId::new(row.bot_id)?)
+        },
+        path: row.path,
+        content: row.content,
+        revision: u64::try_from(row.revision).unwrap_or(u64::MAX),
+        updated_at: row.updated_at,
+    })
+}

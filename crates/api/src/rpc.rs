@@ -23,9 +23,10 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AnswerReply, BotReply, BotsListReply, CancelReply, InvitationReply, MessagesReply,
-        ReactReply, RosterBotView, RunRetryReply, RunView, RunsReply, SendReply, SnoozeReply,
-        SpaceReply, ThreadHeadReply,
+        AnswerReply, BotReply, BotsListReply, CancelReply, InvitationReply, MemoryDocumentReply,
+        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
+        MessagesReply, ReactReply, RosterBotView, RunRetryReply, RunView, RunsReply, SendReply,
+        SnoozeReply, SpaceReply, ThreadHeadReply,
     },
 };
 
@@ -39,6 +40,8 @@ pub mod namespaces {
     pub const SPACES: &str = "spaces";
     /// Runs and their activity.
     pub const RUNS: &str = "runs";
+    /// Memory documents (REQ-022).
+    pub const MEMORY: &str = "memory";
 }
 
 /// Every procedure this deployment serves.
@@ -65,6 +68,11 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::RUNS, "list"),
         (namespaces::RUNS, "cancel"),
         (namespaces::RUNS, "retry"),
+        (namespaces::MEMORY, "write"),
+        (namespaces::MEMORY, "read"),
+        (namespaces::MEMORY, "list"),
+        (namespaces::MEMORY, "remove"),
+        (namespaces::MEMORY, "provider"),
     ]
 }
 
@@ -141,6 +149,22 @@ async fn dispatch(
         (namespaces::RUNS, "retry") => runs_retry(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
+        (namespaces::MEMORY, "write") => memory_write(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MEMORY, "read") => memory_read(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MEMORY, "list") => memory_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MEMORY, "remove") => memory_remove(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MEMORY, "provider") => Ok(Json(MemoryProviderReply {
+            provider: "builtin".to_owned(),
+        })
+        .into_response()),
         _ => Err(ApiError::not_found()),
     };
 
@@ -489,6 +513,122 @@ async fn threads_unsnooze(
     let outcome =
         usecases::snooze_thread(state.app(), &auth.actor.context, &request.thread_id, None).await?;
     Ok(SnoozeReply::from(&outcome))
+}
+
+/// The body of `memory.write` (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MemoryWriteRequest {
+    /// The owner bot, for scope `bot`.
+    #[serde(default)]
+    bot_id: Option<String>,
+    /// `bot` or `shared`.
+    scope: String,
+    /// The path of the document.
+    path: String,
+    /// The content to write.
+    content: String,
+}
+
+/// The body of `memory.read` and `memory.remove` (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MemoryReadRequest {
+    /// The owner bot, for scope `bot`.
+    #[serde(default)]
+    bot_id: Option<String>,
+    /// `bot` or `shared`.
+    scope: String,
+    /// The path of the document.
+    path: String,
+}
+
+/// The body of `memory.list` (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MemoryListRequest {
+    /// The owner bot, for scope `bot`.
+    #[serde(default)]
+    bot_id: Option<String>,
+    /// `bot` or `shared`.
+    scope: String,
+}
+
+/// `memory.write` — append a revision and return the projection (REQ-022).
+async fn memory_write(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MemoryWriteReply, ApiError> {
+    let request: MemoryWriteRequest = parse(&body)?;
+    let outcome = usecases::memory_write(
+        state.app(),
+        &auth.actor.context,
+        &request.scope,
+        request.bot_id.as_deref(),
+        &request.path,
+        &request.content,
+    )
+    .await?;
+    Ok(MemoryWriteReply::from(&outcome.document))
+}
+
+/// `memory.read` — read one document (REQ-022).
+async fn memory_read(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MemoryDocumentReply, ApiError> {
+    let request: MemoryReadRequest = parse(&body)?;
+    let document = usecases::memory_read(
+        state.app(),
+        &auth.actor.context,
+        &request.scope,
+        request.bot_id.as_deref(),
+        &request.path,
+    )
+    .await?;
+    Ok(MemoryDocumentReply::from(&document))
+}
+
+/// `memory.list` — list the documents of a scope (REQ-022).
+async fn memory_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MemoryDocumentsReply, ApiError> {
+    let request: MemoryListRequest = parse(&body)?;
+    let documents = usecases::memory_list(
+        state.app(),
+        &auth.actor.context,
+        &request.scope,
+        request.bot_id.as_deref(),
+    )
+    .await?;
+    Ok(MemoryDocumentsReply {
+        documents: documents.iter().map(MemoryDocumentReply::from).collect(),
+    })
+}
+
+/// `memory.remove` — remove a document and its revision chain (REQ-022).
+async fn memory_remove(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MemoryRemoveReply, ApiError> {
+    let request: MemoryReadRequest = parse(&body)?;
+    let outcome = usecases::memory_remove(
+        state.app(),
+        &auth.actor.context,
+        &request.scope,
+        request.bot_id.as_deref(),
+        &request.path,
+    )
+    .await?;
+    Ok(MemoryRemoveReply {
+        path: outcome.path,
+        removed: outcome.removed,
+    })
 }
 
 /// The body of `threads.react`.

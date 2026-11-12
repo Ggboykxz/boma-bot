@@ -8,10 +8,10 @@ use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMessageStore, PostgresReactionStore, PostgresReadStateStore,
-    PostgresRosterStore, PostgresRunStore, PostgresSessionStore, PostgresSpaceStore,
-    PostgresThreadStore, PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock,
-    TokenGenerator,
+    PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore, PostgresReactionStore,
+    PostgresReadStateStore, PostgresRosterStore, PostgresRunStore, PostgresSessionStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore,
+    ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -78,7 +78,8 @@ fn build_app(database: &Postgres) -> App {
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
-            Arc::new(PostgresRosterStore::new(pool)),
+            Arc::new(PostgresRosterStore::new(pool.clone())),
+            Arc::new(PostgresMemoryStore::new(pool)),
         ),
         Services::new(
             publisher,

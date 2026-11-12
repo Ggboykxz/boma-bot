@@ -30,18 +30,19 @@ use boma_app::{
     AppError,
     ports::{
         Account, AccountStore, ActivityPage, BotStore, CardStore, Clock, EffectStore,
-        EventPublisher, EventStore, Invitation, InvitationStore, MessageStore, NewAccount, NewBot,
-        NewEffect, NewEvent, NewInvitation, NewMessage, NewRun, NewSession, NewSpace, NewThread,
-        ReactionAction, ReactionStore, ReadStateStore, RosterStore, RunActivity, RunStore,
-        SessionStore, SpaceStore, StoredMessage, ThreadStore, ToolStore, UserStore,
+        EventPublisher, EventStore, Invitation, InvitationStore, MemoryStore, MessageStore,
+        NewAccount, NewBot, NewEffect, NewEvent, NewInvitation, NewMemoryDocument, NewMessage,
+        NewRun, NewSession, NewSpace, NewThread, ReactionAction, ReactionStore, ReadStateStore,
+        RosterStore, RunActivity, RunStore, SessionStore, SpaceStore, StoredMessage, ThreadStore,
+        ToolStore, UserStore,
     },
 };
 use boma_domain::DomainError;
 use boma_domain::{
-    Block, Bot, BotId, Card, CardId, CardStatus, Email, Event, ExternalEffect, Message, MessageId,
-    MessagePage, OrganizationId, Reaction, Run, RunId, RunStatus, Session, SessionId, Space,
-    SpaceId, SpaceRole, TenantContext, Thread, ThreadId, ToolKind, ToolSpec, User, UserId,
-    cursor_from_seq,
+    Block, Bot, BotId, Card, CardId, CardStatus, Email, Event, ExternalEffect, MemoryDocument,
+    Message, MessageId, MessagePage, OrganizationId, Reaction, Run, RunId, RunStatus, Session,
+    SessionId, Space, SpaceId, SpaceRole, TenantContext, Thread, ThreadId, ToolKind, ToolSpec,
+    User, UserId, cursor_from_seq, validate_memory_path,
 };
 use tokio::sync::broadcast;
 
@@ -173,6 +174,23 @@ struct SnoozeRow {
     snoozed_until: String,
 }
 
+/// A memory document, with the tenant it belongs to (REQ-022).
+#[derive(Debug, Clone)]
+struct MemoryDocumentMemRow {
+    /// The tenant.
+    space_id: SpaceId,
+    /// The owner bot, or none for the space-shared memory.
+    bot_id: Option<BotId>,
+    /// Its path.
+    path: String,
+    /// The content at the newest revision.
+    content: String,
+    /// The revision the content is at.
+    revision: u64,
+    /// When it was last written.
+    updated_at: String,
+}
+
 /// A run.
 #[derive(Debug, Clone)]
 struct RunRow {
@@ -273,6 +291,8 @@ struct State {
     read_states: Vec<ReadStateRow>,
     /// The snoozes of each person, per conversation.
     snoozes: Vec<SnoozeRow>,
+    /// The memory documents people wrote.
+    memory_documents: Vec<MemoryDocumentMemRow>,
     /// The effects runs perform.
     effects: Vec<EffectRow>,
     /// The tools the spaces installed.
@@ -460,6 +480,12 @@ impl MemoryDatabase {
         MemoryRosterStore::new(self)
     }
 
+    /// The store of memory documents.
+    #[must_use]
+    pub fn memory(&self) -> MemoryMemoryStore {
+        MemoryMemoryStore::new(self)
+    }
+
     /// Seeds a conversation with explicit sequences.
     ///
     /// The product allocates the sequences itself; a golden replay needs to decide them, because
@@ -510,6 +536,19 @@ impl MemoryDatabase {
         write(&self.state).sessions.push(SessionRow {
             session,
             token_hash,
+        });
+    }
+
+    /// Seeds a memory document exactly as the fixture describes it (REQ-022).
+    pub fn seed_memory_document(&self, document: &MemoryDocument) {
+        let mut state = write(&self.state);
+        state.memory_documents.push(MemoryDocumentMemRow {
+            space_id: document.space_id.clone(),
+            bot_id: document.bot_id.clone(),
+            path: document.path.clone(),
+            content: document.content.clone(),
+            revision: document.revision,
+            updated_at: document.updated_at.clone(),
         });
     }
 
@@ -2343,6 +2382,141 @@ impl RosterStore for MemoryRosterStore {
             }
             None => Ok(None),
         }
+    }
+}
+
+/// The store of memory documents (REQ-022).
+#[derive(Debug, Clone)]
+pub struct MemoryMemoryStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryMemoryStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryMemoryStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl MemoryStore for MemoryMemoryStore {
+    async fn write(
+        &self,
+        context: &TenantContext,
+        document: NewMemoryDocument,
+    ) -> Result<MemoryDocument, AppError> {
+        validate_memory_path(&document.path)?;
+        let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let mut state = write(&self.state);
+        if let Some(bot_id) = &document.bot_id
+            && !state
+                .bots
+                .iter()
+                .any(|row| row.bot.id == *bot_id && visible(context, &row.bot.space_id))
+        {
+            return Err(AppError::NotFound);
+        }
+        let key_match = |row: &MemoryDocumentMemRow| {
+            row.space_id == space_id && row.bot_id == document.bot_id && row.path == document.path
+        };
+        if let Some(existing) = state.memory_documents.iter_mut().find(|row| key_match(row)) {
+            existing.content = document.content;
+            existing.revision += 1;
+            existing.updated_at = document.updated_at;
+            return Ok(MemoryDocument {
+                space_id,
+                bot_id: existing.bot_id.clone(),
+                path: existing.path.clone(),
+                content: existing.content.clone(),
+                revision: existing.revision,
+                updated_at: existing.updated_at.clone(),
+            });
+        }
+        state.memory_documents.push(MemoryDocumentMemRow {
+            space_id: space_id.clone(),
+            bot_id: document.bot_id.clone(),
+            path: document.path.clone(),
+            content: document.content.clone(),
+            revision: 1,
+            updated_at: document.updated_at.clone(),
+        });
+        Ok(MemoryDocument {
+            space_id,
+            bot_id: document.bot_id,
+            path: document.path,
+            content: document.content,
+            revision: 1,
+            updated_at: document.updated_at,
+        })
+    }
+
+    async fn read(
+        &self,
+        context: &TenantContext,
+        bot_id: Option<&BotId>,
+        path: &str,
+    ) -> Result<Option<MemoryDocument>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .memory_documents
+            .iter()
+            .find(|row| {
+                visible(context, &row.space_id) && row.bot_id == bot_id.cloned() && row.path == path
+            })
+            .map(|row| MemoryDocument {
+                space_id: row.space_id.clone(),
+                bot_id: row.bot_id.clone(),
+                path: row.path.clone(),
+                content: row.content.clone(),
+                revision: row.revision,
+                updated_at: row.updated_at.clone(),
+            }))
+    }
+
+    async fn list(
+        &self,
+        context: &TenantContext,
+        bot_id: Option<&BotId>,
+    ) -> Result<Vec<MemoryDocument>, AppError> {
+        let state = read(&self.state);
+        let mut documents: Vec<MemoryDocument> = state
+            .memory_documents
+            .iter()
+            .filter(|row| visible(context, &row.space_id) && row.bot_id == bot_id.cloned())
+            .map(|row| MemoryDocument {
+                space_id: row.space_id.clone(),
+                bot_id: row.bot_id.clone(),
+                path: row.path.clone(),
+                content: row.content.clone(),
+                revision: row.revision,
+                updated_at: row.updated_at.clone(),
+            })
+            .collect();
+        documents.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(documents)
+    }
+
+    async fn remove(
+        &self,
+        context: &TenantContext,
+        bot_id: Option<&BotId>,
+        path: &str,
+    ) -> Result<bool, AppError> {
+        let mut state = write(&self.state);
+        let before = state.memory_documents.len();
+        state.memory_documents.retain(|row| {
+            !(visible(context, &row.space_id) && row.bot_id == bot_id.cloned() && row.path == path)
+        });
+        Ok(state.memory_documents.len() != before)
     }
 }
 

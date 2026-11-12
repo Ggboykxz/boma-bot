@@ -651,6 +651,148 @@ async fn head_with(
     })
 }
 
+/// One memory document written (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryWriteOutcome {
+    /// The document as it stands after the write.
+    pub document: boma_domain::MemoryDocument,
+}
+
+/// The outcome of a memory removal (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRemoveOutcome {
+    /// The path that was removed.
+    pub path: String,
+    /// Whether anything was there.
+    pub removed: bool,
+}
+
+/// Writes a memory document: one appended revision, the projection updated (REQ-022).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the scope or the path is refused, and [`AppError::NotFound`]
+/// when scope `bot` names a bot that does not exist in the caller's tenant.
+pub async fn memory_write(
+    app: &App,
+    context: &TenantContext,
+    scope: &str,
+    bot_id: Option<&str>,
+    path: &str,
+    text: &str,
+) -> Result<MemoryWriteOutcome, AppError> {
+    let (scope, bot_id) = resolve_memory_scope(app, context, scope, bot_id).await?;
+    let _ = scope; // the store derives the scope from the owner id
+    let document = app
+        .stores
+        .memory
+        .write(
+            context,
+            crate::ports::NewMemoryDocument {
+                bot_id,
+                path: path.to_owned(),
+                content: text.to_owned(),
+                updated_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(MemoryWriteOutcome { document })
+}
+
+/// Reads one memory document (REQ-022).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when it does not exist in the caller's tenant, or when scope
+/// `bot` names a bot the caller cannot see.
+pub async fn memory_read(
+    app: &App,
+    context: &TenantContext,
+    scope: &str,
+    bot_id: Option<&str>,
+    path: &str,
+) -> Result<boma_domain::MemoryDocument, AppError> {
+    let (_, bot_id) = resolve_memory_scope(app, context, scope, bot_id).await?;
+    app.stores
+        .memory
+        .read(context, bot_id.as_ref(), path)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Lists the documents of a bot, or of the space-shared memory (REQ-022).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when scope `bot` names a bot the caller cannot see.
+pub async fn memory_list(
+    app: &App,
+    context: &TenantContext,
+    scope: &str,
+    bot_id: Option<&str>,
+) -> Result<Vec<boma_domain::MemoryDocument>, AppError> {
+    let (_, bot_id) = resolve_memory_scope(app, context, scope, bot_id).await?;
+    app.stores.memory.list(context, bot_id.as_ref()).await
+}
+
+/// Removes a memory document and its revision chain (REQ-022).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when scope `bot` names a bot the caller cannot see.
+pub async fn memory_remove(
+    app: &App,
+    context: &TenantContext,
+    scope: &str,
+    bot_id: Option<&str>,
+    path: &str,
+) -> Result<MemoryRemoveOutcome, AppError> {
+    let (_, bot_id) = resolve_memory_scope(app, context, scope, bot_id).await?;
+    let removed = app
+        .stores
+        .memory
+        .remove(context, bot_id.as_ref(), path)
+        .await?;
+    Ok(MemoryRemoveOutcome {
+        path: path.to_owned(),
+        removed,
+    })
+}
+
+/// Resolves the `bot` or `shared` scope from the wire, checking what it names (REQ-022).
+async fn resolve_memory_scope(
+    app: &App,
+    context: &TenantContext,
+    scope: &str,
+    bot_id: Option<&str>,
+) -> Result<(boma_domain::MemoryScope, Option<boma_domain::BotId>), AppError> {
+    match (scope, bot_id) {
+        ("bot", Some(id)) => {
+            let id = boma_domain::BotId::new(id.to_owned()).map_err(|_| {
+                AppError::Rule(boma_domain::DomainError::InvalidName(
+                    "the bot id is invalid".to_owned(),
+                ))
+            })?;
+            app.stores
+                .bots
+                .find(context, &id)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            Ok((boma_domain::MemoryScope::Bot, Some(id)))
+        }
+        ("bot", None) => Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "scope bot requires a botId".to_owned(),
+        ))),
+        ("shared", None) => Ok((boma_domain::MemoryScope::Shared, None)),
+        ("shared", Some(_)) => Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "scope shared takes no botId".to_owned(),
+        ))),
+        _ => Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "scope is bot or shared".to_owned(),
+        ))),
+    }
+}
+
 /// The outcome of one snooze call (REQ-009).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnoozeOutcome {

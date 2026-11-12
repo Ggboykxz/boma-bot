@@ -26,8 +26,8 @@ use boma_app::{
 };
 use boma_domain::{
     Block, Bot, BotId, Card, CardId, CardKind, CardStatus, Email, Event, EventType, InviteId,
-    Message, MessageId, MessageRole, OrganizationId, Run, RunId, RunStatus, RunTrigger, Session,
-    SessionId, SpaceId, SpaceRole, Thread, ThreadId, UserId,
+    MemoryDocument, Message, MessageId, MessageRole, OrganizationId, Run, RunId, RunStatus,
+    RunTrigger, Session, SessionId, SpaceId, SpaceRole, Thread, ThreadId, UserId,
 };
 use boma_testkit::TestApp;
 
@@ -113,14 +113,21 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "run-list"
             | "cross-tenant-not-found"
             | "run-retry"
+            | "memory-write"
     );
     if !needs_world {
         return None;
     }
 
+    // The capture clock is part of the replay: most fixtures stand at SEED_INSTANT, but a
+    // fixture whose capture ran past its scheduled instant states its own here.
+    let clock_seed = match fixture {
+        "memory-write" => "2026-01-01T00:01:00Z",
+        _ => SEED_INSTANT,
+    };
     let test_app = TestApp::builder()
         .ids(created_ids(fixture))
-        .fixed_clock(SEED_INSTANT)
+        .fixed_clock(clock_seed)
         .build();
     let app = test_app.app().clone();
     let cookie = format!("session={SESSION_TOKEN}");
@@ -143,6 +150,17 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
             seed_history(&test_app, &space_id, &bot, &thread, &user_id);
             seed_card(&test_app, &space_id, &thread);
+        }
+        "memory-write" => {
+            let (bot, _thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_memory_document(
+                &test_app,
+                &space_id,
+                bot.id.clone(),
+                "notes/commits.md",
+                "# Commits\n- previous work\n",
+                3,
+            );
         }
         "run-retry" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
@@ -359,6 +377,25 @@ fn seed_card(test_app: &TestApp, space_id: &SpaceId, thread: &Thread) {
             answered_at: None,
         },
     );
+}
+
+/// Seeds a memory document with `revision` already written (REQ-022).
+fn seed_memory_document(
+    test_app: &TestApp,
+    space_id: &SpaceId,
+    bot_id: BotId,
+    path: &str,
+    content: &str,
+    revision: u64,
+) {
+    test_app.database().seed_memory_document(&MemoryDocument {
+        space_id: space_id.clone(),
+        bot_id: Some(bot_id),
+        path: path.to_owned(),
+        content: content.to_owned(),
+        revision,
+        updated_at: SEED_INSTANT.to_owned(),
+    });
 }
 
 /// Seeds the failed run the retry fixture re-queues (REQ-012).

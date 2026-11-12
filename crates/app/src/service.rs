@@ -11,9 +11,9 @@ use crate::{
     error::AppError,
     ports::{
         AccountStore, BotStore, CardStore, Clock, EffectStore, EventPublisher, EventStore,
-        IdGenerator, InvitationStore, MessageStore, PasswordHasher, ReactionStore, ReadStateStore,
-        RosterStore, RunStore, SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore,
-        UserStore,
+        IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher, ReactionStore,
+        ReadStateStore, RosterStore, RunStore, SessionStore, SpaceStore, ThreadStore,
+        TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -52,6 +52,8 @@ pub struct Stores {
     pub read_states: Arc<dyn ReadStateStore>,
     /// The roster the rail renders from (REQ-009).
     pub roster: Arc<dyn RosterStore>,
+    /// The memory documents of bots and of the space (REQ-022).
+    pub memory: Arc<dyn MemoryStore>,
 }
 
 impl Stores {
@@ -78,6 +80,7 @@ impl Stores {
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
+        memory: Arc<dyn MemoryStore>,
     ) -> Self {
         Self {
             accounts,
@@ -96,6 +99,7 @@ impl Stores {
             reactions,
             read_states,
             roster,
+            memory,
         }
     }
 }

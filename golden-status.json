@@ -56,9 +56,9 @@
       "reason": null
     },
     "memory-write": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-022",
-      "reason": "M3 - memory revisions are not implemented"
+      "reason": null
     },
     "models-catalog": {
       "status": "pending",

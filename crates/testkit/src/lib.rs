@@ -38,10 +38,10 @@ pub mod scripts;
 pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
     MemoryAccountStore, MemoryBotStore, MemoryCardStore, MemoryDatabase, MemoryEffectStore,
-    MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore, MemoryMessageStore,
-    MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore, MemoryRunStore,
-    MemorySessionStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore, MemoryUserStore,
-    Organization,
+    MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore, MemoryMemoryStore,
+    MemoryMessageStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
+    MemoryRunStore, MemorySessionStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore,
+    MemoryUserStore, Organization,
 };
 pub use scripts::{FixedHasher, ScriptedClock, ScriptedIds, ScriptedProvider, ScriptedTokens};
 

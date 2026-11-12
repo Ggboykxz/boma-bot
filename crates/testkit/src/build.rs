@@ -299,7 +299,10 @@ impl TestAppBuilder {
     #[must_use]
     pub fn build(self) -> TestApp {
         let ids = Arc::new(ScriptedIds::new(self.ids));
-        let clock = Arc::new(ScriptedClock::new(self.instants));
+        let clock = Arc::new(match &self.fixed_instant {
+            Some(instant) => ScriptedClock::fixed(instant),
+            None => ScriptedClock::new(self.instants),
+        });
         let tokens = Arc::new(ScriptedTokens::new(self.tokens));
         let publisher = Arc::new(MemoryEventPublisher::new());
         let hasher = Arc::new(FixedHasher::new());
@@ -322,6 +325,7 @@ impl TestAppBuilder {
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
+            Arc::new(database.memory()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,

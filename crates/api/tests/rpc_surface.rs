@@ -936,3 +936,156 @@ async fn req_012_retry_only_from_failed() {
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+async fn memory_rpc(
+    world: &World,
+    procedure: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = post(
+        state(&world.app),
+        &format!("/rpc/memory/{procedure}"),
+        Some(&world.caller),
+        body,
+    )
+    .await;
+    let status = response.status();
+    let body = json(response).await;
+    (status, body)
+}
+
+#[tokio::test]
+async fn req_022_memory_write_grows_the_revision() {
+    let world = world().await;
+
+    // Writing to the bot's memory returns the revision as the golden pins it.
+    let (status, body) = memory_rpc(
+        &world,
+        "write",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id, "path": "notes/commits.md", "content": "# commits\n"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["path"], serde_json::json!("notes/commits.md"));
+    assert_eq!(body["revision"], serde_json::json!(1));
+
+    // A second write grows the revision.
+    let (status, body) = memory_rpc(
+        &world,
+        "write",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id, "path": "notes/commits.md", "content": "# commits v2\n"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["revision"], serde_json::json!(2));
+
+    // Reading it back returns the newest revision.
+    let (status, body) = memory_rpc(
+        &world,
+        "read",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id, "path": "notes/commits.md"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["content"], serde_json::json!("# commits v2\n"));
+    assert_eq!(body["revision"], serde_json::json!(2));
+}
+
+#[tokio::test]
+async fn req_022_memory_scope_rules_and_removal() {
+    let world = world().await;
+
+    // The bot exists, so the writes it owns are allowed; the read-back still proves the chain.
+    let (status, _) = memory_rpc(
+        &world,
+        "write",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id, "path": "keep.md", "content": "kept"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A path that escapes the memory tree is refused, not silently stored.
+    let (status, _) = memory_rpc(
+        &world,
+        "write",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id, "path": "../escape.md", "content": "nope"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // scope `bot` without a bot id is refused; scope `shared` with one is refused too.
+    let (status, _) = memory_rpc(
+        &world,
+        "write",
+        serde_json::json!({"scope": "bot", "path": "notes.md", "content": "x"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = memory_rpc(
+        &world,
+        "write",
+        serde_json::json!({"scope": "shared", "botId": world.bot_id, "path": "shared.md", "content": "x"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Shared memory: written once, read by anyone in the space.
+    let (status, _) = memory_rpc(
+        &world,
+        "write",
+        serde_json::json!({"scope": "shared", "path": "team.md", "content": "team notes"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = memory_rpc(
+        &world,
+        "read",
+        serde_json::json!({"scope": "shared", "path": "team.md"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["content"], serde_json::json!("team notes"));
+
+    // A scope the wire cannot express is refused.
+    let (status, _) = memory_rpc(
+        &world,
+        "read",
+        serde_json::json!({"scope": "entries", "path": "team.md"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Listing returns both documents the world has.
+    let (status, body) = memory_rpc(
+        &world,
+        "list",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let paths: Vec<&str> = body["documents"]
+        .as_array()
+        .expect("documents are listed")
+        .iter()
+        .map(|entry| entry["path"].as_str().expect("a path is a string"))
+        .collect();
+    assert_eq!(paths, ["keep.md"]);
+
+    // Removing returns what existed, and a second removal says it did not.
+    let (status, body) = memory_rpc(
+        &world,
+        "remove",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id, "path": "keep.md"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["removed"], serde_json::json!(true));
+    let (status, body) = memory_rpc(
+        &world,
+        "remove",
+        serde_json::json!({"scope": "bot", "botId": world.bot_id, "path": "keep.md"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["removed"], serde_json::json!(false));
+}

@@ -2,7 +2,25 @@
 
 ## Current milestone
 
-**M2 — in progress.** Slices land one commit at a time; tests written before the code.
+**M3 — in progress.** Slices land one commit at a time.
+
+- **REQ-022 (memory documents, MUST)** is done: per-bot and space-shared memory documents with
+  append-only revisions. Migration `0013_memory.sql` creates `memory_documents` (projection: the
+  current row) and `memory_revisions` (the append-only chain, `document_id + revision` unique);
+  both under RLS. The wire gains `memory.write` (`{botId?, scope, path, content}` → `{path,
+  revision, updatedAt}`), `memory.read`, `memory.list`, `memory.remove`, `memory.provider` (only
+  `builtin` exists). The `memory-write` golden replays byte-for-byte. Write and read are proved at
+  three levels (domain path rules, RPC surface, real Postgres); the scope grammar refuses
+  `scope=bot` without a `botId`, `scope=shared` with one, and any other scope string. A slice of
+  the acceptance — memory available in a run's context — lands with the agent engine, which builds
+  the model prompt; the scripted provider ignores context until then, which is honestly currently
+  everywhere (same story as REQ-016's tool-call loop).
+
+Row order matches implementation order. Slices still to land this milestone: REQ-023 (routines as
+cron definitions), REQ-024 (dispatch, retry backoff, coalescing, pause at threshold), REQ-025
+(run now).
+
+## Done
 
 - **REQ-006 (stop work, MUST)** is done (`e453df1`): `runs.cancel` stops a run wherever it is, the
   worker stops producing into it (pre-check, per-chunk check, per-write terminal guard), a

@@ -237,6 +237,79 @@ impl From<&boma_domain::Run> for RunRetryReply {
     }
 }
 
+/// The reply of `memory.write` (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryWriteReply {
+    /// The path of the written document.
+    pub path: String,
+    /// The revision it is at now.
+    pub revision: u64,
+    /// When it was written.
+    pub updated_at: String,
+}
+
+impl From<&boma_domain::MemoryDocument> for MemoryWriteReply {
+    fn from(document: &boma_domain::MemoryDocument) -> Self {
+        Self {
+            path: document.path.clone(),
+            revision: document.revision,
+            updated_at: document.updated_at.clone(),
+        }
+    }
+}
+
+/// One memory document, as the client reads it (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDocumentReply {
+    /// Its path.
+    pub path: String,
+    /// The revision it is at.
+    pub revision: u64,
+    /// Its content at that revision.
+    pub content: String,
+    /// When it was last written.
+    pub updated_at: String,
+}
+
+impl From<&boma_domain::MemoryDocument> for MemoryDocumentReply {
+    fn from(document: &boma_domain::MemoryDocument) -> Self {
+        Self {
+            path: document.path.clone(),
+            revision: document.revision,
+            content: document.content.clone(),
+            updated_at: document.updated_at.clone(),
+        }
+    }
+}
+
+/// The reply of `memory.list` (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDocumentsReply {
+    /// The documents, in path order.
+    pub documents: Vec<MemoryDocumentReply>,
+}
+
+/// The reply of `memory.remove` (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRemoveReply {
+    /// The path that was removed.
+    pub path: String,
+    /// Whether anything was there.
+    pub removed: bool,
+}
+
+/// The reply of `memory.provider` (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryProviderReply {
+    /// The provider backing memory documents.
+    pub provider: String,
+}
+
 /// The reply of `bots.list` (REQ-009).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

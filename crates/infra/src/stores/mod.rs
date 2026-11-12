@@ -8,6 +8,7 @@ pub mod bots;
 pub mod cards;
 pub mod events;
 pub mod invitations;
+pub mod memory;
 pub mod messages;
 pub mod reactions;
 pub mod read_states;

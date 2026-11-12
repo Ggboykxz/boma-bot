@@ -20,9 +20,10 @@ use boma_domain::{
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMessageStore, PostgresReactionStore, PostgresReadStateStore,
-    PostgresRosterStore, PostgresRunStore, PostgresSessionStore, PostgresSpaceStore,
-    PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore, PostgresReactionStore,
+    PostgresReadStateStore, PostgresRosterStore, PostgresRunStore, PostgresSessionStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock,
+    TokenGenerator,
 };
 
 mod common;
@@ -68,7 +69,8 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
-            Arc::new(PostgresRosterStore::new(pool)),
+            Arc::new(PostgresRosterStore::new(pool.clone())),
+            Arc::new(PostgresMemoryStore::new(pool)),
         ),
         boma_app::Services::new(
             publisher,
@@ -1090,6 +1092,99 @@ async fn req_012_a_failed_run_is_retried_once_in_postgres() {
     .expect("the completed run is written");
     let refused = boma_app::usecases::retry_run(&app, &context, completed_id.as_str()).await;
     assert!(matches!(refused, Err(boma_app::AppError::Conflict)));
+
+    cleanup(&database, &organization_id, &email).await;
+}
+
+#[tokio::test]
+async fn req_022_memory_revisions_are_append_only_in_postgres() {
+    let database = common::database().await;
+    let app = app(&database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "memory").await;
+
+    let bot_id = BotId::new(ids().new_id("bot")).expect("an id is valid");
+    let thread_id = ThreadId::new(ids().new_id("thr")).expect("an id is valid");
+    app.stores
+        .bots
+        .create_with_thread(
+            NewBot {
+                id: bot_id.clone(),
+                space_id: space_id.clone(),
+                user_id: user_id.clone(),
+                name: "Analyst".to_owned(),
+                description: None,
+                color: None,
+                created_at: app.services.clock.now(),
+            },
+            NewThread {
+                id: thread_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot_id.clone(),
+                user_id: user_id.clone(),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+        .expect("the bot is created");
+
+    // Three writes grow the revision chain without ever rewriting history.
+    for content in ["one\n", "two\n", "three\n"] {
+        let document = boma_app::usecases::memory_write(
+            &app,
+            &context,
+            "bot",
+            Some(bot_id.as_str()),
+            "notes/commits.md",
+            content,
+        )
+        .await
+        .expect("the write lands");
+        assert_eq!(document.document.content, content);
+    }
+    let document = boma_app::usecases::memory_read(
+        &app,
+        &context,
+        "bot",
+        Some(bot_id.as_str()),
+        "notes/commits.md",
+    )
+    .await
+    .expect("the document is read");
+    assert_eq!(document.revision, 3);
+    assert_eq!(document.content, "three\n");
+
+    // The revision chain is append-only and says so in the table. Filter by the document id.
+    let document_id = format!(
+        "mem:{}:bot:{}:notes/commits.md",
+        space_id.as_str(),
+        bot_id.as_str()
+    );
+    let chain: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM memory_revisions WHERE document_id = $1")
+            .bind(&document_id)
+            .fetch_one(database.pool())
+            .await
+            .expect("the count is read");
+    assert_eq!(chain, 3);
+
+    // Removing the document cascades the revision chain.
+    let removed = boma_app::usecases::memory_remove(
+        &app,
+        &context,
+        "bot",
+        Some(bot_id.as_str()),
+        "notes/commits.md",
+    )
+    .await
+    .expect("the removal lands");
+    assert!(removed.removed);
+    let chain: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM memory_revisions WHERE document_id = $1")
+            .bind(&document_id)
+            .fetch_one(database.pool())
+            .await
+            .expect("the count is read");
+    assert_eq!(chain, 0);
 
     cleanup(&database, &organization_id, &email).await;
 }

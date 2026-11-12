@@ -837,6 +837,73 @@ pub trait RosterStore: Send + Sync {
     ) -> Result<Option<String>, AppError>;
 }
 
+/// A memory document to write: a path, a content, and who it belongs to (REQ-022).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewMemoryDocument {
+    /// The owner bot, or none for the space-shared memory.
+    pub bot_id: Option<boma_domain::BotId>,
+    /// Its path, relative and POSIX-like.
+    pub path: String,
+    /// Its content.
+    pub content: String,
+    /// When it is written, from the application's clock.
+    pub updated_at: String,
+}
+
+/// The memory documents of a bot or of the space (REQ-022).
+#[async_trait]
+pub trait MemoryStore: Send + Sync {
+    /// Appends a revision and returns the document as it stands.
+    ///
+    /// The revision chain is append-only: the revision grows by one per write, and the current
+    /// document is a projection of it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Rule`] when the path is refused, and an error when the database cannot
+    /// answer.
+    async fn write(
+        &self,
+        context: &boma_domain::TenantContext,
+        document: NewMemoryDocument,
+    ) -> Result<boma_domain::MemoryDocument, AppError>;
+
+    /// Reads one document inside a tenant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn read(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: Option<&boma_domain::BotId>,
+        path: &str,
+    ) -> Result<Option<boma_domain::MemoryDocument>, AppError>;
+
+    /// Lists the documents of a bot, or of the space-shared memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: Option<&boma_domain::BotId>,
+    ) -> Result<Vec<boma_domain::MemoryDocument>, AppError>;
+
+    /// Removes one document and its revision chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn remove(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: Option<&boma_domain::BotId>,
+        path: &str,
+    ) -> Result<bool, AppError>;
+}
+
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).
 #[async_trait]
 pub trait ToolStore: Send + Sync {

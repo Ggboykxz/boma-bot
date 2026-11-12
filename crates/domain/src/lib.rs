@@ -15,6 +15,7 @@ pub mod card;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod memory;
 pub mod message;
 pub mod model;
 pub mod run;
@@ -30,6 +31,7 @@ pub use ids::{
     BotId, EventId, InviteId, MessageId, OrganizationId, RunId, SessionId, SpaceId, ThreadId,
     UserId,
 };
+pub use memory::{MemoryDocument, MemoryScope, validate_memory_path};
 pub use message::{
     Block, Message, MessagePage, MessageRole, Reaction, cursor_from_seq, parse_cursor,
     validate_message_text,
