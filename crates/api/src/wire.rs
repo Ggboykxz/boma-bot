@@ -444,6 +444,8 @@ pub struct ComputerSettingsReply {
     pub cpu_limit: f64,
     /// Minutes the computer may sit idle before it is released.
     pub idle_minutes: u64,
+    /// `private` (isolated per bot) or `team` (shared within the space).
+    pub mode: String,
 }
 
 /// The reply of `routines.runNow` (REQ-025).

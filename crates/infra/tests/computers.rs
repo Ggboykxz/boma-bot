@@ -119,7 +119,7 @@ async fn req_026_a_computer_boots_stops_and_its_home_survives_in_docker() {
     let context = fixture.context.clone();
 
     // The first ensure boots the computer; the handle comes back running.
-    let outcome = usecases::ensure_computer(&app, &context, fixture.bot_id.as_str())
+    let outcome = usecases::ensure_computer(&app, &context, fixture.bot_id.as_str(), true)
         .await
         .expect("the computer boots");
     assert!(outcome.started);
@@ -157,7 +157,7 @@ async fn req_026_a_computer_boots_stops_and_its_home_survives_in_docker() {
     assert_eq!(volumes.volumes.map(|volumes| volumes.len()), Some(1));
 
     // A second ensure reuses the computer: same container, nothing rebooted.
-    let outcome = usecases::ensure_computer(&app, &context, fixture.bot_id.as_str())
+    let outcome = usecases::ensure_computer(&app, &context, fixture.bot_id.as_str(), true)
         .await
         .expect("the computer is reused");
     assert!(!outcome.started);
@@ -269,7 +269,7 @@ async fn req_028_the_computer_runs_a_shell_and_keeps_files_inside_the_home() {
     let context = fixture.context.clone();
 
     // The computer is up: the first shell starts it.
-    usecases::ensure_computer(&app, &context, fixture.bot_id.as_str())
+    usecases::ensure_computer(&app, &context, fixture.bot_id.as_str(), true)
         .await
         .expect("the computer boots");
 
@@ -370,7 +370,7 @@ async fn req_029_a_member_holds_the_screen_and_the_computer_refuses_other_input(
     let context = fixture.context.clone();
     let other = boma_domain::UserId::new("takeover_otherusr".to_owned()).expect("an id is valid");
 
-    usecases::ensure_computer(&app, &context, fixture.bot_id.as_str())
+    usecases::ensure_computer(&app, &context, fixture.bot_id.as_str(), true)
         .await
         .expect("the computer boots");
 

@@ -8,7 +8,7 @@
 // Each test binary uses a part of these helpers, so the ones it does not use are dead there.
 #![allow(dead_code)]
 
-use std::{str::FromStr, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use boma_app::ports::{AccountStore, BotStore, MessageStore};
 use boma_domain::{
@@ -16,8 +16,9 @@ use boma_domain::{
     UserId,
 };
 use boma_infra::{
-    DatabaseSettings, Postgres, PostgresAccountStore, PostgresBotStore, PostgresMessageStore,
-    PostgresRunStore,
+    Argon2idHasher, BroadcastPublisher, DatabaseSettings, IdGenerator, Postgres,
+    PostgresAccountStore, PostgresBotStore, PostgresMessageStore, PostgresRunStore, SystemClock,
+    TokenGenerator,
 };
 use sqlx::{
     PgPool,
@@ -413,4 +414,143 @@ pub fn new_run(fixture: &Fixture, suffix: &str, nonce: Option<&str>) -> boma_app
 /// The store of the runs, on a pool.
 pub fn runs(pool: &PgPool) -> PostgresRunStore {
     PostgresRunStore::new(pool.clone())
+}
+
+/// A computer the conformance battery runs against, with its runtime attached.
+pub struct ComputerFixture {
+    /// The application under test.
+    pub app: boma_app::App,
+    /// The member context the tests act in.
+    pub context: boma_domain::TenantContext,
+    /// The bot that owns the computer.
+    pub bot_id: boma_domain::BotId,
+    /// The organisation that owns the space.
+    pub organization_id: boma_domain::OrganizationId,
+    /// The sign-in e-mail, for cleanup.
+    pub email: String,
+    /// The fresh database, kept alive for the test.
+    pub fresh: FreshDatabase,
+}
+
+/// Builds an application over a fresh database with the requested computer runtime attached.
+///
+/// This is the harness every computer-provider conformance test shares: one call, one seeded
+/// space with one bot and an owned context, and the runtime handed over by the factory.
+#[allow(clippy::too_many_lines)] // one seed per test keeps the story explicit instead of a fixture maze
+pub async fn computer_app(
+    runtime: Arc<dyn boma_app::ports::ComputerRuntime>,
+    prefix: &str,
+) -> ComputerFixture {
+    let fresh = fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let email = format!("{prefix}@example.com");
+    let organization_id = boma_domain::OrganizationId::new(format!("{prefix}org"))
+        .expect("the fixture id is accepted");
+    let user_id =
+        boma_domain::UserId::new(format!("{prefix}usr")).expect("the fixture id is accepted");
+    let accounts = boma_infra::PostgresAccountStore::new(pool.clone());
+    accounts
+        .create_account(boma_app::ports::NewAccount {
+            user: boma_app::ports::NewUser {
+                id: user_id.clone(),
+                email: boma_domain::Email::new(email.clone())
+                    .expect("the fixture address is valid"),
+                password_hash: "not-a-real-hash".to_owned(),
+                name: "Test Person".to_owned(),
+                locale: "en-US".to_owned(),
+                created_at: CREATED_AT.to_owned(),
+            },
+            organization: boma_app::ports::NewOrganization {
+                id: organization_id.clone(),
+                name: "Test Organization".to_owned(),
+                created_at: CREATED_AT.to_owned(),
+            },
+            space: boma_app::ports::NewSpace {
+                id: boma_domain::SpaceId::new(format!("{prefix}spc"))
+                    .expect("the fixture id is accepted"),
+                organization_id: organization_id.clone(),
+                name: "Test Space".to_owned(),
+                is_default: true,
+                created_at: CREATED_AT.to_owned(),
+            },
+        })
+        .await
+        .expect("the account is written");
+    let space_id =
+        boma_domain::SpaceId::new(format!("{prefix}spc")).expect("the fixture id is accepted");
+    let bot_id =
+        boma_domain::BotId::new(format!("{prefix}bot")).expect("the fixture id is accepted");
+    let thread_id =
+        boma_domain::ThreadId::new(format!("{prefix}thr")).expect("the fixture id is accepted");
+    let bots = boma_infra::PostgresBotStore::new(pool.clone());
+    bots.create_with_thread(
+        boma_app::ports::NewBot {
+            id: bot_id.clone(),
+            space_id: space_id.clone(),
+            user_id: user_id.clone(),
+            name: "Test Bot".to_owned(),
+            description: None,
+            color: None,
+            created_at: CREATED_AT.to_owned(),
+        },
+        boma_app::ports::NewThread {
+            id: thread_id,
+            space_id: space_id.clone(),
+            bot_id: bot_id.clone(),
+            user_id: user_id.clone(),
+            created_at: CREATED_AT.to_owned(),
+        },
+    )
+    .await
+    .expect("the bot and its thread are written");
+    let publisher = Arc::new(BroadcastPublisher::default());
+    let services = boma_app::Services::new(
+        publisher,
+        Arc::new(Argon2idHasher::default()),
+        Arc::new(TokenGenerator),
+        Arc::new(IdGenerator),
+        Arc::new(SystemClock),
+        boma_domain::model::DeploymentModels {
+            reachable: vec![
+                "openai/gpt-5".to_owned(),
+                "anthropic/claude-sonnet".to_owned(),
+            ],
+            default: "anthropic/claude-sonnet".to_owned(),
+        },
+    )
+    .with_computers(runtime);
+    let app = boma_app::App::new(
+        boma_app::Stores::new(
+            Arc::new(boma_infra::PostgresAccountStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresUserStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresSessionStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresSpaceStore::new(pool.clone())),
+            Arc::new(PostgresBotStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresThreadStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMessageStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresRunStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresEventStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresInvitationStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresCardStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresEffectStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresToolStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresReactionStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresReadStateStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresRosterStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMemoryStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresRoutineStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresComputerStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresScreenCapabilityStore::new(pool)),
+        ),
+        services,
+    );
+    let context = TenantContext::Member { space_id, user_id };
+    ComputerFixture {
+        app,
+        context,
+        bot_id,
+        organization_id,
+        email,
+        fresh,
+    }
 }

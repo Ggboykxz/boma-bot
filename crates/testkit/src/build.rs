@@ -1844,9 +1844,10 @@ async fn req_026_a_computer_boots_lazily_and_is_reused() {
         .expect("the bot is created");
 
     // The first ask boots the computer: the row goes running with a fresh generation.
-    let outcome = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
-        .await
-        .expect("the computer answers");
+    let outcome =
+        boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str(), true)
+            .await
+            .expect("the computer answers");
     assert!(outcome.started);
     assert_eq!(
         outcome.computer.status,
@@ -1857,9 +1858,10 @@ async fn req_026_a_computer_boots_lazily_and_is_reused() {
     assert_eq!(outcome.computer.home_id.as_deref(), Some("vol_1"));
 
     // The second ask reuses it: nothing boots, nothing bumps the generation.
-    let outcome = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
-        .await
-        .expect("the computer answers");
+    let outcome =
+        boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str(), true)
+            .await
+            .expect("the computer answers");
     assert!(!outcome.started);
     assert_eq!(outcome.computer.screen_generation, 1);
     assert_eq!(outcome.computer.external_id.as_deref(), Some("ctr_1"));
@@ -1916,9 +1918,10 @@ async fn req_026_the_idle_sweeper_releases_a_computer_past_its_window() {
         .await
         .expect("the bot is created");
 
-    let outcome = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
-        .await
-        .expect("the computer answers");
+    let outcome =
+        boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str(), true)
+            .await
+            .expect("the computer answers");
     assert_eq!(
         outcome.computer.status,
         boma_domain::ComputerStatus::Running
@@ -1981,8 +1984,93 @@ async fn req_026_a_scripted_runtime_that_cannot_deliver_answers_unavailable() {
         .await
         .expect("the bot is created");
 
-    let error = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
-        .await
-        .expect_err("the ensure must fail");
+    let error =
+        boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str(), true)
+            .await
+            .expect_err("the ensure must fail");
     assert!(matches!(error, boma_app::AppError::Unavailable));
+}
+
+#[tokio::test]
+async fn req_031_a_team_computer_is_shared_within_a_space() {
+    let test = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "cmp_1".to_owned(),
+            "bot_2".to_owned(),
+            "thr_2".to_owned(),
+            "cmp_2".to_owned(),
+            "cmp_3".to_owned(),
+        ])
+        .computer_answers(vec![
+            crate::ComputerAnswer::Started {
+                external_id: "ctr_1".to_owned(),
+                home_id: "vol_1".to_owned(),
+            },
+            crate::ComputerAnswer::Started {
+                external_id: "ctr_2".to_owned(),
+                home_id: "vol_2".to_owned(),
+            },
+            crate::ComputerAnswer::Started {
+                external_id: "ctr_3".to_owned(),
+                home_id: "vol_3".to_owned(),
+            },
+            crate::ComputerAnswer::Restarted {
+                external_id: "ctr_3".to_owned(),
+                home_id: "vol_3".to_owned(),
+            },
+        ])
+        .fixed_clock("2026-01-01T00:00:00Z")
+        .build();
+    let user_id = test
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space = test
+        .app()
+        .stores
+        .spaces
+        .default_for(&user_id)
+        .await
+        .expect("the store answers")
+        .expect("the space exists");
+    let context = TestApp::member_context(&space.id, &user_id);
+    let first = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+    let second = boma_app::usecases::create_bot(test.app(), &context, "Analyst 2", None, None)
+        .await
+        .expect("the bot is created");
+
+    // A private computer per bot: different computers, different homes.
+    let private_one =
+        boma_app::usecases::ensure_computer(test.app(), &context, first.bot.id.as_str(), true)
+            .await
+            .expect("the computer boots");
+    let private_two =
+        boma_app::usecases::ensure_computer(test.app(), &context, second.bot.id.as_str(), true)
+            .await
+            .expect("the computer boots");
+    assert_ne!(private_one.computer.id, private_two.computer.id);
+    assert_eq!(private_one.computer.screen_generation, 1);
+    assert_eq!(private_two.computer.screen_generation, 1);
+
+    // A team computer is shared: the second bot rides the same container and home.
+    let team_one =
+        boma_app::usecases::ensure_computer(test.app(), &context, first.bot.id.as_str(), false)
+            .await
+            .expect("the computer boots");
+    let team_two =
+        boma_app::usecases::ensure_computer(test.app(), &context, second.bot.id.as_str(), false)
+            .await
+            .expect("the team computer is reused");
+    assert_eq!(team_one.computer.id, team_two.computer.id);
+    assert!(team_one.started);
+    assert_eq!(team_one.computer.screen_generation, 1);
+    assert!(!team_two.started);
+    assert_eq!(team_two.computer.screen_generation, 1);
 }

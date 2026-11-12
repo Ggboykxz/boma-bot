@@ -2,7 +2,15 @@
 
 ## Current milestone
 
-**M4 — computers, in progress.** Landed so far (each with the full gate suite green at push):
+**M4 — computers.** The five exit criteria of the milestone are observed (each green in CI unless
+noted): the Docker supervisor boots a computer (`computer.start`), the screen streams behind a
+sealed capability (`computer.openScreen` + `/api/internal/screen-target`), takeover is exclusive
+(`computer.takeover`/`release`, other members can neither take nor shed the hold), idle computers
+are released (`BOMA_COMPUTER_IDLE_MINUTES`, default 10), and the provider conformance suite runs
+(`boma-infra::computer_conformance`, six tests covering boot/reuse/shell/confinement/takeover/
+capability sealing/private isolation; the suite is the contract any provider answers to). Full
+gate suite green at push (`fmt`, `clippy -D warnings`, `nextest` 221/221, `deny`, `machete`, trace
+budget 21/40, secret scan).
 
 - **REQ-027 (provider-agnostic computers, fail-closed, MUST)** is done: `SANDBOX_PROVIDER`
   selects the backend at startup — absent means `none` (valid), `docker` selects the local
@@ -39,15 +47,17 @@
   `/home/` (no `..`, no shell meta-characters) — proved against a real rootless Docker daemon.
   DOM / click / type / scroll / open-apps have **not** landed: the alpine image carries no
   browser, so a laptop-local fake is the only thing they could run against, and that would be
-  theatre, not a proof. They need the browser image decision first; recorded as blocked on that
-  choice.
+  theatre, not a proof. They need a Chromium image (CDP over websocket) or an explicit scope
+  change; recorded as blocked on that choice.
 
 Honest gaps carried in M4:
 
-- **REQ-031 (team vs private computers, SHOULD)** — private isolation is satisfied structurally
-  (per-bot container + per-bot home volume), but the *team* shape (one browser identity shared
-  within a space's trust boundary) is not implemented yet; mode selection through
-  `computer.settings` is deferred alongside it.
+- **REQ-031 (team vs private computers, SHOULD)** is done: `computers.private` backfilled to
+  `true`; a space has at most one team computer (partial unique index on non-private rows);
+  `computer.start {botId, mode}` with `mode = private` (default) boots a per-bot computer, and
+  `mode = team` boots or reuses the one shared by every bot of the space; `computer.settings`
+  reports `mode`; other bots in the space see only their own computer (private) or the shared one
+  (team). Proved at the use-case boundary (testkit) and the provider boundary (conformance).
 - The **agent-driven tool loop** (the model calling computer tools by itself) is not part of this
   milestone yet: the scripted provider does not call tools at all. Computer tools are proved at
   the use-case boundary (RPC + shell integration), not by an agent run.

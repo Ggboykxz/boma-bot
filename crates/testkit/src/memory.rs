@@ -3712,6 +3712,21 @@ impl boma_app::ports::ComputerStore for MemoryComputerStore {
             .map(|row| row.computer.clone()))
     }
 
+    async fn find_team(
+        &self,
+        context: &TenantContext,
+        space_id: &SpaceId,
+    ) -> Result<Option<boma_domain::Computer>, boma_app::AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .computers
+            .iter()
+            .map(|row| &row.computer)
+            .find(|computer| computer.space_id == *space_id && !computer.private)
+            .filter(|computer| visible(context, &computer.space_id))
+            .cloned())
+    }
+
     async fn find_by_id(
         &self,
         context: &TenantContext,

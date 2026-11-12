@@ -1404,6 +1404,7 @@ pub async fn ensure_computer(
     app: &App,
     context: &TenantContext,
     bot_id: &str,
+    private: bool,
 ) -> Result<ComputerOutcome, AppError> {
     let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
     app.stores
@@ -1415,8 +1416,33 @@ pub async fn ensure_computer(
 
     let now = app.services.clock.now();
     let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
-    let mut computer = match app.stores.computers.find(context, &bot_id).await? {
+    let found = if private {
+        app.stores.computers.find(context, &bot_id).await?
+    } else {
+        app.stores.computers.find_team(context, &space_id).await?
+    };
+    let mut computer = match found {
         Some(computer) => computer,
+        None if !private => {
+            app.stores
+                .computers
+                .create(
+                    context,
+                    crate::ports::NewComputer {
+                        id: boma_domain::ComputerId::new(app.services.ids.new_id("cmp"))?,
+                        space_id: space_id.clone(),
+                        bot_id: bot_id.clone(),
+                        provider: runtime.provider().to_owned(),
+                        private: false,
+                        memory_limit_mb: 512,
+                        cpu_limit: 1.0,
+                        idle_minutes: 10,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                    },
+                )
+                .await?
+        }
         None => {
             app.stores
                 .computers
@@ -1427,7 +1453,7 @@ pub async fn ensure_computer(
                         space_id,
                         bot_id,
                         provider: runtime.provider().to_owned(),
-                        private: false,
+                        private: true,
                         memory_limit_mb: 512,
                         cpu_limit: 1.0,
                         idle_minutes: 10,
@@ -1463,6 +1489,24 @@ pub async fn ensure_computer(
     })
 }
 
+/// Finds the computer a bot addresses: its own, or the space's team computer (REQ-031).
+async fn resolve_computer(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &boma_domain::BotId,
+) -> Result<Option<boma_domain::Computer>, AppError> {
+    if let Some(computer) = app.stores.computers.find(context, bot_id).await? {
+        return Ok(Some(computer));
+    }
+    let Some(space_id) = context.space_id() else {
+        return Ok(None);
+    };
+    let Some(team) = app.stores.computers.find_team(context, space_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(team))
+}
+
 /// Stops the bot's computer, preserving its home (REQ-026).
 ///
 /// Idempotent: a bot with no computer, and a computer already stopped, both answer `stopped`.
@@ -1486,7 +1530,7 @@ pub async fn stop_computer(
     let runtime = computers_or_unavailable(app)?;
 
     let now = app.services.clock.now();
-    let Some(mut computer) = app.stores.computers.find(context, &bot_id).await? else {
+    let Some(mut computer) = resolve_computer(app, context, &bot_id).await? else {
         // Nothing was ever started: the answer is `stopped` with no timestamps (the golden says so).
         return Ok(boma_domain::Computer {
             id: boma_domain::ComputerId::new(app.services.ids.new_id("cmp"))?,
@@ -1542,7 +1586,7 @@ pub async fn computer_status(
         .find(context, &bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    app.stores.computers.find(context, &bot_id).await
+    resolve_computer(app, context, &bot_id).await
 }
 
 /// Stops the computers whose idle window has passed (REQ-026).
@@ -1635,10 +1679,7 @@ pub async fn computer_takeover(
         .await?
         .ok_or(AppError::NotFound)?;
     let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
-    let mut computer = app
-        .stores
-        .computers
-        .find(context, &bot_id)
+    let mut computer = resolve_computer(app, context, &bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
     if computer.status != boma_domain::ComputerStatus::Running {
@@ -1677,10 +1718,7 @@ pub async fn computer_release(
         .await?
         .ok_or(AppError::NotFound)?;
     let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
-    let mut computer = app
-        .stores
-        .computers
-        .find(context, &bot_id)
+    let mut computer = resolve_computer(app, context, &bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
     match computer.takeover_by_user.as_ref() {
@@ -1810,10 +1848,7 @@ pub async fn computer_caller(
         .find(context, &bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let computer = app
-        .stores
-        .computers
-        .find(context, &bot_id)
+    let computer = resolve_computer(app, context, &bot_id)
         .await?
         .ok_or(AppError::Unavailable)?;
     if computer.status != boma_domain::ComputerStatus::Running {
@@ -1861,7 +1896,7 @@ pub async fn issue_screen_capability(
         .find(context, &bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let Some(computer) = app.stores.computers.find(context, &bot_id).await? else {
+    let Some(computer) = resolve_computer(app, context, &bot_id).await? else {
         return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
             "the computer is not running".to_owned(),
         )));

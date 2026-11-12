@@ -881,11 +881,17 @@ async fn computer_settings(
                 memory_limit_mb: computer.memory_limit_mb,
                 cpu_limit: computer.cpu_limit,
                 idle_minutes: computer.idle_minutes,
+                mode: if computer.private {
+                    "private".to_owned()
+                } else {
+                    "team".to_owned()
+                },
             },
             None => ComputerSettingsReply {
                 memory_limit_mb: 512,
                 cpu_limit: 1.0,
                 idle_minutes: 10,
+                mode: "private".to_owned(),
             },
         });
     }
@@ -921,6 +927,11 @@ async fn computer_settings(
         memory_limit_mb: computer.memory_limit_mb,
         cpu_limit: computer.cpu_limit,
         idle_minutes: computer.idle_minutes,
+        mode: if computer.private {
+            "private".to_owned()
+        } else {
+            "team".to_owned()
+        },
     })
 }
 
@@ -979,6 +990,9 @@ fn computer_provider(app: &boma_app::App) -> ComputerProviderReply {
 struct ComputerStatusRequest {
     /// The bot whose computer is asked about.
     bot_id: String,
+    /// `private` (default) or `team` (only meaningful for `computer.start`).
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 /// Validates the bot-scoped computer body, or answers the uniform not-found.
@@ -1039,7 +1053,18 @@ async fn computer_start(
     {
         return Err(ApiError::computers_unavailable());
     }
-    let outcome = usecases::ensure_computer(app, &auth.actor.context, &request.bot_id).await?;
+    let private = match request.mode.as_deref() {
+        None | Some("private") => true,
+        Some("team") => false,
+        Some(_) => {
+            return Err(ApiError::new(
+                crate::error::ErrorCode::BadRequest,
+                "mode must be \"private\" or \"team\".",
+            ));
+        }
+    };
+    let outcome =
+        usecases::ensure_computer(app, &auth.actor.context, &request.bot_id, private).await?;
     Ok(ComputerStatusReply::for_computer(&outcome.computer))
 }
 

@@ -1254,6 +1254,17 @@ pub trait ComputerStore: Send + Sync {
         bot_id: &boma_domain::BotId,
     ) -> Result<Option<boma_domain::Computer>, AppError>;
 
+    /// Finds the team computer shared by a space, when there is one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_team(
+        &self,
+        context: &boma_domain::TenantContext,
+        space_id: &boma_domain::SpaceId,
+    ) -> Result<Option<boma_domain::Computer>, AppError>;
+
     /// Finds a computer by id inside a tenant.
     ///
     /// # Errors

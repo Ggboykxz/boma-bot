@@ -49,6 +49,28 @@ impl ComputerStore for PostgresComputerStore {
         row.map(computer).transpose()
     }
 
+    async fn find_team(
+        &self,
+        context: &TenantContext,
+        space_id: &boma_domain::SpaceId,
+    ) -> Result<Option<Computer>, AppError> {
+        let space_key = space_id.as_str().to_owned();
+        let row = tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                sqlx::query_as::<_, ComputerRow>(sqlx::AssertSqlSafe(format!(
+                    "SELECT {COMPUTER_COLUMNS} FROM computers
+                     WHERE space_id = $1 AND NOT private"
+                )))
+                .bind(space_key.as_str())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)
+            })
+        })
+        .await?;
+        row.map(computer).transpose()
+    }
+
     async fn find_by_id(
         &self,
         context: &TenantContext,
