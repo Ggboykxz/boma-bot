@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-opus-5-5",
+  "permissions": [
+    { "action": "*", "resource": "*", "effect": "allow" }
+  ],
+  "agents": {
+    "auditor": {
+      "description": "Independent reviewer: writes under docs/ by convention, fixes nothing",
+      "mode": "all"
+    }
+  },
+  "mcp": {
+    "servers": {
+      "boardui": {
+        "type": "local",
+        "command": ["npx", "-y", "boardui@latest", "mcp"],
+        "codemode": false
+      },
+      "playwright": {
+        "type": "local",
+        "command": ["npx", "-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+        "codemode": false
+      }
+    }
+  }
+}
