@@ -29,6 +29,8 @@ Next command: `/implement M1` once M0 is compiled, or install rustup/cargo/Docke
   secret gates plus the web job; `apps/web` (Next `output: "export"`, Tailwind v4 placeholder tokens,
   Playwright shell/a11y/golden suites); `apps/desktop/README.md` deferral. **CONFIRMED** (files
   exist; see "Verified here").
+- 2026-11-12 — M0 committed as `chore: scaffold the workspace, CI and web shell (M0)` (71 files).
+  **CONFIRMED** (`git log`). Not pushed: no remote is configured.
 - 2026-11-12 — All third-party versions resolved from the live registries (`crates.io` API
   `max_stable_version`, `registry.npmjs.org`), never typed from memory. Table:
   `docs/DEPENDENCIES.md`. **CONFIRMED** (API responses in session).
