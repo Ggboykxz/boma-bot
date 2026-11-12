@@ -1,0 +1,7 @@
+{
+  "name": "boma-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Boma Bot workspace marker. The web client lives in apps/web and keeps its own package.json and lockfile; this file exists so the BoardUI MCP server can treat the repository root as a project root (install_rules writes the always-on design rules into the root AGENTS.md).",
+  "license": "MIT"
+}

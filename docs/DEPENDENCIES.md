@@ -70,9 +70,26 @@ project's own licence, so `deny.toml` allows it explicitly rather than disabling
 | `eslint-config-next` | 16.4.6 | MIT | Next's rules, exported as a flat config array |
 | `@playwright/test` | 1.65.0 | Apache-2.0 | end-to-end and UI golden replay |
 | `@axe-core/playwright` | 4.14.0 | MPL-2.0 | accessibility gate, zero critical/serious |
-| `@remixicon/react` | 4.9.0 — **not installed at M0** | Remix Icon License 1.0 | BoardUI's icon set; added by `/ui-kit` with the first icon, not before |
+| `@remixicon/react` | 4.9.0 | Remix Icon License 1.0 | BoardUI's icon set; installed with the first icon |
+| `react-aria-components` | 1.22.1 | Apache-2.0 | BoardUI's form and interaction layer (React Aria) |
+| `tailwind-merge` | 3.7.0 | MIT | the class merger behind BoardUI's `cx()` |
 | `@types/node` | **22.20.5** | MIT | matches the Node 22 runtime CI uses |
 | `@types/react` / `@types/react-dom` | 19.3.0 | MIT | React types |
+
+**Fonts.** The web client loads **Inter** through `next/font/google`, which downloads it at build
+time and self-hosts the WOFF2 file: nothing is requested from a font host at runtime. Inter is
+licensed under the SIL Open Font License 1.1 (`/ofl/inter`), which permits redistribution and
+embedding. No other font is vendored; the `he` and `ar` locales rely on the system fallback stack
+until the product picks an Arabic- and Hebrew-capable face (an open decision, recorded in
+`docs/UI.md`).
+
+**BoardUI.** The design system itself is not an npm dependency: its source is vendored into
+`apps/web/` (`styles/`, `utils/`, `components/`) by the BoardUI MCP server, so the repository is
+self-contained and the build has no BoardUI runtime dependency. The free tier is what the tree
+contains. Before the repository is published, re-read BoardUI's terms: if a Pro component or
+template ever lands in the tree and its source may not be redistributed, it must be installed at
+build time and kept out of the public repository. **No Pro licence key is stored in this
+repository**; the key lives on the machine only.
 
 **TypeScript pin (deliberate).** `typescript@latest` is **7.0.2**, the native compiler port
 (~2.5 MB unpacked, versus ~24 MB for the JavaScript implementation). Next's type plugin drives the
@@ -99,11 +116,18 @@ and `@types/node@latest` (26.6.6) describes a runtime that is not deployed.
 
 ## Design system
 
-BoardUI (free tier) supplies components, semantic tokens and the design rules. The Pro licence is
-**not** activated on this machine and no Pro source is in the tree. Before publishing, re-read
-BoardUI's terms: if Pro source may not be redistributed, it must be installed at build time and kept
-out of the public repository. `apps/web/app/globals.css` currently holds a placeholder token layer
-that `init_boardui` replaces during `/ui-kit`; that replacement is recorded in `docs/UI.md`.
+BoardUI (free tier) supplies the components, the semantic tokens and the design rules. Its source
+is vendored into `apps/web/` by the BoardUI MCP server: `styles/theme.css`,
+`styles/typography.css`, `styles/globals.css`, `utils/cx.ts`, `utils/directional-icon.ts`,
+`utils/use-dismiss-on-outside-press.ts`, `components/foundations/direction/direction.tsx` and
+`components/base/buttons/button.tsx`. The always-on rules live in the fenced BoardUI block of the
+root `AGENTS.md` and in `.cursor/rules/boardui.mdc`; the agent skill lives in
+`.claude/skills/boardui/` (restart opencode to load it).
+
+The Pro licence is **not** activated on this machine and no Pro source is in the tree. Before
+publishing, re-read BoardUI's terms: if Pro source may not be redistributed, it must be installed
+at build time and kept out of the public repository. The local adaptations to the vendored source
+are listed in `docs/UI.md`; none of them edits a vendored file.
 
 ## Assets
 

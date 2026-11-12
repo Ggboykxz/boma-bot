@@ -1,0 +1,37 @@
+/* ---------------------------------------------------------------------------
+ * Boma Bot additions on top of the BoardUI stylesheet.
+ *
+ * `styles/globals.css` and `styles/theme.css` are vendored from BoardUI and are never
+ * hand-edited. This file carries the three things the product adds on top of the design
+ * system, and nothing else.
+ *
+ * 1. **Target size.** WCAG 2.2 AA asks for 24 px; this product asks for 44 px on the
+ *    controls a thumb or a finger reaches. The rule is scoped to `.boma-target` so it
+ *    cannot silently change the metrics of a vendored component.
+ * 2. **Focus ring.** BoardUI components carry their own focus ring. Our own links and
+ *    buttons do not, so they get the same token, the same width and the same offset.
+ * 3. **One token re-mapping.** BoardUI leaves `--color-text-secondary` at `neutral-500` in
+ *    dark mode, where it reaches 3.95:1 on the dark page ground: below the 4.5:1 that
+ *    WCAG 2.2 AA requires for body text. `neutral-400` plays the same role in dark
+ *    (7.4:1) and is the value the light theme already uses for its own secondary role.
+ *    The token is re-mapped, never a literal colour, so the re-export in
+ *    `styles/theme.css` keeps working and dark mode stays automatic.
+ *
+ * The axe gate caught this: it is the reason the rule exists.
+ * --------------------------------------------------------------------------- */
+
+.dark {
+  --color-text-secondary: var(--color-neutral-400);
+}
+
+.boma-target {
+  min-block-size: 2.75rem;
+}
+
+.boma-focus:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-background-full),
+    0 0 0 4px var(--color-border-focus-ring);
+  border-radius: var(--radius-sm);
+}

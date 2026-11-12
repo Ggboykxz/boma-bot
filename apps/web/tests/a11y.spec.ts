@@ -35,11 +35,16 @@ for (const route of ROUTES) {
 }
 
 test("REQ-057 the shell mirrors in RTL without an accessibility regression", async ({ page }) => {
-  await page.goto("/app/");
-  await page.evaluate(() => {
-    document.documentElement.lang = "he";
-    document.documentElement.dir = "rtl";
+  // The locale is chosen the way a user chooses it: a stored preference. The boot script reads
+  // it before the first paint, the direction provider picks it up, and the whole page mirrors —
+  // no attribute is patched behind React's back.
+  await page.addInitScript(() => {
+    window.localStorage.setItem("boma-locale", "he");
   });
+  await page.goto("/app/");
+
+  await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+  await expect(page.getByRole("navigation", { name: "ניווט ראשי" })).toBeVisible();
 
   const mirrored = await page.evaluate(
     () => getComputedStyle(document.querySelector("nav")!).direction,

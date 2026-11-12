@@ -2,13 +2,15 @@
 
 ## Current milestone
 
-**M0 — closed.** The scaffold is written, compiled, linted, tested and exercised against a real
-Postgres and a real browser. `make check` and `make ui-test` are green on this machine
-(commands and results under "Verified here").
+**M0 — closed, and `/ui-kit` done.** The scaffold is written, compiled, linted, tested and
+exercised against a real Postgres and a real browser. `make check` and `make ui-test` are green on
+this machine (commands and results under "Verified here").
 
-Next command: `/ui-kit` (BoardUI replaces the placeholder token layer, then opencode is restarted),
-then `/implement M1` — walking skeleton: space, bot, thread, send message, SSE, tenant context and
-RLS.
+The BoardUI design system is installed and the shell uses it. **opencode must be restarted** for
+the BoardUI agent skill (`.claude/skills/boardui/`) and the always-on rules to load.
+
+Next command: `/implement M1` — walking skeleton: space, bot, thread, send message, SSE, tenant
+context and RLS.
 
 ## Done
 
@@ -51,6 +53,28 @@ RLS.
     critical or serious violation in light, dark and RTL. **CONFIRMED** (command output).
   - `cargo deny check` → advisories, bans, licences and sources **all ok**; `cargo machete` → no
     unused dependency. **CONFIRMED** (command output).
+- 2026-11-12 — `/ui-kit` done: **BoardUI (free tier) installed** through its MCP server and the
+  shell rebuilt on it.
+  - Vendored into `apps/web/`: `styles/theme.css`, `styles/typography.css`, `styles/globals.css`,
+    `utils/cx.ts`, `utils/directional-icon.ts`, `utils/use-dismiss-on-outside-press.ts`,
+    `components/foundations/direction/direction.tsx`, `components/base/buttons/button.tsx`. The
+    placeholder `app/globals.css` is gone; the layout imports BoardUI's stylesheet.
+  - The always-on rules are in the **fenced BoardUI block of the root `AGENTS.md`** (the diff
+    only adds design conventions, reviewed line by line) and in `.cursor/rules/boardui.mdc`; the
+    agent skill is in `.claude/skills/boardui/` — **restart opencode** to load it.
+  - A minimal root `package.json` marks the repository as a project root: `install_rules` writes
+    into the root `AGENTS.md` only when the directory holds a `package.json`. The web client keeps
+    its own manifest and lockfile; nothing is hoisted.
+  - The shell now speaks the catalogue: every label goes through `t(locale, key)`, the direction
+    provider reads the document's `lang`/`dir` through `useSyncExternalStore`, and the boot script
+    applies the stored theme and locale before the first paint.
+  - The axe gate found two real contrast faults and both are fixed by picking tokens, not by
+    literals: BoardUI leaves `--color-text-secondary` at 3.95:1 on the dark ground (re-mapped to
+    `neutral-400` in `styles/boma.css`), and the navigation labels used the secondary text token
+    on the secondary surface (4.42:1, now the primary text token). Both are listed in
+    `docs/UI.md`.
+  - Inter is loaded through `next/font/google` and self-hosted: no font request leaves the
+    machine at runtime. **CONFIRMED** (command output, see "Verified here").
 - 2026-11-12 — All third-party versions resolved from the live registries (`crates.io` API
   `max_stable_version`, `registry.npmjs.org`), never typed from memory. Table:
   `docs/DEPENDENCIES.md`. **CONFIRMED** (API responses in session).
@@ -84,7 +108,8 @@ Commands actually run in this session, and their result. Nothing else is claimed
 | Web build | `npm run build` | static export of `/`, `/app`, `/_not-found` |
 | Web types | `npm run typecheck` | clean |
 | Web lint | `npm run lint` (`--max-warnings=0`) | clean |
-| Browser | `npm run test` (Playwright + axe) | **9 passed, 7 skipped** (pending goldens) |
+| Browser | `npm run test` (Playwright + axe) | **12 passed, 7 skipped** (pending goldens) |
+| Design system | `boardui init_boardui`, `install_rules`, `install_components`, `install_skill` | vendored into `apps/web/`, rules in the root `AGENTS.md`, skill in `.claude/skills/boardui/` |
 | Release build | `cargo build --release --locked --bin boma` | 5.9 MB binary |
 | Database | `boma migrate`, `boma serve`, `boma probe` against PostgreSQL 17.11 | migrations applied, all routes answer |
 | Compose and CI YAML | `yq` parse of `compose.yaml` and `.github/workflows/ci.yml` | valid |
@@ -141,13 +166,12 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
 - **No Docker daemon and no `sudo`** on this machine: the container image and the Compose stack are
   written and reviewed but never built. Everything Compose does was verified by hand against a real
   PostgreSQL 17.11 instead (same image major, same environment variables, same migration step).
-- **BoardUI not installed** (no-install rule; Pro licence absent). `apps/web/app/globals.css` is a
-  placeholder token layer with the BoardUI vocabulary; `/ui-kit` replaces it and adds
-  `@remixicon/react` with the first icon. Restart opencode after `/ui-kit`.
 - **Tauri shell deferred to M10** (`apps/desktop/README.md`): REQ-055 is a SHOULD and a shell that
   was never compiled would be a false claim. Mobile (REQ-056) stays deferred per ADR-016.
 - **No remote**: nothing has been pushed, so CI has never run on GitHub. The workflow is therefore
   unproven as a workflow, even though every command inside it was run by hand here.
+- **opencode must be restarted** for the BoardUI skill and the always-on rules to load: MCP tools
+  and skills are bound at session start.
 
 ## Deviations
 
@@ -187,8 +211,7 @@ Any other externally visible difference would be a DEVIATION needing owner appro
 
 ## Next
 
-1. `/ui-kit`: install BoardUI, replace the placeholder token layer, add the first icon, restart
-   opencode.
+1. Restart opencode, so the BoardUI skill and the always-on rules load.
 2. `/implement M1`: walking skeleton (space, bot, thread, send message, SSE, tenant context + RLS),
    with the tests written before the code, as AGENTS.md requires.
 3. Tighten the traceability ratchet (50 → 40 at M1) as the requirements land.
