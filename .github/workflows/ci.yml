@@ -5,6 +5,12 @@ on:
     branches: [dev]
   pull_request:
 
+# Cancel superseded runs on the same ref: pushing twice in quick succession is not two
+# full builds' worth of compute, and a red intermediate run has nothing to say.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -41,6 +47,11 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest,cargo-deny,cargo-machete,cargo-llvm-cov
+
+      # Every integration test against the computer supervisor requires a daemon; ubuntu-24.04
+      # ships one, and a silent miss would read as a flaky suite instead of a missing dependency.
+      - name: docker daemon is reachable
+        run: docker info
 
       # `--locked` everywhere: Cargo.lock is committed (AGENTS.md). A missing lock is a hard
       # failure on purpose, never a silent resolve. docs/STATE.md records that M0 cannot produce it.
