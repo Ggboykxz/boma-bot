@@ -24,8 +24,8 @@ use crate::{
     state::AppState,
     wire::{
         AnswerReply, BotReply, BotsListReply, CancelReply, InvitationReply, MessagesReply,
-        ReactReply, RosterBotView, RunView, RunsReply, SendReply, SnoozeReply, SpaceReply,
-        ThreadHeadReply,
+        ReactReply, RosterBotView, RunRetryReply, RunView, RunsReply, SendReply, SnoozeReply,
+        SpaceReply, ThreadHeadReply,
     },
 };
 
@@ -64,6 +64,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
         (namespaces::RUNS, "cancel"),
+        (namespaces::RUNS, "retry"),
     ]
 }
 
@@ -135,6 +136,9 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::RUNS, "cancel") => runs_cancel(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::RUNS, "retry") => runs_retry(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -580,6 +584,25 @@ async fn runs_cancel(
 struct RunsCancelRequest {
     /// The run the caller wants stopped.
     run_id: String,
+}
+
+/// The body of `runs.retry`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunsRetryRequest {
+    /// The run to re-queue.
+    run_id: String,
+}
+
+/// `runs.retry` — re-queue a failed run for one more attempt (REQ-012).
+async fn runs_retry(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<RunRetryReply, ApiError> {
+    let request: RunsRetryRequest = parse(&body)?;
+    let run = usecases::retry_run(state.app(), &auth.actor.context, &request.run_id).await?;
+    Ok(RunRetryReply::from(&run))
 }
 
 /// The body of `runs.list`.

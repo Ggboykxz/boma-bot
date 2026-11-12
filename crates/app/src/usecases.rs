@@ -724,6 +724,20 @@ fn validate_until(until: &str) -> Result<(), AppError> {
         })
 }
 
+/// Re-queues a failed run for one more attempt (REQ-012).
+///
+/// The only transition out of a terminal state: `failed → queued`. The attempt count grows by
+/// one; the fence and the lease are dropped.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the run does not exist in the caller's tenant, and
+/// [`AppError::Conflict`] when the run is not `failed`.
+pub async fn retry_run(app: &App, context: &TenantContext, run_id: &str) -> Result<Run, AppError> {
+    let id = boma_domain::RunId::new(run_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores.runs.retry(context, &id).await
+}
+
 /// The activity projection: the runs of a bot, newest first (REQ-011).
 ///
 /// # Errors

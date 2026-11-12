@@ -526,6 +526,22 @@ pub trait RunStore: Send + Sync {
         id: &boma_domain::RunId,
     ) -> Result<Option<Run>, AppError>;
 
+    /// Re-queues a `failed` run for one more attempt (REQ-012).
+    ///
+    /// The only transition out of a terminal state: `failed → queued`, atomically, with one
+    /// attempt added. `completed` and `cancelled` refuse with [`AppError::Conflict`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::NotFound`] when the run does not exist in the tenant,
+    /// [`AppError::Conflict`] when it is not `failed`, and an error when the database cannot
+    /// answer.
+    async fn retry(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::RunId,
+    ) -> Result<Run, AppError>;
+
     /// The run a nonce already started, if any.
     ///
     /// # Errors

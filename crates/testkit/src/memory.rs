@@ -1370,6 +1370,7 @@ impl RunStore for MemoryRunStore {
             lease_expires_at: None,
             steering_from_seq: None,
             steering_consumed_seq: 0,
+            attempt: 1,
             model_provider: run.model_provider,
             model_id: run.model_id,
             model_pinned: run.model_pinned,
@@ -1379,6 +1380,31 @@ impl RunStore for MemoryRunStore {
             run: stored.clone(),
         });
         Ok(stored)
+    }
+
+    async fn retry(&self, context: &TenantContext, id: &RunId) -> Result<Run, AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state
+            .runs
+            .iter_mut()
+            .find(|row| row.run.id == *id && visible(context, &row.run.space_id))
+        else {
+            return Err(AppError::NotFound);
+        };
+        match row.run.status {
+            RunStatus::Failed => {}
+            _ => return Err(AppError::Conflict),
+        }
+        row.run.status = RunStatus::Queued;
+        row.run.attempt += 1;
+        row.run.started_at = None;
+        row.run.completed_at = None;
+        row.run.lease_owner = None;
+        row.run.lease_fence = 0;
+        row.run.lease_expires_at = None;
+        row.run.steering_from_seq = None;
+        row.run.steering_consumed_seq = 0;
+        Ok(row.run.clone())
     }
 
     async fn find(&self, context: &TenantContext, id: &RunId) -> Result<Option<Run>, AppError> {

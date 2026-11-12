@@ -91,7 +91,16 @@ REQ-009 (read state and snooze), REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton
 
 ## Done
 
-- 2026-11-12 — Toolchain rebuilt from scratch after the sandbox wiped `/tmp/opencode`: rustup
+- 2026-11-12 — **M2 sweep: `runs.retry` closed (REQ-012), the last stale pending golden.** The
+  manifest carried `run-retry` as pending with the reason « retry is implemented once leases and
+  fence tokens exist » — both had existed since M1, so the reason was stale and the owner's
+  "finish everything first" rule applied. Implemented: migration `0012_attempt.sql` (`runs.attempt`,
+  starts at 1), the `failed → queued` transition only, atomically, with the fence and lease dropped,
+  `completed` and `cancelled` refused with `CONFLICT`, one attempt added, `/rpc/runs/retry`
+  (`{runId}` → `{runId, status, attempt}`), the `run-retry` golden replays byte-for-byte and is
+  marked implemented. Proved at three levels (memory, RPC surface, real Postgres) plus the golden
+  replay. `group-create` (REQ-010) is now explicitly labelled M11, matching PLAN.md.
+- 2026-11-12 — Toolchain rebuilt from scratch after the sandbox wiped `/tmp/opencode` (rustup
   installed Rust 1.91.1 (minimal profile + rustfmt/clippy/rust-src), `cargo-nextest` 0.9.151 from
   source, gcc 16.2 and PostgreSQL 17.7 through nix, `/tmp/opencode/env.sh` recreated (port 5433,
   db `boma`, trust auth). Headless Chromium's system libraries (glib, nss, nspr, atk, at-spi,

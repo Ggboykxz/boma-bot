@@ -62,7 +62,7 @@ impl RunStore for PostgresRunStore {
                                boma.rfc3339(lease_expires_at) AS lease_expires_at,
                                boma.rfc3339(started_at) AS started_at,
                                boma.rfc3339(completed_at) AS completed_at, error,
-                               steering_from_seq, steering_consumed_seq,
+                               steering_from_seq, steering_consumed_seq, attempt,
                                model_provider, model_id, model_pinned,
                                parent_run_id,
                                boma.rfc3339(created_at) AS created_at",
@@ -125,7 +125,7 @@ impl RunStore for PostgresRunStore {
                 sqlx::query_as::<_, RunRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
-                            steering_from_seq, steering_consumed_seq,
+                            steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
                             parent_run_id,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
@@ -159,7 +159,7 @@ impl RunStore for PostgresRunStore {
                 sqlx::query_as::<_, RunRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
-                            steering_from_seq, steering_consumed_seq,
+                            steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
                             parent_run_id,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
@@ -192,7 +192,7 @@ impl RunStore for PostgresRunStore {
                 sqlx::query_as::<_, RunRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger, client_nonce,
                             source_message_id, lease_owner, lease_fence,
-                            steering_from_seq, steering_consumed_seq,
+                            steering_from_seq, steering_consumed_seq, attempt,
                             model_provider, model_id, model_pinned,
                             parent_run_id,
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
@@ -312,7 +312,7 @@ impl RunStore for PostgresRunStore {
                      WHERE r.id = candidate.id
                      RETURNING r.id, r.space_id, r.bot_id, r.thread_id, r.user_id, r.status, r.trigger,
                                r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
-                               r.steering_from_seq, r.steering_consumed_seq,
+                               r.steering_from_seq, r.steering_consumed_seq, r.attempt,
                                r.model_provider, r.model_id, r.model_pinned,
                                r.parent_run_id,
                                boma.rfc3339(r.lease_expires_at) AS lease_expires_at,
@@ -377,6 +377,74 @@ impl RunStore for PostgresRunStore {
         Ok(())
     }
 
+    async fn retry(&self, context: &TenantContext, id: &RunId) -> Result<Run, AppError> {
+        let id = id.as_str().to_owned();
+        let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let space_id_key = space_id.as_str().to_owned();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                // The only transition out of a terminal state, atomically: failed → queued,
+                // one attempt added. A concurrent retry sees `queued` and gets zero rows.
+                let updated = sqlx::query_as::<_, rows::RunRow>(
+                    "UPDATE runs
+                     SET status = 'queued',
+                         attempt = attempt + 1,
+                         started_at = NULL,
+                         completed_at = NULL,
+                         lease_owner = NULL,
+                         lease_fence = 0,
+                         lease_expires_at = NULL,
+                         steering_from_seq = NULL,
+                         steering_consumed_seq = 0
+                     WHERE id = $1 AND status = 'failed' AND space_id = $2
+                     RETURNING id, space_id, bot_id, thread_id, user_id, status, trigger,
+                               client_nonce, source_message_id, lease_owner, lease_fence,
+                               boma.rfc3339(lease_expires_at) AS lease_expires_at,
+                               boma.rfc3339(started_at) AS started_at,
+                               boma.rfc3339(completed_at) AS completed_at, error,
+                               steering_from_seq, steering_consumed_seq, attempt,
+                               model_provider, model_id, model_pinned,
+                               parent_run_id,
+                               boma.rfc3339(created_at) AS created_at",
+                )
+                .bind(id.as_str())
+                .bind(space_id_key.as_str())
+                .fetch_one(&mut *conn)
+                .await
+                .map_err(tenant::unavailable);
+
+                if let Ok(row) = updated {
+                    return rows::run(row);
+                }
+                // Not retried: find out why, so the caller hears the honest reason.
+                {
+                    let found = sqlx::query_as::<_, rows::RunRow>(
+                        "SELECT id, space_id, bot_id, thread_id, user_id, status, trigger,
+                                    client_nonce, source_message_id, lease_owner, lease_fence,
+                                    boma.rfc3339(lease_expires_at) AS lease_expires_at,
+                                    boma.rfc3339(started_at) AS started_at,
+                                    boma.rfc3339(completed_at) AS completed_at, error,
+                                    steering_from_seq, steering_consumed_seq, attempt,
+                                    model_provider, model_id, model_pinned,
+                                    parent_run_id,
+                                    boma.rfc3339(created_at) AS created_at
+                             FROM runs WHERE id = $1 AND space_id = $2",
+                    )
+                    .bind(id.as_str())
+                    .bind(space_id_key.as_str())
+                    .fetch_optional(&mut *conn)
+                    .await
+                    .map_err(tenant::unavailable)?;
+                    match found {
+                        Some(_) => Err(AppError::Conflict),
+                        None => Err(AppError::NotFound),
+                    }
+                }
+            })
+        })
+        .await
+    }
+
     async fn list(
         &self,
         context: &TenantContext,
@@ -393,7 +461,7 @@ impl RunStore for PostgresRunStore {
                 sqlx::query_as::<_, ActivityRow>(
                     "SELECT r.id, r.space_id, r.bot_id, r.thread_id, r.user_id, r.status, r.trigger,
                             r.client_nonce, r.source_message_id, r.lease_owner, r.lease_fence,
-                            r.steering_from_seq, r.steering_consumed_seq,
+                            r.steering_from_seq, r.steering_consumed_seq, r.attempt,
                             r.model_provider, r.model_id, r.model_pinned,
                             r.parent_run_id,
                             boma.rfc3339(r.lease_expires_at) AS lease_expires_at,

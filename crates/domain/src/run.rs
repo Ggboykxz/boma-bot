@@ -260,6 +260,8 @@ pub struct Run {
     /// The message that started it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_message_id: Option<crate::ids::MessageId>,
+    /// How many attempts this run has consumed (REQ-012). One at birth, one more per retry.
+    pub attempt: u32,
     /// When it was created.
     pub created_at: String,
     /// When it started working.

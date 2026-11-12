@@ -48,7 +48,7 @@
     "group-create": {
       "status": "pending",
       "req": "REQ-010",
-      "reason": "M2 - group chats and the shared thread arrive with the run and tool milestone"
+      "reason": "M11 - group chats and the shared thread arrive with the groups milestone; M2 has no groups"
     },
     "health": {
       "status": "implemented",
@@ -96,9 +96,9 @@
       "reason": null
     },
     "run-retry": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-012",
-      "reason": "M2 - retry is implemented once leases and fence tokens exist"
+      "reason": null
     },
     "send-message": {
       "status": "implemented",

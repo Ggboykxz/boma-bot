@@ -1007,3 +1007,89 @@ async fn req_009_the_roster_reads_unread_and_snooze_in_postgres() {
 
     cleanup(&database, &organization_id, &email).await;
 }
+
+#[tokio::test]
+async fn req_012_a_failed_run_is_retried_once_in_postgres() {
+    let database = common::database().await;
+    let app = app(&database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "retry").await;
+
+    let bot_id = BotId::new(ids().new_id("bot")).expect("an id is valid");
+    let thread_id = ThreadId::new(ids().new_id("thr")).expect("an id is valid");
+    let (_bot, _thread) = app
+        .stores
+        .bots
+        .create_with_thread(
+            NewBot {
+                id: bot_id.clone(),
+                space_id: space_id.clone(),
+                user_id: user_id.clone(),
+                name: "Analyst".to_owned(),
+                description: None,
+                color: None,
+                created_at: app.services.clock.now(),
+            },
+            NewThread {
+                id: thread_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot_id.clone(),
+                user_id: user_id.clone(),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+        .expect("the bot is created");
+
+    // A failed run, written the way a finished failure looks in the table.
+    let run_id = boma_domain::RunId::new(ids().new_id("run")).expect("an id is valid");
+    let created_at = app.services.clock.now();
+    sqlx::query(
+        "INSERT INTO runs (id, space_id, bot_id, thread_id, user_id, status, trigger,
+                          created_at, started_at, completed_at, error, steering_from_seq,
+                          steering_consumed_seq, attempt)
+         VALUES ($1, $2, $3, $4, $5, 'failed', 'user', $6::timestamptz, $6::timestamptz,
+                 $6::timestamptz, 'the provider refused the request', NULL, 0, 1)",
+    )
+    .bind(run_id.as_str())
+    .bind(space_id.as_str())
+    .bind(bot_id.as_str())
+    .bind(thread_id.as_str())
+    .bind(user_id.as_str())
+    .bind(created_at.as_str())
+    .execute(database.pool())
+    .await
+    .expect("the failed run is written");
+
+    // The retry re-queues the same run, with one attempt added.
+    let retried = boma_app::usecases::retry_run(&app, &context, run_id.as_str())
+        .await
+        .expect("the retry lands");
+    assert_eq!(retried.status, boma_domain::RunStatus::Queued);
+    assert_eq!(retried.attempt, 2);
+    // A failed run that was retried is no longer failed: a second retry is refused.
+    let refused = boma_app::usecases::retry_run(&app, &context, run_id.as_str()).await;
+    assert!(matches!(refused, Err(boma_app::AppError::Conflict)));
+
+    // A completed run never moves, not even with the retry.
+    let completed_id = boma_domain::RunId::new(ids().new_id("run")).expect("an id is valid");
+    sqlx::query(
+        "INSERT INTO runs (id, space_id, bot_id, thread_id, user_id, status, trigger,
+                          created_at, started_at, completed_at, steering_from_seq,
+                          steering_consumed_seq, attempt)
+         VALUES ($1, $2, $3, $4, $5, 'completed', 'user', $6::timestamptz, $6::timestamptz,
+                 $6::timestamptz, NULL, 0, 1)",
+    )
+    .bind(completed_id.as_str())
+    .bind(space_id.as_str())
+    .bind(bot_id.as_str())
+    .bind(thread_id.as_str())
+    .bind(user_id.as_str())
+    .bind(created_at.as_str())
+    .execute(database.pool())
+    .await
+    .expect("the completed run is written");
+    let refused = boma_app::usecases::retry_run(&app, &context, completed_id.as_str()).await;
+    assert!(matches!(refused, Err(boma_app::AppError::Conflict)));
+
+    cleanup(&database, &organization_id, &email).await;
+}

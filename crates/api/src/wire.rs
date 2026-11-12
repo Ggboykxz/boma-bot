@@ -215,6 +215,28 @@ impl From<&boma_app::ports::BotSummary> for RosterBotView {
     }
 }
 
+/// The reply of `runs.retry` (REQ-012).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRetryReply {
+    /// The run that was re-queued.
+    pub run_id: String,
+    /// Where it is after the retry: `queued`.
+    pub status: String,
+    /// How many attempts it has now consumed.
+    pub attempt: u32,
+}
+
+impl From<&boma_domain::Run> for RunRetryReply {
+    fn from(run: &boma_domain::Run) -> Self {
+        Self {
+            run_id: run.id.as_str().to_owned(),
+            status: run.status.as_str().to_owned(),
+            attempt: run.attempt,
+        }
+    }
+}
+
 /// The reply of `bots.list` (REQ-009).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -404,6 +426,7 @@ mod tests {
             lease_expires_at: None,
             steering_from_seq: None,
             steering_consumed_seq: 0,
+            attempt: 1,
             model_provider: None,
             model_id: None,
             model_pinned: false,

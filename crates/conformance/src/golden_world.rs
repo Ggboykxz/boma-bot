@@ -112,6 +112,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "thread-answer"
             | "run-list"
             | "cross-tenant-not-found"
+            | "run-retry"
     );
     if !needs_world {
         return None;
@@ -123,9 +124,43 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         .build();
     let app = test_app.app().clone();
     let cookie = format!("session={SESSION_TOKEN}");
+    let (user_id, space_id) = seed_account_and_session(&test_app, &app).await;
 
-    // Every world starts with the account: the person, their organization, their space and their
-    // membership (REQ-042), written with the ids the fixture names.
+    match fixture {
+        "send-message" | "send-message-replay" => {
+            seed_bot(&app, &space_id, &user_id).await;
+        }
+        "bot-create" | "space-create" | "space-invite" => {}
+        "thread-messages" | "run-list" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_history(&test_app, &space_id, &bot, &thread, &user_id);
+        }
+        "thread-subscribe" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_events(&test_app, &space_id, &bot, &thread);
+        }
+        "thread-answer" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_history(&test_app, &space_id, &bot, &thread, &user_id);
+            seed_card(&test_app, &space_id, &thread);
+        }
+        "run-retry" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_failed_run(&test_app, &space_id, &bot, &thread, &user_id);
+        }
+        "cross-tenant-not-found" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            let _ = (bot, thread);
+            seed_other_space(&app, &user_id).await;
+        }
+        _ => return None,
+    }
+
+    Some(GoldenWorld { app, cookie })
+}
+
+/// Creates the account and its session: everyone signs in as the same golden person.
+async fn seed_account_and_session(test_app: &TestApp, app: &App) -> (UserId, SpaceId) {
     let user_id = UserId::new(USER_ID).expect("the seed id is valid");
     let organization_id = OrganizationId::new(ORGANIZATION_ID).expect("the seed id is valid");
     let space_id = SpaceId::new(SPACE_ID).expect("the seed id is valid");
@@ -175,33 +210,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         .await
         .expect("the session is created");
 
-    match fixture {
-        "send-message" | "send-message-replay" => {
-            seed_bot(&app, &space_id, &user_id).await;
-        }
-        "bot-create" | "space-create" | "space-invite" => {}
-        "thread-messages" | "run-list" => {
-            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
-            seed_history(&test_app, &space_id, &bot, &thread, &user_id);
-        }
-        "thread-subscribe" => {
-            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
-            seed_events(&test_app, &space_id, &bot, &thread);
-        }
-        "thread-answer" => {
-            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
-            seed_history(&test_app, &space_id, &bot, &thread, &user_id);
-            seed_card(&test_app, &space_id, &thread);
-        }
-        "cross-tenant-not-found" => {
-            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
-            let _ = (bot, thread);
-            seed_other_space(&app, &user_id).await;
-        }
-        _ => return None,
-    }
-
-    Some(GoldenWorld { app, cookie })
+    (user_id, space_id)
 }
 
 /// Creates the bot and its thread with the ids the fixture names.
@@ -289,6 +298,7 @@ fn seed_history(
         lease_expires_at: None,
         steering_from_seq: None,
         steering_consumed_seq: 0,
+        attempt: 1,
         model_provider: None,
         model_id: None,
         model_pinned: false,
@@ -349,6 +359,41 @@ fn seed_card(test_app: &TestApp, space_id: &SpaceId, thread: &Thread) {
             answered_at: None,
         },
     );
+}
+
+/// Seeds the failed run the retry fixture re-queues (REQ-012).
+fn seed_failed_run(
+    test_app: &TestApp,
+    space_id: &SpaceId,
+    bot: &Bot,
+    thread: &Thread,
+    user_id: &UserId,
+) {
+    test_app.database().seed_run(Run {
+        id: RunId::new("run_golden_failed").expect("the seed id is valid"),
+        space_id: space_id.clone(),
+        bot_id: bot.id.clone(),
+        thread_id: thread.id.clone(),
+        user_id: user_id.clone(),
+        status: RunStatus::Failed,
+        trigger: RunTrigger::User,
+        client_nonce: None,
+        source_message_id: None,
+        created_at: SEED_INSTANT.to_owned(),
+        started_at: Some(RUN_STARTED_AT.to_owned()),
+        completed_at: Some(SEED_INSTANT.to_owned()),
+        error: Some("the provider refused the request".to_owned()),
+        lease_owner: None,
+        lease_fence: 0,
+        lease_expires_at: None,
+        steering_from_seq: None,
+        steering_consumed_seq: 0,
+        attempt: 1,
+        model_provider: None,
+        model_id: None,
+        model_pinned: false,
+        parent_run_id: None,
+    });
 }
 
 /// Seeds a second space the caller does not belong to.

@@ -119,6 +119,7 @@ pub(crate) struct RunRow {
     pub(crate) error: Option<String>,
     pub(crate) steering_from_seq: Option<i64>,
     pub(crate) steering_consumed_seq: i64,
+    pub(crate) attempt: i32,
     pub(crate) model_provider: Option<String>,
     pub(crate) model_id: Option<String>,
     pub(crate) model_pinned: bool,
@@ -322,6 +323,7 @@ pub(crate) fn run(row: RunRow) -> Result<Run, AppError> {
         model_id: row.model_id,
         model_pinned: row.model_pinned,
         parent_run_id: row.parent_run_id.map(RunId::new).transpose()?,
+        attempt: u32::try_from(row.attempt).unwrap_or(u32::MAX),
     })
 }
 

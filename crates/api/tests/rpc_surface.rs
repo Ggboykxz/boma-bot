@@ -868,3 +868,71 @@ async fn req_009_the_roster_snooze_and_unsnooze_round_trip() {
     let bot = roster_bot(&world.app, &world.caller).await;
     assert_eq!(bot["snoozedUntil"], serde_json::Value::Null);
 }
+
+#[tokio::test]
+async fn req_012_retry_only_from_failed() {
+    let world = world().await;
+
+    // A failed run belongs to the world's bot and is re-queued with one more attempt.
+    let failed_id = boma_domain::RunId::new("run_rpc_failed").expect("an id is accepted");
+    let now = "2026-01-01T00:00:00Z";
+    world.app.database().seed_run(boma_domain::Run {
+        id: failed_id.clone(),
+        space_id: boma_domain::SpaceId::new(world.caller.space_id.clone())
+            .expect("an id is accepted"),
+        bot_id: boma_domain::BotId::new(world.bot_id.clone()).expect("an id is accepted"),
+        thread_id: boma_domain::ThreadId::new(world.thread_id.clone()).expect("an id is accepted"),
+        user_id: boma_domain::UserId::new("usr_golden_unused").expect("an id is accepted"),
+        status: boma_domain::RunStatus::Failed,
+        trigger: boma_domain::RunTrigger::User,
+        client_nonce: None,
+        source_message_id: None,
+        created_at: now.to_owned(),
+        started_at: Some(now.to_owned()),
+        completed_at: Some(now.to_owned()),
+        error: Some("the provider refused the request".to_owned()),
+        lease_owner: None,
+        lease_fence: 0,
+        lease_expires_at: None,
+        steering_from_seq: None,
+        steering_consumed_seq: 0,
+        attempt: 1,
+        model_provider: None,
+        model_id: None,
+        model_pinned: false,
+        parent_run_id: None,
+    });
+
+    let response = post(
+        state(&world.app),
+        "/rpc/runs/retry",
+        Some(&world.caller),
+        serde_json::json!({"runId": "run_rpc_failed"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["runId"], serde_json::json!("run_rpc_failed"));
+    assert_eq!(body["status"], serde_json::json!("queued"));
+    assert_eq!(body["attempt"], serde_json::json!(2));
+
+    // Retrying a run that is queued now is refused: failed is the only way in.
+    let response = post(
+        state(&world.app),
+        "/rpc/runs/retry",
+        Some(&world.caller),
+        serde_json::json!({"runId": "run_rpc_failed"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // A run that never existed is not found.
+    let response = post(
+        state(&world.app),
+        "/rpc/runs/retry",
+        Some(&world.caller),
+        serde_json::json!({"runId": "run_does_not_exist"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
