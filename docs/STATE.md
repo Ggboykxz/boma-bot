@@ -2,8 +2,8 @@
 
 ## Current milestone
 
-**M4 — computers.** The five exit criteria of the milestone are observed (each green in CI unless
-noted): the Docker supervisor boots a computer (`computer.start`), the screen streams behind a
+**M4 — computers — done.** Exit criteria from the plan all observe green on `802344c` (rust and
+web jobs): the Docker supervisor boots a computer (`computer.start`), the screen streams behind a
 sealed capability (`computer.openScreen` + `/api/internal/screen-target`), takeover is exclusive
 (`computer.takeover`/`release`, other members can neither take nor shed the hold), idle computers
 are released (`BOMA_COMPUTER_IDLE_MINUTES`, default 10), and the provider conformance suite runs
@@ -11,6 +11,12 @@ are released (`BOMA_COMPUTER_IDLE_MINUTES`, default 10), and the provider confor
 capability sealing/private isolation; the suite is the contract any provider answers to). Full
 gate suite green at push (`fmt`, `clippy -D warnings`, `nextest` 221/221, `deny`, `machete`, trace
 budget 21/40, secret scan).
+
+**REQ-028 observe-and-act is partially delivered** — what runs against the alpine shell computer
+is proved (screenshot, shell, read/write file, takeover gate); DOM/click/type/scroll are **not**,
+because the image carries no browser. Unblocking that needs an explicit decision: a Chromium image
+plus a websocket CDP client (~large, image decision is a product call), or a scope change
+(shell/files only, no browser computer). This is not silently dropped; it is recorded.
 
 - **REQ-027 (provider-agnostic computers, fail-closed, MUST)** is done: `SANDBOX_PROVIDER`
   selects the backend at startup — absent means `none` (valid), `docker` selects the local
