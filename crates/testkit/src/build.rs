@@ -266,6 +266,8 @@ pub struct TestAppBuilder {
     fixed_instant: Option<String>,
     /// Whether the app builds with a computer backend (REQ-027).
     computers: bool,
+    /// The answers the computer runtime hands out, when one is scripted.
+    computer_answers: Vec<crate::ComputerAnswer>,
 }
 
 impl Default for TestAppBuilder {
@@ -276,6 +278,7 @@ impl Default for TestAppBuilder {
             tokens: Vec::new(),
             fixed_instant: None,
             computers: true,
+            computer_answers: Vec::new(),
         }
     }
 }
@@ -299,6 +302,14 @@ impl TestAppBuilder {
     #[must_use]
     pub fn without_computers(mut self) -> Self {
         self.computers = false;
+        self
+    }
+
+    /// Scripts the answers the computer backend hands out, in order (REQ-026).
+    #[must_use]
+    pub fn computer_answers(mut self, answers: Vec<crate::ComputerAnswer>) -> Self {
+        self.computers = true;
+        self.computer_answers = answers;
         self
     }
 
@@ -348,6 +359,7 @@ impl TestAppBuilder {
             Arc::new(database.roster()),
             Arc::new(database.memory()),
             Arc::new(database.routines()),
+            Arc::new(database.computers()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -364,8 +376,15 @@ impl TestAppBuilder {
             },
         );
         let services = if self.computers {
-            services.with_computers(Arc::new(crate::ScriptedComputerRuntime)
-                as Arc<dyn boma_app::ports::ComputerRuntime>)
+            if self.computer_answers.is_empty() {
+                services.with_computers(Arc::new(crate::ScriptedComputerRuntime::default())
+                    as Arc<dyn boma_app::ports::ComputerRuntime>)
+            } else {
+                services.with_computers(Arc::new(crate::ScriptedComputerRuntime::new(
+                    self.computer_answers.clone(),
+                ))
+                    as Arc<dyn boma_app::ports::ComputerRuntime>)
+            }
         } else {
             services
         };
@@ -1781,4 +1800,188 @@ mod routine_retry_tests {
             0
         );
     }
+}
+
+#[tokio::test]
+async fn req_026_a_computer_boots_lazily_and_is_reused() {
+    let test = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "cmp_1".to_owned(),
+        ])
+        .computer_answers(vec![
+            crate::ComputerAnswer::Started {
+                external_id: "ctr_1".to_owned(),
+                home_id: "vol_1".to_owned(),
+            },
+            crate::ComputerAnswer::Restarted {
+                external_id: "ctr_1".to_owned(),
+                home_id: "vol_1".to_owned(),
+            },
+        ])
+        .fixed_clock("2026-01-01T00:00:00Z")
+        .build();
+    let user_id = test
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space = test
+        .app()
+        .stores
+        .spaces
+        .default_for(&user_id)
+        .await
+        .expect("the store answers")
+        .expect("the space exists");
+    let context = TestApp::member_context(&space.id, &user_id);
+    let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+
+    // The first ask boots the computer: the row goes running with a fresh generation.
+    let outcome = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
+        .await
+        .expect("the computer answers");
+    assert!(outcome.started);
+    assert_eq!(
+        outcome.computer.status,
+        boma_domain::ComputerStatus::Running
+    );
+    assert_eq!(outcome.computer.screen_generation, 1);
+    assert_eq!(outcome.computer.external_id.as_deref(), Some("ctr_1"));
+    assert_eq!(outcome.computer.home_id.as_deref(), Some("vol_1"));
+
+    // The second ask reuses it: nothing boots, nothing bumps the generation.
+    let outcome = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
+        .await
+        .expect("the computer answers");
+    assert!(!outcome.started);
+    assert_eq!(outcome.computer.screen_generation, 1);
+    assert_eq!(outcome.computer.external_id.as_deref(), Some("ctr_1"));
+
+    // The stop releases it; the home survives in the provider's storage.
+    let outcome = boma_app::usecases::stop_computer(test.app(), &context, bot.bot.id.as_str())
+        .await
+        .expect("the computer answers");
+    assert_eq!(outcome.status, boma_domain::ComputerStatus::Stopped);
+    assert_eq!(outcome.stopped_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+    assert!(outcome.started_at.is_none());
+
+    // The store still holds the row: `stopped` with no timestamps is the honest answer.
+    let outcome = boma_app::usecases::computer_status(test.app(), &context, bot.bot.id.as_str())
+        .await
+        .expect("the status answers");
+    let computer = outcome.expect("the computer row persists");
+    assert_eq!(computer.status, boma_domain::ComputerStatus::Stopped);
+    assert!(computer.started_at.is_none());
+    assert!(computer.stopped_at.is_some());
+}
+
+#[tokio::test]
+async fn req_026_the_idle_sweeper_releases_a_computer_past_its_window() {
+    let test = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "cmp_1".to_owned(),
+        ])
+        .computer_answers(vec![crate::ComputerAnswer::Started {
+            external_id: "ctr_1".to_owned(),
+            home_id: "vol_1".to_owned(),
+        }])
+        .fixed_clock("2026-01-01T00:00:00Z")
+        .build();
+    let user_id = test
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space = test
+        .app()
+        .stores
+        .spaces
+        .default_for(&user_id)
+        .await
+        .expect("the store answers")
+        .expect("the space exists");
+    let context = TestApp::member_context(&space.id, &user_id);
+    let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+
+    let outcome = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
+        .await
+        .expect("the computer answers");
+    assert_eq!(
+        outcome.computer.status,
+        boma_domain::ComputerStatus::Running
+    );
+
+    // Nobody touched it for an hour; the idle window is ten minutes by default.
+    let mut computer = outcome.computer;
+    computer.last_used_at = Some("2025-12-31T00:00:00Z".to_owned());
+    test.app()
+        .stores
+        .computers
+        .update(&context, &computer)
+        .await
+        .expect("the store answers");
+
+    let released = boma_app::usecases::sweep_idle_computers(test.app())
+        .await
+        .expect("the sweeper answers");
+    assert_eq!(released, 1);
+
+    let found = test
+        .app()
+        .stores
+        .computers
+        .find(&context, &bot.bot.id)
+        .await
+        .expect("the store answers")
+        .expect("the computer exists");
+    assert_eq!(found.status, boma_domain::ComputerStatus::Stopped);
+    assert_eq!(found.stopped_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+}
+
+#[tokio::test]
+async fn req_026_a_scripted_runtime_that_cannot_deliver_answers_unavailable() {
+    // No answer scripted: the ensure fails loudly instead of persisting a half-boot.
+    let test = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "cmp_1".to_owned(),
+        ])
+        .build();
+    let user_id = test
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space = test
+        .app()
+        .stores
+        .spaces
+        .default_for(&user_id)
+        .await
+        .expect("the store answers")
+        .expect("the space exists");
+    let context = TestApp::member_context(&space.id, &user_id);
+    let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+
+    let error = boma_app::usecases::ensure_computer(test.app(), &context, bot.bot.id.as_str())
+        .await
+        .expect_err("the ensure must fail");
+    assert!(matches!(error, boma_app::AppError::Unavailable));
 }

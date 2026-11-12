@@ -1123,6 +1123,28 @@ pub trait RoutineStore: Send + Sync {
     ) -> Result<(), AppError>;
 }
 
+/// What a runtime should make true (REQ-026).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComputerSpec {
+    /// The computer's id in this deployment.
+    pub computer_id: String,
+    /// The RAM cap, in megabytes.
+    pub memory_limit_mb: u64,
+    /// The CPU cap, in CPUs.
+    pub cpu_limit: f64,
+}
+
+/// What the provider did (REQ-026).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerHandle {
+    /// The provider-side handle: a container id, for docker.
+    pub external_id: String,
+    /// The provider-side storage backing the computer's home.
+    pub home_id: String,
+    /// Whether this call started the computer (false when it was already running).
+    pub started: bool,
+}
+
 /// The computer backend this deployment is configured with (REQ-027).
 ///
 /// A runtime is provider-shaped: the local Docker supervisor, a cloud provider or `none`. The
@@ -1142,6 +1164,104 @@ pub trait ComputerRuntime: Send + Sync {
     ///
     /// Returns [`AppError::Unavailable`] when the provider is configured but cannot be reached.
     async fn ping(&self) -> Result<(), AppError>;
+
+    /// Makes the computer exist and be running (REQ-026).
+    ///
+    /// Idempotent in one meaningful sense: a computer that is already running is not booted a
+    /// second time; the handle comes back with `started == false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] when the provider cannot be reached, and
+    /// [`AppError::Rule`] when the spec names an image this provider cannot boot.
+    async fn ensure(&self, spec: &ComputerSpec) -> Result<ComputerHandle, AppError>;
+
+    /// Stops the computer. The home backing it is preserved (REQ-026).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] when the provider cannot be reached.
+    async fn stop(&self, external_id: &str) -> Result<(), AppError>;
+}
+
+/// A computer row as a store writes it (REQ-026).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewComputer {
+    /// The computer's id.
+    pub id: boma_domain::ComputerId,
+    /// The tenant it belongs to.
+    pub space_id: boma_domain::SpaceId,
+    /// The bot whose computer this is.
+    pub bot_id: boma_domain::BotId,
+    /// The provider key: `docker`, `none`, or a cloud provider.
+    pub provider: String,
+    /// Whether the computer is isolated from the space's trust boundary (REQ-031).
+    pub private: bool,
+    /// The RAM cap, in megabytes.
+    pub memory_limit_mb: u64,
+    /// The CPU cap, in CPUs.
+    pub cpu_limit: f64,
+    /// Minutes the computer may sit idle before the sweeper releases it.
+    pub idle_minutes: u64,
+    /// When the computer row was created.
+    pub created_at: String,
+    /// When the computer row last changed.
+    pub updated_at: String,
+}
+
+/// The computers of this deployment (REQ-026).
+#[async_trait]
+pub trait ComputerStore: Send + Sync {
+    /// Finds the computer of a bot inside a tenant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Option<boma_domain::Computer>, AppError>;
+
+    /// Finds a computer by id inside a tenant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_by_id(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::ComputerId,
+    ) -> Result<Option<boma_domain::Computer>, AppError>;
+
+    /// Creates the row for a computer that does not exist yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer, or when the computer already exists.
+    async fn create(
+        &self,
+        context: &boma_domain::TenantContext,
+        computer: NewComputer,
+    ) -> Result<boma_domain::Computer, AppError>;
+
+    /// Writes the row back: status, handle, generation, timestamps.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn update(
+        &self,
+        context: &boma_domain::TenantContext,
+        computer: &boma_domain::Computer,
+    ) -> Result<(), AppError>;
+
+    /// The running computers whose idle window has passed, as of `as_of` (system context).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn running_idle(&self, as_of: &str) -> Result<Vec<boma_domain::Computer>, AppError>;
 }
 
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).

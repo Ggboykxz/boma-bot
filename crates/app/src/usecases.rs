@@ -1368,6 +1368,221 @@ pub async fn retry_run(app: &App, context: &TenantContext, run_id: &str) -> Resu
     app.stores.runs.retry(context, &id, None).await
 }
 
+/// The outcome of one computer ensure call (REQ-026).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComputerOutcome {
+    /// The computer, as the store holds it after the call.
+    pub computer: boma_domain::Computer,
+    /// Whether this call booted the computer.
+    pub started: bool,
+}
+
+/// The deployment's computer backend, or unavailable when none is configured (REQ-027).
+fn computers_or_unavailable(app: &App) -> Result<&dyn crate::ports::ComputerRuntime, AppError> {
+    let runtime = app
+        .services
+        .computer
+        .as_deref()
+        .ok_or(AppError::Unavailable)?;
+    if runtime.provider() == "none" {
+        return Err(AppError::Unavailable);
+    }
+    Ok(runtime)
+}
+
+/// Starts (or reuses) the bot's computer (REQ-026).
+///
+/// A bot's computer boots on the first call that needs it and reuses whatever it finds running.
+/// The same computer row is written back either way: `started` tells the caller whether it booted.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Unavailable`] when the deployment has no computer backend, and
+/// [`AppError::Conflict`] when the computer exists but does not start.
+pub async fn ensure_computer(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<ComputerOutcome, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let runtime = computers_or_unavailable(app)?;
+
+    let now = app.services.clock.now();
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    let mut computer = match app.stores.computers.find(context, &bot_id).await? {
+        Some(computer) => computer,
+        None => {
+            app.stores
+                .computers
+                .create(
+                    context,
+                    crate::ports::NewComputer {
+                        id: boma_domain::ComputerId::new(app.services.ids.new_id("cmp"))?,
+                        space_id,
+                        bot_id,
+                        provider: runtime.provider().to_owned(),
+                        private: false,
+                        memory_limit_mb: 512,
+                        cpu_limit: 1.0,
+                        idle_minutes: 10,
+                        created_at: now.clone(),
+                        updated_at: now.clone(),
+                    },
+                )
+                .await?
+        }
+    };
+
+    let spec = crate::ports::ComputerSpec {
+        computer_id: computer.id.as_str().to_owned(),
+        memory_limit_mb: computer.memory_limit_mb,
+        cpu_limit: computer.cpu_limit,
+    };
+    let handle = runtime.ensure(&spec).await?;
+    computer.external_id = Some(handle.external_id);
+    computer.home_id = Some(handle.home_id);
+    computer.status = boma_domain::ComputerStatus::Running;
+    if handle.started {
+        // A real boot: the screen generation moves and older capabilities stop being valid.
+        computer.screen_generation = computer.screen_generation.saturating_add(1);
+        computer.started_at = Some(now.clone());
+        computer.stopped_at = None;
+    }
+    computer.last_used_at = Some(now.clone());
+    computer.updated_at = now;
+    app.stores.computers.update(context, &computer).await?;
+    Ok(ComputerOutcome {
+        computer,
+        started: handle.started,
+    })
+}
+
+/// Stops the bot's computer, preserving its home (REQ-026).
+///
+/// Idempotent: a bot with no computer, and a computer already stopped, both answer `stopped`.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
+/// [`AppError::Unavailable`] when the deployment has no computer backend or the provider does
+/// not answer.
+pub async fn stop_computer(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<boma_domain::Computer, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let runtime = computers_or_unavailable(app)?;
+
+    let now = app.services.clock.now();
+    let Some(mut computer) = app.stores.computers.find(context, &bot_id).await? else {
+        // Nothing was ever started: the answer is `stopped` with no timestamps (the golden says so).
+        return Ok(boma_domain::Computer {
+            id: boma_domain::ComputerId::new(app.services.ids.new_id("cmp"))?,
+            space_id: context.space_id().cloned().ok_or(AppError::NotFound)?,
+            bot_id,
+            provider: runtime.provider().to_owned(),
+            external_id: None,
+            status: boma_domain::ComputerStatus::Stopped,
+            screen_generation: 0,
+            home_id: None,
+            private: false,
+            memory_limit_mb: 512,
+            cpu_limit: 1.0,
+            idle_minutes: 10,
+            started_at: None,
+            last_used_at: None,
+            stopped_at: None,
+            created_at: now.clone(),
+            updated_at: now,
+        });
+    };
+    if computer.status != boma_domain::ComputerStatus::Stopped {
+        if let Some(external_id) = computer.external_id.clone() {
+            runtime.stop(&external_id).await?;
+        }
+        computer.status = boma_domain::ComputerStatus::Stopped;
+        computer.started_at = None;
+        computer.last_used_at = None;
+        computer.stopped_at = Some(now.clone());
+        computer.updated_at = now;
+        app.stores.computers.update(context, &computer).await?;
+    }
+    Ok(computer)
+}
+
+/// Reads where the bot's computer is (REQ-026).
+///
+/// A bot that never started one answers `stopped`, never an error.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant.
+pub async fn computer_status(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<Option<boma_domain::Computer>, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores.computers.find(context, &bot_id).await
+}
+
+/// Stops the computers whose idle window has passed (REQ-026).
+///
+/// The sweeper keeps the deployment inside its capacity budget: a computer nobody has touched
+/// for `idle_minutes` stops, and its home survives in the provider's storage.
+///
+/// Returns the number of computers released.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+pub async fn sweep_idle_computers(app: &App) -> Result<u64, AppError> {
+    let runtime = match &app.services.computer {
+        Some(runtime) if runtime.provider() != "none" => runtime,
+        _ => return Ok(0),
+    };
+    let now = app.services.clock.now();
+    let idle = app.stores.computers.running_idle(&now).await?;
+    let mut released = 0;
+    for mut computer in idle {
+        let Some(external_id) = computer.external_id.clone() else {
+            continue;
+        };
+        if runtime.stop(&external_id).await.is_err() {
+            continue;
+        }
+        computer.status = boma_domain::ComputerStatus::Stopped;
+        computer.started_at = None;
+        computer.last_used_at = None;
+        computer.stopped_at = Some(now.clone());
+        computer.updated_at = now.clone();
+        let context = TenantContext::System {
+            reason: boma_domain::SystemReason::ScheduledJob,
+            user_id: None,
+        };
+        app.stores.computers.update(&context, &computer).await?;
+        released += 1;
+    }
+    Ok(released)
+}
+
 /// The activity projection: the runs of a bot, newest first (REQ-011).
 ///
 /// # Errors

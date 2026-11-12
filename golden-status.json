@@ -26,9 +26,9 @@
       "reason": "M7 - bot webhooks and their uniform 401 arrive with the signed-ingress layer"
     },
     "computer-status": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-026",
-      "reason": "M4 - computers are not implemented, so the status projection has nothing to report"
+      "reason": null
     },
     "computer-takeover-conflict": {
       "status": "pending",

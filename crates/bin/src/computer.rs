@@ -92,8 +92,20 @@ impl ComputerConfig {
                     self.image.clone(),
                     self.frame_command.clone(),
                 )?;
-                runtime.ping().await?;
-                Ok(std::sync::Arc::new(runtime))
+                // A cold daemon can take a moment to answer the first ping. The retry is bounded:
+                // a daemon that never comes up still fails closed, it just stops depending on luck.
+                let mut last = None;
+                for attempt in 1..=3 {
+                    match runtime.ping().await {
+                        Ok(()) => return Ok(std::sync::Arc::new(runtime)),
+                        Err(error) => {
+                            last = Some(error);
+                            tracing::warn!(attempt, "the docker daemon did not answer the ping");
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                    }
+                }
+                Err(last.unwrap_or(boma_app::AppError::Unavailable))
             }
         }
     }

@@ -12,6 +12,7 @@
 pub mod account;
 pub mod bot;
 pub mod card;
+pub mod computer;
 pub mod error;
 pub mod event;
 pub mod ids;
@@ -26,6 +27,11 @@ pub mod thread;
 pub use account::{Email, Session, Space, SpaceRole, User, validate_password};
 pub use bot::Bot;
 pub use card::{Card, CardId, CardKind, CardStatus, ExternalEffect, ToolKind, ToolSpec};
+pub use computer::{
+    Computer, ComputerId, ComputerStatus, MAX_CPU_LIMIT, MAX_IDLE_MINUTES, MAX_MEMORY_LIMIT_MB,
+    MIN_CPU_LIMIT, MIN_IDLE_MINUTES, MIN_MEMORY_LIMIT_MB, validate_cpu_limit,
+    validate_idle_minutes, validate_memory_limit,
+};
 pub use error::DomainError;
 pub use event::{Event, EventType};
 pub use ids::{

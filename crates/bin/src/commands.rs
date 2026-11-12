@@ -7,11 +7,11 @@ use boma_api::{AppState, router};
 use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
-    PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore, PostgresReactionStore,
-    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
-    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresEffectStore,
+    PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
+    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
+    PostgresRunStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -89,7 +89,8 @@ fn build_app(database: &Postgres, computer: Option<Arc<dyn ComputerRuntime>>) ->
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
             Arc::new(PostgresMemoryStore::new(pool.clone())),
-            Arc::new(PostgresRoutineStore::new(pool)),
+            Arc::new(PostgresRoutineStore::new(pool.clone())),
+            Arc::new(PostgresComputerStore::new(pool)),
         ),
         {
             let services = Services::new(
@@ -147,6 +148,13 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         if dispatched > 0 {
             tracing::info!(dispatched, "the worker enqueued routine wakes");
             continue;
+        }
+        // Release computers nobody has touched: capacity is finite.
+        let released = boma_app::usecases::sweep_idle_computers(&dispatcher_app)
+            .await
+            .context("the worker could not release idle computers")?;
+        if released > 0 {
+            tracing::info!(released, "the worker released idle computers");
         }
         let stepped = worker
             .step()

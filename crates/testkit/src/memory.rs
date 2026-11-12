@@ -198,6 +198,13 @@ struct RoutineRow {
     routine: boma_app::ports::Routine,
 }
 
+/// A computer, with its tenant (REQ-026).
+#[derive(Debug, Clone)]
+struct ComputerRow {
+    /// The computer.
+    computer: boma_domain::Computer,
+}
+
 /// One recorded outcome of a wake, for the audit trail.
 // The dispatcher reads these rows in the next slice (REQ-024); the structure is load-bearing.
 #[allow(dead_code)]
@@ -319,6 +326,8 @@ struct State {
     snoozes: Vec<SnoozeRow>,
     /// The memory documents people wrote.
     memory_documents: Vec<MemoryDocumentMemRow>,
+    /// The computers of bots.
+    computers: Vec<ComputerRow>,
     /// The routines of each bot.
     routines: Vec<RoutineRow>,
     /// The audit trail of routine wakes.
@@ -520,6 +529,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn routines(&self) -> MemoryRoutineStore {
         MemoryRoutineStore::new(self)
+    }
+
+    /// The store of computers.
+    #[must_use]
+    pub fn computers(&self) -> MemoryComputerStore {
+        MemoryComputerStore::new(self)
     }
 
     /// Seeds a conversation with explicit sequences.
@@ -3635,4 +3650,145 @@ mod tests {
             "a refused event is not published"
         );
     }
+}
+
+/// The computers of each bot, in memory.
+#[derive(Debug, Clone)]
+pub struct MemoryComputerStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryComputerStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryComputerStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ComputerStore for MemoryComputerStore {
+    async fn find(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Option<boma_domain::Computer>, boma_app::AppError> {
+        let state = read(&self.state);
+        let row = state
+            .computers
+            .iter()
+            .find(|row| row.computer.bot_id == *bot_id);
+        Ok(row
+            .filter(|row| visible(context, &row.computer.space_id))
+            .map(|row| row.computer.clone()))
+    }
+
+    async fn find_by_id(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::ComputerId,
+    ) -> Result<Option<boma_domain::Computer>, boma_app::AppError> {
+        let state = read(&self.state);
+        let row = state.computers.iter().find(|row| row.computer.id == *id);
+        Ok(row
+            .filter(|row| visible(context, &row.computer.space_id))
+            .map(|row| row.computer.clone()))
+    }
+
+    async fn create(
+        &self,
+        context: &TenantContext,
+        computer: boma_app::ports::NewComputer,
+    ) -> Result<boma_domain::Computer, boma_app::AppError> {
+        if !visible(context, &computer.space_id) {
+            return Err(boma_app::AppError::NotFound);
+        }
+        let stored = boma_domain::Computer {
+            id: computer.id,
+            space_id: computer.space_id,
+            bot_id: computer.bot_id,
+            provider: computer.provider,
+            external_id: None,
+            status: boma_domain::ComputerStatus::Stopped,
+            screen_generation: 0,
+            home_id: None,
+            private: computer.private,
+            memory_limit_mb: computer.memory_limit_mb,
+            cpu_limit: computer.cpu_limit,
+            idle_minutes: computer.idle_minutes,
+            started_at: None,
+            last_used_at: None,
+            stopped_at: None,
+            created_at: computer.created_at,
+            updated_at: computer.updated_at,
+        };
+        let mut state = write(&self.state);
+        if state
+            .computers
+            .iter()
+            .any(|row| row.computer.id == stored.id)
+        {
+            return Err(boma_app::AppError::Conflict);
+        }
+        state.computers.push(ComputerRow {
+            computer: stored.clone(),
+        });
+        Ok(stored)
+    }
+
+    async fn update(
+        &self,
+        context: &TenantContext,
+        computer: &boma_domain::Computer,
+    ) -> Result<(), boma_app::AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state
+            .computers
+            .iter_mut()
+            .find(|row| row.computer.id == computer.id)
+        else {
+            return Err(boma_app::AppError::NotFound);
+        };
+        if !visible(context, &row.computer.space_id) {
+            return Err(boma_app::AppError::NotFound);
+        }
+        row.computer = computer.clone();
+        Ok(())
+    }
+
+    async fn running_idle(
+        &self,
+        as_of: &str,
+    ) -> Result<Vec<boma_domain::Computer>, boma_app::AppError> {
+        let state = read(&self.state);
+        let found = state
+            .computers
+            .iter()
+            .map(|row| &row.computer)
+            .filter(|computer| computer.status == boma_domain::ComputerStatus::Running)
+            .filter_map(|computer| {
+                let last_used = computer.last_used_at.as_deref().and_then(parse_rfc3339)?;
+                let now = parse_rfc3339(as_of)?;
+                let idle = now - last_used;
+                (idle >= time::Duration::minutes(computer.idle_minutes.cast_signed()))
+                    .then(|| computer.clone())
+            })
+            .collect();
+        Ok(found)
+    }
+}
+
+/// Parses the RFC3339 instants the clock writes.
+fn parse_rfc3339(instant: &str) -> Option<time::OffsetDateTime> {
+    use time::format_description::well_known::Rfc3339;
+
+    time::OffsetDateTime::parse(instant, &Rfc3339).ok()
 }

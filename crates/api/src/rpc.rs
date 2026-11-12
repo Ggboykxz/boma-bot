@@ -83,6 +83,8 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::ROUTINES, "remove"),
         (namespaces::ROUTINES, "runNow"),
         (namespaces::COMPUTER, "status"),
+        (namespaces::COMPUTER, "start"),
+        (namespaces::COMPUTER, "stop"),
     ]
 }
 
@@ -95,6 +97,7 @@ pub fn router() -> Router<AppState> {
 ///
 /// The caller must be signed in: every procedure in the spec acts for a member of a space
 /// (REQ-041, REQ-043).
+#[allow(clippy::too_many_lines)] // the match is the procedure table; splitting hides the contract
 async fn dispatch(
     State(state): State<AppState>,
     Path((namespace, procedure)): Path<(String, String)>,
@@ -188,6 +191,12 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::COMPUTER, "status") => computer_status(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "start") => computer_start(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "stop") => computer_stop(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -758,6 +767,11 @@ struct ComputerStatusRequest {
     bot_id: String,
 }
 
+/// Validates the bot-scoped computer body, or answers the uniform not-found.
+fn computer_request(body: &Bytes) -> Result<ComputerStatusRequest, ApiError> {
+    parse(body)
+}
+
 /// `computer.status` — where this bot's computer is (REQ-026, REQ-027).
 ///
 /// A deployment without a computer backend answers `COMPUTERS_UNAVAILABLE`; a bot whose computer
@@ -767,27 +781,74 @@ async fn computer_status(
     auth: AuthContext,
     body: Bytes,
 ) -> Result<ComputerStatusReply, ApiError> {
-    let request: ComputerStatusRequest = parse(&body)?;
+    let request = computer_request(&body)?;
     let app = state.app();
-    let Some(runtime) = &app.services.computer else {
-        return Err(ApiError::computers_unavailable());
-    };
-    if runtime.provider() == "none" {
+    if app
+        .services
+        .computer
+        .as_deref()
+        .is_none_or(|runtime| runtime.provider() == "none")
+    {
         return Err(ApiError::computers_unavailable());
     }
-    let bot_id = boma_domain::BotId::new(request.bot_id).map_err(|_| ApiError::not_found())?;
-    app.stores
-        .bots
-        .find(&auth.actor.context, &bot_id)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(ApiError::not_found)?;
-    Ok(ComputerStatusReply {
-        status: "stopped".to_owned(),
-        provider: runtime.provider().to_owned(),
-        started_at: None,
-        screen_generation: None,
-    })
+    let computer = usecases::computer_status(app, &auth.actor.context, &request.bot_id).await?;
+    Ok(computer.map_or_else(
+        || ComputerStatusReply {
+            status: "stopped".to_owned(),
+            provider: app.services.computer.as_deref().map_or_else(
+                || "none".to_owned(),
+                |runtime| runtime.provider().to_owned(),
+            ),
+            started_at: None,
+            screen_generation: None,
+        },
+        |computer| ComputerStatusReply::for_computer(&computer),
+    ))
+}
+
+/// `computer.start` — start (or reuse) the bot's computer (REQ-026).
+///
+/// The boot is lazy by design: this procedure is the explicit ask for one, and the same computer
+/// is reused by every later call. A deployment without a backend answers `COMPUTERS_UNAVAILABLE`.
+async fn computer_start(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ComputerStatusReply, ApiError> {
+    let request = computer_request(&body)?;
+    let app = state.app();
+    if app
+        .services
+        .computer
+        .as_deref()
+        .is_none_or(|runtime| runtime.provider() == "none")
+    {
+        return Err(ApiError::computers_unavailable());
+    }
+    let outcome = usecases::ensure_computer(app, &auth.actor.context, &request.bot_id).await?;
+    Ok(ComputerStatusReply::for_computer(&outcome.computer))
+}
+
+/// `computer.stop` — stop the bot's computer, preserving its home (REQ-026).
+///
+/// Idempotent: nothing to stop answers `stopped` with no timestamps.
+async fn computer_stop(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ComputerStatusReply, ApiError> {
+    let request = computer_request(&body)?;
+    let app = state.app();
+    if app
+        .services
+        .computer
+        .as_deref()
+        .is_none_or(|runtime| runtime.provider() == "none")
+    {
+        return Err(ApiError::computers_unavailable());
+    }
+    let computer = usecases::stop_computer(app, &auth.actor.context, &request.bot_id).await?;
+    Ok(ComputerStatusReply::for_computer(&computer))
 }
 
 /// The body of `routines.runNow` (REQ-025).

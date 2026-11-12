@@ -381,6 +381,7 @@ dependencies = [
  "bollard",
  "boma-app",
  "boma-domain",
+ "futures-util",
  "rand",
  "serde_json",
  "sha2 0.11.1",
@@ -390,6 +391,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

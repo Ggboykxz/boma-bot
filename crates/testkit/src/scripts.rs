@@ -401,12 +401,52 @@ impl ScriptedProvider {
     }
 }
 
-/// The computer backend a test drives (REQ-027).
+/// What one scripted answer does to the computer map (REQ-026).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComputerAnswer {
+    /// Boot a fresh computer: the answer hands back the handle to record.
+    Started {
+        /// The provider-side handle.
+        external_id: String,
+        /// The home storage handle.
+        home_id: String,
+    },
+    /// The computer already exists: the handle comes back, nothing boots.
+    Restarted {
+        /// The provider-side handle.
+        external_id: String,
+        /// The home storage handle.
+        home_id: String,
+    },
+}
+
+/// The computer backend a test drives (REQ-026, REQ-027).
 ///
-/// The memory runtime stands in for a `docker` provider that answers: `ping` is healthy and the
-/// computers never go anywhere until REQ-026 gives this backend a lifecycle to script.
+/// The memory runtime stands in for a `docker` provider: `ping` is healthy, and `ensure` answers
+/// the scripted sequence. When the script runs out the runtime fails with
+/// [`boma_app::AppError::Unavailable`] — a test that forgets to script fails where it should.
+/// Stops are recorded, not interpreted.
 #[derive(Debug, Default)]
-pub struct ScriptedComputerRuntime;
+pub struct ScriptedComputerRuntime {
+    /// The scripted answers, in call order.
+    answers: Mutex<VecDeque<ComputerAnswer>>,
+    /// The requests the runtime received, in order.
+    pub requests: Mutex<Vec<String>>,
+    /// The containers the runtime was asked to stop.
+    pub stops: Mutex<Vec<String>>,
+}
+
+impl ScriptedComputerRuntime {
+    /// Builds the runtime with the answers it hands out, in order.
+    #[must_use]
+    pub fn new(answers: Vec<ComputerAnswer>) -> Self {
+        Self {
+            answers: Mutex::new(answers.into()),
+            requests: Mutex::new(Vec::new()),
+            stops: Mutex::new(Vec::new()),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
@@ -415,6 +455,38 @@ impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
     }
 
     async fn ping(&self) -> Result<(), boma_app::AppError> {
+        Ok(())
+    }
+
+    async fn ensure(
+        &self,
+        spec: &boma_app::ports::ComputerSpec,
+    ) -> Result<boma_app::ports::ComputerHandle, boma_app::AppError> {
+        lock(&self.requests).push(format!("ensure:{}", spec.computer_id));
+        let answer = lock(&self.answers).pop_front();
+        match answer {
+            Some(ComputerAnswer::Started {
+                external_id,
+                home_id,
+            }) => Ok(boma_app::ports::ComputerHandle {
+                external_id,
+                home_id,
+                started: true,
+            }),
+            Some(ComputerAnswer::Restarted {
+                external_id,
+                home_id,
+            }) => Ok(boma_app::ports::ComputerHandle {
+                external_id,
+                home_id,
+                started: false,
+            }),
+            None => Err(boma_app::AppError::Unavailable),
+        }
+    }
+
+    async fn stop(&self, external_id: &str) -> Result<(), boma_app::AppError> {
+        lock(&self.stops).push(external_id.to_owned());
         Ok(())
     }
 }

@@ -1324,3 +1324,129 @@ async fn req_027_a_bot_with_no_computer_answers_stopped_never_an_error() {
     .await;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn req_026_a_bot_asks_for_a_computer_is_answered_and_the_answer_holds() {
+    let test_app = TestApp::builder()
+        .ids(vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "cmp_1".to_owned(),
+        ])
+        .computer_answers(vec![
+            boma_testkit::ComputerAnswer::Started {
+                external_id: "ctr_1".to_owned(),
+                home_id: "vol_1".to_owned(),
+            },
+            boma_testkit::ComputerAnswer::Restarted {
+                external_id: "ctr_1".to_owned(),
+                home_id: "vol_1".to_owned(),
+            },
+        ])
+        .fixed_clock("2026-01-01T00:00:00Z")
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot_id, _thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // The first ask boots the computer; exactly one generation moves.
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/start",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id.as_str() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "status": "running",
+            "provider": "docker",
+            "startedAt": "2026-01-01T00:00:00Z",
+            "screenGeneration": 1,
+        })
+    );
+
+    // The second ask reuses the same computer; nothing boots, nothing moves.
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/start",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id.as_str() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "status": "running",
+            "provider": "docker",
+            "startedAt": "2026-01-01T00:00:00Z",
+            "screenGeneration": 1,
+        })
+    );
+
+    // status and start agree on where the computer is.
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/status",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id.as_str() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["status"], serde_json::json!("running"));
+    assert_eq!(body["screenGeneration"], serde_json::json!(1));
+
+    // stop releases it; the home stays with the provider.
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/stop",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id.as_str() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body,
+        serde_json::json!({ "status": "stopped", "provider": "docker" })
+    );
+
+    // stopping again is a no-op that answers the same.
+    let response = post(
+        state(&test_app),
+        "/rpc/computer/stop",
+        Some(&caller),
+        serde_json::json!({ "botId": bot_id.as_str() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body,
+        serde_json::json!({ "status": "stopped", "provider": "docker" })
+    );
+}

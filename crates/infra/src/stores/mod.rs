@@ -6,6 +6,8 @@
 pub mod accounts;
 pub mod bots;
 pub mod cards;
+pub mod computer;
+mod computer_row;
 pub mod events;
 pub mod invitations;
 pub mod memory;

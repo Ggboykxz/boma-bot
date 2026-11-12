@@ -19,11 +19,11 @@ use boma_domain::{
 };
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
-    PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore, PostgresReactionStore,
-    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
-    PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresEffectStore,
+    PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
+    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
+    PostgresRunStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
 };
 
 mod common;
@@ -71,7 +71,8 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
             Arc::new(PostgresMemoryStore::new(pool.clone())),
-            Arc::new(PostgresRoutineStore::new(pool)),
+            Arc::new(PostgresRoutineStore::new(pool.clone())),
+            Arc::new(PostgresComputerStore::new(pool)),
         ),
         boma_app::Services::new(
             publisher,

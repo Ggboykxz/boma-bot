@@ -31,5 +31,8 @@ bollard = { version = "0.21" }
 boma-app = { workspace = true }
 boma-domain = { workspace = true }
 
-[dev-dependencies]
 uuid = { workspace = true }
+
+[dev-dependencies]
+futures-util = { workspace = true }
+tracing-subscriber = { workspace = true }

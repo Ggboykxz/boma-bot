@@ -118,6 +118,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "memory-write"
             | "routine-create"
             | "routine-once"
+            | "computer-status"
     );
     if !needs_world {
         return None;
@@ -172,6 +173,10 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         "run-retry" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
             seed_failed_run(&test_app, &space_id, &bot, &thread, &user_id);
+        }
+        "computer-status" => {
+            let (bot, _thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_computer(&test_app, &space_id, bot.id.clone()).await;
         }
         "cross-tenant-not-found" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
@@ -526,4 +531,56 @@ pub fn session() -> Session {
         user_id: UserId::new(USER_ID).expect("the seed id is valid"),
         expires_at: "2026-02-01T00:00:00Z".to_owned(),
     }
+}
+
+/// Seeds the running computer the fixture reads.
+///
+/// The capture shows a docker computer started at ten seconds past the seed with generation 2;
+/// the world is seeded with exactly that.
+async fn seed_computer(test_app: &TestApp, space_id: &SpaceId, bot_id: boma_domain::BotId) {
+    let created = test_app
+        .app()
+        .stores
+        .computers
+        .create(
+            &TestApp::member_context(
+                space_id,
+                &UserId::new(USER_ID).expect("the seed id is valid"),
+            ),
+            boma_app::ports::NewComputer {
+                id: boma_domain::ComputerId::new("cmp_golden").expect("the seed id is valid"),
+                space_id: space_id.clone(),
+                bot_id,
+                provider: "docker".to_owned(),
+                private: false,
+                memory_limit_mb: 512,
+                cpu_limit: 1.0,
+                idle_minutes: 10,
+                created_at: SEED_INSTANT.to_owned(),
+                updated_at: SEED_INSTANT.to_owned(),
+            },
+        )
+        .await
+        .expect("the computer is created");
+    let mut computer = created;
+    computer.status = boma_domain::ComputerStatus::Running;
+    computer.external_id = Some("golden-external-id".to_owned());
+    computer.home_id = Some("golden-home-id".to_owned());
+    computer.started_at = Some("2026-01-01T00:00:10Z".to_owned());
+    computer.last_used_at = Some("2026-01-01T00:00:10Z".to_owned());
+    computer.screen_generation = 2;
+    "2026-01-01T00:00:10Z".clone_into(&mut computer.updated_at);
+    test_app
+        .app()
+        .stores
+        .computers
+        .update(
+            &TestApp::member_context(
+                space_id,
+                &UserId::new(USER_ID).expect("the seed id is valid"),
+            ),
+            &computer,
+        )
+        .await
+        .expect("the computer is updated");
 }

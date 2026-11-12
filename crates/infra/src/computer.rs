@@ -3,9 +3,15 @@
 //! Two providers exist today: `none` (computers are not available, the default) and `docker`
 //! (the local supervisor). The selection refuses, naming the variable, anything else (REQ-027).
 
+use std::collections::HashMap;
+
+use bollard::models::{ContainerCreateBody, HostConfig, VolumeCreateRequest};
 use bollard::{API_DEFAULT_VERSION, Docker};
 
-use boma_app::{AppError, ports::ComputerRuntime};
+use boma_app::{
+    AppError,
+    ports::{ComputerHandle, ComputerRuntime, ComputerSpec},
+};
 
 /// The local Docker supervisor.
 pub struct DockerComputerRuntime {
@@ -27,7 +33,7 @@ impl DockerComputerRuntime {
     ) -> Result<Self, AppError> {
         let path = docker_host.trim_start_matches("unix://").to_owned();
         let docker =
-            Docker::connect_with_socket(&path, 10, API_DEFAULT_VERSION).map_err(|error| {
+            Docker::connect_with_socket(&path, 60, API_DEFAULT_VERSION).map_err(|error| {
                 tracing::warn!(%error, %path, "the docker socket is not acceptable to the client");
                 AppError::Unavailable
             })?;
@@ -63,6 +69,164 @@ impl ComputerRuntime for DockerComputerRuntime {
             AppError::Unavailable
         })
     }
+
+    #[allow(clippy::too_many_lines)] // the boot flow is linear; splitting hides the failure table
+    async fn ensure(&self, spec: &ComputerSpec) -> Result<ComputerHandle, AppError> {
+        let name = format!("boma-computer-{}", spec.computer_id);
+        let home_id = format!("boma-home-{}", spec.computer_id);
+
+        // A computer this deployment already booted is reused, never booted twice: the name is
+        // stable per computer id.
+        if let Ok(inspection) = self
+            .docker
+            .inspect_container(
+                &name,
+                None::<bollard::query_parameters::InspectContainerOptions>,
+            )
+            .await
+        {
+            let running = inspection.state.and_then(|state| state.running) == Some(true);
+            let external_id = inspection.id.unwrap_or_else(|| name.clone());
+            if running {
+                return Ok(ComputerHandle {
+                    external_id,
+                    home_id,
+                    started: false,
+                });
+            }
+            self.start(&external_id, spec).await?;
+            return Ok(ComputerHandle {
+                external_id,
+                home_id,
+                started: true,
+            });
+        }
+
+        // The home survives the container: a volume per computer, never recycled.
+        let volume = VolumeCreateRequest {
+            name: Some(home_id.clone()),
+            driver: None,
+            driver_opts: None,
+            labels: Some(HashMap::from([(
+                "boma.computer".to_owned(),
+                spec.computer_id.clone(),
+            )])),
+            ..Default::default()
+        };
+        self.docker.create_volume(volume).await.map_err(|error| {
+            tracing::warn!(%error, %home_id, "the computer's home volume could not be ensured");
+            AppError::Unavailable
+        })?;
+
+        let body = ContainerCreateBody {
+            image: Some(self.image.clone()),
+            cmd: Some(vec!["sleep".to_owned(), "infinity".to_owned()]),
+            labels: Some(HashMap::from([(
+                "boma.computer".to_owned(),
+                spec.computer_id.clone(),
+            )])),
+            host_config: Some(HostConfig {
+                memory: Some(i64::try_from(spec.memory_limit_mb).unwrap_or(i64::MAX) * 1024 * 1024),
+                // cpu_limit is bounded to [0.25, 4], so this value is exact in f64 and i64.
+                #[allow(clippy::cast_possible_truncation)]
+                nano_cpus: Some((spec.cpu_limit * 1_000_000_000.0).round() as i64),
+                binds: Some(vec![format!("{home_id}:/home/bot")]),
+                shm_size: Some(512 * 1024 * 1024),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        match self
+            .docker
+            .create_container(
+                Some(bollard::query_parameters::CreateContainerOptions {
+                    name: Some(name.clone()),
+                    platform: String::new(),
+                }),
+                body,
+            )
+            .await
+        {
+            Ok(created) => {
+                self.start(&created.id, spec).await?;
+                Ok(ComputerHandle {
+                    external_id: created.id,
+                    home_id,
+                    started: true,
+                })
+            }
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 409, ..
+            }) => {
+                // Raced with another ensure: the container exists already. Re-inspect and reuse.
+                let inspection = self
+                    .docker
+                    .inspect_container(
+                        &name,
+                        None::<bollard::query_parameters::InspectContainerOptions>,
+                    )
+                    .await
+                    .map_err(|error| {
+                        tracing::warn!(%error, %name, "the computer could not be re-inspected");
+                        AppError::Unavailable
+                    })?;
+                let external_id = inspection.id.unwrap_or_else(|| name.clone());
+                let running = inspection.state.and_then(|state| state.running) == Some(true);
+                if !running {
+                    self.start(&external_id, spec).await?;
+                }
+                Ok(ComputerHandle {
+                    external_id,
+                    home_id,
+                    started: !running,
+                })
+            }
+            Err(error) => {
+                tracing::warn!(%error, %name, "the computer could not be created");
+                Err(AppError::Unavailable)
+            }
+        }
+    }
+
+    async fn stop(&self, external_id: &str) -> Result<(), AppError> {
+        match self
+            .docker
+            .stop_container(
+                external_id,
+                Some(bollard::query_parameters::StopContainerOptions {
+                    signal: None,
+                    t: Some(10),
+                }),
+            )
+            .await
+        {
+            // A clean stop, and a container already gone: the home survives either way.
+            Ok(())
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(()),
+            Err(error) => {
+                tracing::warn!(%error, %external_id, "the computer could not be stopped");
+                Err(AppError::Unavailable)
+            }
+        }
+    }
+}
+
+impl DockerComputerRuntime {
+    /// Starts an existing computer for `spec`'s memory mapping.
+    async fn start(&self, external_id: &str, _spec: &ComputerSpec) -> Result<(), AppError> {
+        self.docker
+            .start_container(
+                external_id,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the computer could not be started");
+                AppError::Unavailable
+            })
+    }
 }
 
 /// The `none` backend: computers are not available in this deployment (REQ-027).
@@ -76,6 +240,15 @@ impl ComputerRuntime for NoneComputerRuntime {
     }
 
     async fn ping(&self) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    async fn ensure(&self, _spec: &ComputerSpec) -> Result<ComputerHandle, AppError> {
+        // The wire maps this to COMPUTERS_UNAVAILABLE: the deployment answered honestly.
+        Err(AppError::Unavailable)
+    }
+
+    async fn stop(&self, _external_id: &str) -> Result<(), AppError> {
         Ok(())
     }
 }

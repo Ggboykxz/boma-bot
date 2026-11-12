@@ -10,10 +10,10 @@ use boma_domain::{Bot, Message, Run, Thread, User};
 use crate::{
     error::AppError,
     ports::{
-        AccountStore, BotStore, CardStore, Clock, EffectStore, EventPublisher, EventStore,
-        IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher, ReactionStore,
-        ReadStateStore, RosterStore, RoutineStore, RunStore, SessionStore, SpaceStore, ThreadStore,
-        TokenGenerator, ToolStore, UserStore,
+        AccountStore, BotStore, CardStore, Clock, ComputerStore, EffectStore, EventPublisher,
+        EventStore, IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher,
+        ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore, SessionStore,
+        SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -56,6 +56,8 @@ pub struct Stores {
     pub memory: Arc<dyn MemoryStore>,
     /// The routines of bots (REQ-023, REQ-024, REQ-025).
     pub routines: Arc<dyn RoutineStore>,
+    /// The computers of bots (REQ-026).
+    pub computers: Arc<dyn ComputerStore>,
 }
 
 impl Stores {
@@ -84,6 +86,7 @@ impl Stores {
         roster: Arc<dyn RosterStore>,
         memory: Arc<dyn MemoryStore>,
         routines: Arc<dyn RoutineStore>,
+        computers: Arc<dyn ComputerStore>,
     ) -> Self {
         Self {
             accounts,
@@ -104,6 +107,7 @@ impl Stores {
             roster,
             memory,
             routines,
+            computers,
         }
     }
 }

@@ -338,12 +338,26 @@ pub struct ComputerStatusReply {
     pub status: String,
     /// The provider configured for this deployment.
     pub provider: String,
-    /// When the computer started, when it has one.
+    /// When the computer started, when it is running.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
     /// The generation of the screen backend; bumps on restart and invalidates old capabilities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screen_generation: Option<u64>,
+}
+
+impl ComputerStatusReply {
+    /// Builds the reply of a computer the stores hold; a stopped computer carries no timestamps.
+    #[must_use]
+    pub fn for_computer(computer: &boma_domain::Computer) -> Self {
+        let running = computer.status != boma_domain::ComputerStatus::Stopped;
+        Self {
+            status: computer.status.as_str().to_owned(),
+            provider: computer.provider.clone(),
+            started_at: running.then(|| computer.started_at.clone()).flatten(),
+            screen_generation: running.then_some(computer.screen_generation),
+        }
+    }
 }
 
 /// The reply of `routines.runNow` (REQ-025).
