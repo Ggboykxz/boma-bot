@@ -279,6 +279,15 @@ const SEED_ONE_RUN_PER_STATUS = SEED_RUN_STATUSES.map((status, index) => ({
  * Every seed answers the RPC surface with a fixed state, so a golden asserts a state and not a
  * click path. The key is the fixture's `state.seed`.
  */
+/** One message whose only block is a pending question card (REQ-007). */
+const SEED_CARD_MESSAGE = {
+  id: "msg_card_1",
+  seq: 1,
+  role: "user",
+  blocks: [{ type: "card", kind: "question" }],
+  createdAt: "2026-01-01T00:00:01Z",
+};
+
 const SEEDS: Record<string, (page: Page) => Promise<void>> = {
   /** One message, one row: the REQ-001 golden counts the rows. */
   "thread-with-one-user-message": async (page) => {
@@ -309,6 +318,16 @@ const SEEDS: Record<string, (page: Page) => Promise<void>> = {
         "bots/get": SEED_BOT,
         "threads/messages": { messages: [] },
         "threads/send": { messageId: "msg_sent", runId: "run_sent", status: "queued" },
+      },
+    });
+  },
+
+  /** A pending question card keeps the composer usable and the composer stays usable (REQ-007). */
+  "pending-question-card": async (page) => {
+    await seedRpc(page, {
+      answers: {
+        "bots/get": SEED_BOT,
+        "threads/messages": { messages: [SEED_CARD_MESSAGE] },
       },
     });
   },

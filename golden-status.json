@@ -158,9 +158,9 @@
       "reason": null
     },
     "REQ-007-pending-card": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-007",
-      "reason": "M2 - approval and question cards are part of the runs and tools milestone"
+      "reason": null
     },
     "REQ-009-unread-divider": {
       "status": "pending",

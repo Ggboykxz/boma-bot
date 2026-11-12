@@ -23,7 +23,7 @@ Status values:
 | REQ-004 | M1 | `crates/api/tests/rpc_surface.rs::req_004_creating_a_bot_creates_its_thread` | `crates/app/src/usecases.rs::create_bot` |
 | REQ-005 | M1 | `crates/api/tests/rpc_surface.rs::req_005_the_message_page_is_newest_first_and_carries_a_cursor` | `crates/app/src/usecases.rs::page_messages`, `crates/domain/src/message.rs` |
 | REQ-006 | M2 | `crates/testkit/src/build.rs::req_006_a_stopped_run_absorbs_nothing_else`, `crates/api/tests/rpc_surface.rs::req_006_a_cancel_stops_the_run_and_is_idempotent` | `crates/app/src/usecases.rs::cancel_run`, `crates/api/src/rpc.rs::runs_cancel`, `crates/app/src/worker.rs` |
-| REQ-007 | M2 | — | `crates/domain/src/message.rs::Block::Card` |
+| REQ-007 | M2 | `apps/web/tests/golden.spec.ts` (UI golden REQ-007-pending-card) | `apps/web/components/thread/message-blocks.tsx`, `apps/web/tests/fixtures.ts::SEED_CARD_MESSAGE` |
 | REQ-008 | M2 | — | `crates/domain/src/message.rs` |
 | REQ-009 | M2 | — | — |
 | REQ-010 | M2 | — | — |
