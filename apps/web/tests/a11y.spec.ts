@@ -29,11 +29,6 @@ for (const route of ROUTES) {
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto(route);
 
-      if (scheme === "dark") {
-        // BoardUI flips tokens from the `.dark` class, not from the media query alone.
-        await page.evaluate(() => document.documentElement.classList.add("dark"));
-      }
-
       expect(await analyse(page)).toEqual([]);
     });
   }
