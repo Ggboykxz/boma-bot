@@ -129,6 +129,12 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
    `serde-saphyr` 2.1.1, `deserialize` feature only.
 7. **The workspace crates had no SPDX expression**, so `cargo deny` reported them `unlicensed`; the
    licence is now `MIT` in `[workspace.package]` (see "Decisions taken during M0").
+8. **React logged hydration mismatches on every page**: the accessibility suite toggled the `dark`
+   class and the RTL suite rewrote `lang`/`dir` after hydration, so React compared attributes it
+   had not rendered. The theme is now applied by an inline script in `<head>` (Next.js guide
+   "Preventing flash before hydration") and `<html>` carries `suppressHydrationWarning`; the dark
+   scheme follows `prefers-color-scheme` and the suite no longer patches the DOM. Zero hydration
+   warnings remain.
 
 ## Blocked
 
