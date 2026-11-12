@@ -2,7 +2,18 @@
 
 ## Current milestone
 
-**M3 — in progress.** Slices land one commit at a time.
+**M3 — done.** M3 (Memory and schedules) closed at `9d812a4`: REQ-022 (memory documents with
+append-only revisions and `memory.write`/`read`/`list`/`remove`/`provider`), REQ-023 (cron-style
+routines with `@once`, next-run computation in the routine's IANA timezone, `routines.create`/
+`list`/`remove`), REQ-024 (the worker sweeps due routines into runs, `@once` fires once and
+deactivates, overlapping wakes coalesce, account-failure threshold of five pauses the routine
+and resets on a clean completion, `routine_id` attributed to runs) and REQ-025 (`routines.runNow`
+fires the routine once as a normal turn, attributed but moving no counters). CI green for both
+jobs at `9d812a4`; nextest 188/188; clippy, fmt, deny, machete, trace (27/40), secret scan clean.
+
+Row order matches implementation order within M3: REQ-022 → REQ-023 → REQ-024 → REQ-025.
+
+Slices delivered:
 
 - **REQ-022 (memory documents, MUST)** is done: per-bot and space-shared memory documents with
   append-only revisions. Migration `0013_memory.sql` creates `memory_documents` (projection: the
@@ -15,30 +26,6 @@
   the acceptance — memory available in a run's context — lands with the agent engine, which builds
   the model prompt; the scripted provider ignores context until then, which is honestly currently
   everywhere (same story as REQ-016's tool-call loop).
-
-- **REQ-025 (run now, SHOULD)** is done: `routines.runNow` fires a routine once as a normal
-  turn. The trial run is attributed to the routine (`routine_id`, trigger `User` so the failure
-  counters do not move) but it does not depend on or advance the cron schedule — the routine
-  keeps its `active` state and `nextRunAt` untouched. The provider pass uses the routine's
-  prompt when a run carries `routine_id`, because a routine-woken history carries no person
-  message. The wire body is `{routineId}`; the reply is `{routineId, runId, status}`.
-
-Row order matches implementation order.
-
-- **REQ-024 (dispatch, retry, coalescing, MUST)** is done: the worker's poll loop sweeps due
-  routines before claiming runs (`boma_app::usecases::dispatch_routines`), creates a
-  `trigger: routine` run per fire, reschedules to the next cron occurrence (`next_run_at` on the
-  routine row), deactivates a spent `@once`, and resets the failure counter on completion. A
-  routine whose previous run is still open is **not** fired a second time: the wake is recorded
-  as `coalesced` and the schedule advances (no stampede). A failed routine-woken run counts into
-  the routine's `account_failures`; past a threshold of 5 consecutive failures the routine pauses
-  itself and stops firing. Failures reset on a clean completion via `record_completed`. No
-  backoff multiplier curve is implemented in this slice: consecutive failures re-fire on each
-  due cron interval, which is the honest default until the spec names a formula. Any run ending
-  `failed` counts (including account-level provider refusals). Routine-woken runs carry
-  `routine_id` on `runs` (migration `0015_run_routine_id.sql`). The worker tracks it on
-  completion/failure paths to move the routines store counters. The single-flight check is
-  `find_open_routine`: a co-worker may skip a wake whose run is already open elsewhere.
 - **REQ-023 (routines as cron definitions, MUST)** is done for its create path: a bot wakes on
   cron expressions in its own IANA timezone (`croner` + `chrono` + `chrono-tz`, MIT), and `@once`
   fires exactly once five minutes after the request drops. Migration `0014_routines.sql` creates
@@ -499,3 +486,25 @@ None. Anything proposed during the build goes here first, with the REQ it would 
 | `../re-workspace/notes/spec/**` | the contract itself |
 | `../re-workspace/target/rakazo/packages/core/src/run-state.ts` | the authoritative run-state table, to settle the `leased → queued` transition (2026-11-12) |
 | `../re-workspace/target/rakazo` (other paths) | only through the citations already recorded in the spec; not re-read in this session |
+- **REQ-024 (dispatch, retry, coalescing, MUST)** is done: the worker's poll loop sweeps due
+  routines before claiming runs (`boma_app::usecases::dispatch_routines`), creates a
+  `trigger: routine` run per fire, reschedules to the next cron occurrence (`next_run_at` on the
+  routine row), deactivates a spent `@once`, and resets the failure counter on completion. A
+  routine whose previous run is still open is **not** fired a second time: the wake is recorded
+  as `coalesced` and the schedule advances (no stampede). A failed routine-woken run counts into
+  the routine's `account_failures`; past a threshold of 5 consecutive failures the routine pauses
+  itself and stops firing. Failures reset on a clean completion via `record_completed`. No
+  backoff multiplier curve is implemented in this slice: consecutive failures re-fire on each
+  due cron interval, which is the honest default until the spec names a formula. Any run ending
+  `failed` counts (including account-level provider refusals). Routine-woken runs carry
+  `routine_id` on `runs` (migration `0015_run_routine_id.sql`). The worker tracks it on
+  completion/failure paths to move the routines store counters. The single-flight check is
+  `find_open_routine`: a co-worker may skip a wake whose run is already open elsewhere.
+- **REQ-025 (run now, SHOULD)** is done: `routines.runNow` fires a routine once as a normal
+  turn. The trial run is attributed to the routine (`routine_id`, trigger `User` so the failure
+  counters do not move) but it does not depend on or advance the cron schedule — the routine
+  keeps its `active` state and `nextRunAt` untouched. The provider pass uses the routine's
+  prompt when a run carries `routine_id`, because a routine-woken history carries no person
+  message. The wire body is `{routineId}`; the reply is `{routineId, runId, status}`.
+
+Row order matches implementation order.
