@@ -26,6 +26,13 @@ export type Block =
   | { type: "tool"; name: string; running: boolean }
   | { type: "card"; cardId: string; kind: string };
 
+/** One emoji reaction, as the client sees it (REQ-008). */
+export interface ReactionView {
+  emoji: string;
+  count: number;
+  reacted: boolean;
+}
+
 /** A message, as the transcript shows it. */
 export interface MessageView {
   id: string;
@@ -36,6 +43,7 @@ export interface MessageView {
   createdAt: string;
   replyToMessageId?: string;
   replyQuote?: string;
+  reactions?: ReactionView[];
 }
 
 /** One frame of a thread's stream. */
@@ -62,6 +70,12 @@ export interface SendReply {
   messageId: string;
   runId: string;
   status: string;
+}
+
+/** The reply of `threads.react` (REQ-008). The truth for the message after the change. */
+export interface ReactReply {
+  messageId: string;
+  reactions: ReactionView[];
 }
 
 /** The reply of `threads.messages`. The server answers newest first. */
@@ -278,6 +292,29 @@ function normalizeBlock(raw: unknown): Block | null {
   }
 }
 
+/** Normalises the reactions of a message; invalid entries are dropped (REQ-008). */
+function normalizeReactions(raw: unknown): ReactionView[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((entry): ReactionView | null => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const reaction = entry as Record<string, unknown>;
+      if (typeof reaction.emoji !== "string" || reaction.emoji.length === 0) {
+        return null;
+      }
+      return {
+        emoji: reaction.emoji,
+        count: typeof reaction.count === "number" ? reaction.count : 0,
+        reacted: reaction.reacted === true,
+      };
+    })
+    .filter((reaction): reaction is ReactionView => reaction !== null);
+}
+
 /** Normalises one message, dropping the blocks that cannot be read. */
 export function normalizeMessage(raw: unknown): MessageView | null {
   if (!raw || typeof raw !== "object") {
@@ -291,6 +328,7 @@ export function normalizeMessage(raw: unknown): MessageView | null {
     ? message.blocks.map(normalizeBlock).filter((block): block is Block => block !== null)
     : [];
   const role = message.role;
+  const reactions = normalizeReactions(message.reactions);
   return {
     id: message.id,
     seq: typeof message.seq === "number" ? message.seq : 0,
@@ -301,6 +339,7 @@ export function normalizeMessage(raw: unknown): MessageView | null {
       ? { replyToMessageId: message.replyToMessageId }
       : {}),
     ...(typeof message.replyQuote === "string" ? { replyQuote: message.replyQuote } : {}),
+    ...(reactions.length > 0 ? { reactions } : {}),
     createdAt: typeof message.createdAt === "string" ? message.createdAt : "",
   };
 }
@@ -308,6 +347,14 @@ export function normalizeMessage(raw: unknown): MessageView | null {
 /** Whether a value is one of the four roles the domain spells. */
 export function isMessageRole(value: unknown): value is MessageRole {
   return value === "user" || value === "bot" || value === "system" || value === "tool";
+}
+
+/** `threads.react` — adds or removes an emoji reaction on a message (REQ-008). */
+export function threadsReact(
+  request: { messageId: string; emoji: string; action: "add" | "remove" },
+  signal?: AbortSignal,
+): Promise<ReactReply> {
+  return call<ReactReply>("threads", "react", request, signal);
 }
 
 /** `threads.messages` — a page of the thread's history, newest first. */

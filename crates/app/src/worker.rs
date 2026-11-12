@@ -300,6 +300,7 @@ mod tests {
             reply_quote: None,
             client_nonce: None,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
+            reactions: Vec::new(),
         }
     }
 
@@ -330,6 +331,7 @@ mod tests {
                 reply_quote: None,
                 client_nonce: None,
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
+                reactions: Vec::new(),
             }
         }
         let history = vec![

@@ -9,6 +9,7 @@ pub mod cards;
 pub mod events;
 pub mod invitations;
 pub mod messages;
+pub mod reactions;
 pub mod rows;
 pub mod runs;
 pub mod sessions;

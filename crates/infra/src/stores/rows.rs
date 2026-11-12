@@ -268,6 +268,7 @@ pub(crate) fn message(row: MessageRow) -> Result<Message, AppError> {
         reply_quote: row.reply_quote,
         client_nonce: row.client_nonce,
         created_at: row.created_at,
+        reactions: Vec::new(),
     })
 }
 
@@ -364,6 +365,22 @@ pub(crate) struct ToolInstallRow {
     pub(crate) tool_key: String,
     pub(crate) description: String,
     pub(crate) kind: String,
+}
+
+/// A row of `message_reactions`.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct ReactionRow {
+    pub(crate) emoji: String,
+    pub(crate) count: i64,
+    pub(crate) reacted: bool,
+}
+
+/// A row of `message_reactions` read for hydration, attributed to the caller in Rust.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct ReactionAttributionRow {
+    pub(crate) message_id: String,
+    pub(crate) emoji: String,
+    pub(crate) user_id: String,
 }
 
 /// Turns a stored row into the effect it describes.

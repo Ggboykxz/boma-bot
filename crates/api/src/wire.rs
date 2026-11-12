@@ -10,8 +10,30 @@
 //! * a field that is genuinely absent for a given case is omitted (`runId` on a message that no
 //!   run produced), so the client never has to distinguish "no value" from "an empty value".
 
-use boma_domain::{Block, Event, Message};
+use boma_domain::{Block, Event, Message, Reaction};
 use serde::{Deserialize, Serialize};
+
+/// One emoji reaction, as the client sees it (REQ-008).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionView {
+    /// The emoji.
+    pub emoji: String,
+    /// How many people reacted with it.
+    pub count: u32,
+    /// Whether the caller reacted with it.
+    pub reacted: bool,
+}
+
+impl From<&Reaction> for ReactionView {
+    fn from(reaction: &Reaction) -> Self {
+        Self {
+            emoji: reaction.emoji.clone(),
+            count: reaction.count,
+            reacted: reaction.reacted,
+        }
+    }
+}
 
 /// A message, as the client sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +58,9 @@ pub struct MessageView {
     pub reply_quote: Option<String>,
     /// When it was written.
     pub created_at: String,
+    /// The emoji reactions on this message (REQ-008).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionView>,
 }
 
 impl From<&Message> for MessageView {
@@ -52,6 +77,7 @@ impl From<&Message> for MessageView {
                 .as_ref()
                 .map(|id| id.as_str().to_owned()),
             reply_quote: message.reply_quote.clone(),
+            reactions: message.reactions.iter().map(ReactionView::from).collect(),
         }
     }
 }
@@ -192,6 +218,16 @@ pub struct CancelReply {
     pub status: String,
 }
 
+/// The reply of `threads.react` (REQ-008).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactReply {
+    /// The message reacted to.
+    pub message_id: String,
+    /// The truth for the message after the change.
+    pub reactions: Vec<ReactionView>,
+}
+
 /// The reply of `threads.answer`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -235,6 +271,7 @@ mod tests {
             reply_quote: None,
             client_nonce: None,
             created_at: "2026-01-01T00:00:02Z".to_owned(),
+            reactions: Vec::new(),
         };
         let json = serde_json::to_value(MessageView::from(&message)).expect("the view serialises");
         let object = json.as_object().expect("the view is an object");

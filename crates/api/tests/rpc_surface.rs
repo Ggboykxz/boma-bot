@@ -592,3 +592,97 @@ async fn req_041_a_sign_in_with_the_wrong_password_is_refused_without_saying_why
         "the answer must not say which half was wrong"
     );
 }
+
+#[tokio::test]
+async fn req_008_reacting_to_a_message_reads_back_the_truth() {
+    let world = world().await;
+    let send = post(
+        state(&world.app),
+        "/rpc/threads/send",
+        Some(&world.caller),
+        serde_json::json!({"botId": world.bot_id, "text": "a message to react to"}),
+    )
+    .await;
+    let sent_body = json(send).await;
+    let message_id = sent_body["messageId"].as_str().expect("a message id").to_owned();
+
+    // Adding a reaction returns the truth for the message.
+    let response = post(
+        state(&world.app),
+        "/rpc/threads/react",
+        Some(&world.caller),
+        serde_json::json!({"messageId": message_id, "emoji": "\u{1F44D}", "action": "add"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["messageId"], serde_json::json!(message_id));
+    assert_eq!(
+        body["reactions"][0]["emoji"],
+        serde_json::json!("\u{1F44D}")
+    );
+    assert_eq!(body["reactions"][0]["count"], serde_json::json!(1));
+    assert_eq!(body["reactions"][0]["reacted"], serde_json::json!(true));
+
+    // The page of history carries the reaction (REQ-008): it survives a reload.
+    let response = post(
+        state(&world.app),
+        "/rpc/threads/messages",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id, "limit": 10}),
+    )
+    .await;
+    let page = json(response).await;
+    let found = page["messages"]
+        .as_array()
+        .expect("messages are listed")
+        .iter()
+        .find(|message| message["id"] == serde_json::json!(message_id))
+        .expect("the message is on the page");
+    assert_eq!(
+        found["reactions"][0]["emoji"],
+        serde_json::json!("\u{1F44D}")
+    );
+
+    // Replaying the same add changes nothing.
+    let response = post(
+        state(&world.app),
+        "/rpc/threads/react",
+        Some(&world.caller),
+        serde_json::json!({"messageId": message_id, "emoji": "\u{1F44D}", "action": "add"}),
+    )
+    .await;
+    let body = json(response).await;
+    assert_eq!(body["reactions"][0]["count"], serde_json::json!(1));
+
+    // Removing empties the list.
+    let response = post(
+        state(&world.app),
+        "/rpc/threads/react",
+        Some(&world.caller),
+        serde_json::json!({"messageId": message_id, "emoji": "\u{1F44D}", "action": "remove"}),
+    )
+    .await;
+    let body = json(response).await;
+    assert_eq!(body["reactions"].as_array().map(Vec::len), Some(0),);
+
+    // A message the caller cannot see is not found.
+    let response = post(
+        state(&world.app),
+        "/rpc/threads/react",
+        Some(&world.caller),
+        serde_json::json!({"messageId": "msg_does_not_exist", "emoji": "\u{1F44D}", "action": "add"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // An action outside the schema is refused with the stable envelope.
+    let response = post(
+        state(&world.app),
+        "/rpc/threads/react",
+        Some(&world.caller),
+        serde_json::json!({"messageId": message_id, "emoji": "\u{1F44D}", "action": "adore"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

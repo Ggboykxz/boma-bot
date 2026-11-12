@@ -399,6 +399,7 @@ fn text_message(id: &str, seq: i64, role: MessageRole, text: &str, user_id: &Use
         reply_quote: None,
         client_nonce: None,
         created_at: created_at_of(seq),
+        reactions: Vec::new(),
     }
 }
 

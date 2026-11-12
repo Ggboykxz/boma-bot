@@ -31,7 +31,8 @@ pub use ids::{
     UserId,
 };
 pub use message::{
-    Block, Message, MessagePage, MessageRole, cursor_from_seq, parse_cursor, validate_message_text,
+    Block, Message, MessagePage, MessageRole, Reaction, cursor_from_seq, parse_cursor,
+    validate_message_text,
 };
 pub use model::{DeploymentModels, ModelChoice, ModelPreferences, resolve};
 pub use run::{Run, RunStatus, RunTrigger};

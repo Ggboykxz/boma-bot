@@ -14,8 +14,8 @@
 
 use async_trait::async_trait;
 use boma_domain::{
-    Bot, Card, CardId, Email, Event, ExternalEffect, Message, MessagePage, Run, RunId, RunStatus,
-    Session, Space, SpaceRole, TenantContext, Thread, ToolSpec, User, UserId,
+    Bot, Card, CardId, Email, Event, ExternalEffect, Message, MessagePage, Reaction, Run, RunId,
+    RunStatus, Session, Space, SpaceRole, TenantContext, Thread, ToolSpec, User, UserId,
 };
 
 use crate::error::AppError;
@@ -690,6 +690,50 @@ pub trait CardStore: Send + Sync {
         id: &CardId,
         answer: &str,
     ) -> Result<Card, AppError>;
+}
+
+/// The reactions on a message (REQ-008).
+#[async_trait]
+pub trait ReactionStore: Send + Sync {
+    /// Adds or removes one emoji reaction for the caller.
+    ///
+    /// Returns the full reaction list for the message after the change, so one RPC answers with
+    /// the truth rather than making the client count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the message does not exist in the tenant, or the emoji is refused.
+    async fn react(
+        &self,
+        context: &boma_domain::TenantContext,
+        message_id: &boma_domain::MessageId,
+        user_id: &boma_domain::UserId,
+        emoji: &str,
+        action: ReactionAction,
+    ) -> Result<Vec<Reaction>, AppError>;
+
+    /// The reactions a set of messages carries, attributed to the caller (REQ-008).
+    ///
+    /// One attribution is what `reacted` means: whether the caller personally reacted with the
+    /// emoji. The map holds a list only for the messages that carry reactions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list_for_messages(
+        &self,
+        context: &boma_domain::TenantContext,
+        message_ids: &[boma_domain::MessageId],
+    ) -> Result<std::collections::HashMap<boma_domain::MessageId, Vec<Reaction>>, AppError>;
+}
+
+/// Whether to add or remove a reaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReactionAction {
+    /// Add the emoji for this person.
+    Add,
+    /// Remove the emoji for this person.
+    Remove,
 }
 
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).

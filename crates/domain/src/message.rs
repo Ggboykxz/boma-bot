@@ -136,6 +136,20 @@ pub struct Message {
     pub client_nonce: Option<String>,
     /// When it was written.
     pub created_at: String,
+    /// Emoji reactions on this message (REQ-008).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<Reaction>,
+}
+
+/// One emoji reaction on a message (REQ-008).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reaction {
+    /// The emoji.
+    pub emoji: String,
+    /// How many people reacted with it.
+    pub count: u32,
+    /// Whether the caller reacted with it.
+    pub reacted: bool,
 }
 
 /// The longest text a person may send in one message.

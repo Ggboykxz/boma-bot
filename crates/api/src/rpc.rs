@@ -23,8 +23,8 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AnswerReply, BotReply, CancelReply, InvitationReply, MessagesReply, RunView, RunsReply,
-        SendReply, SpaceReply,
+        AnswerReply, BotReply, CancelReply, InvitationReply, MessagesReply, ReactReply, RunView,
+        RunsReply, SendReply, SpaceReply,
     },
 };
 
@@ -50,6 +50,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::THREADS, "messages"),
         (namespaces::THREADS, "subscribe"),
         (namespaces::THREADS, "answer"),
+        (namespaces::THREADS, "react"),
         (namespaces::BOTS, "create"),
         (namespaces::BOTS, "get"),
         (namespaces::SPACES, "create"),
@@ -88,6 +89,9 @@ async fn dispatch(
             .map(|reply| Json(reply).into_response()),
         (namespaces::THREADS, "subscribe") => crate::realtime::subscribe(state, auth, body).await,
         (namespaces::THREADS, "answer") => threads_answer(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::THREADS, "react") => threads_react(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "create") => bots_create(state, auth, body)
@@ -349,6 +353,57 @@ struct ThreadAnswerRequest {
     card_id: String,
     /// The answer a member gives.
     answer: String,
+}
+
+/// The body of `threads.react`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThreadsReactRequest {
+    /// The message reacted to.
+    message_id: String,
+    /// The emoji to toggle.
+    emoji: String,
+    /// Whether to add or remove.
+    action: ReactionActionRequest,
+}
+
+/// The two things a member may do to a reaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ReactionActionRequest {
+    /// Add the emoji for this member.
+    Add,
+    /// Remove the emoji for this member.
+    Remove,
+}
+
+/// `threads.react` — add or remove an emoji reaction on a message (REQ-008).
+async fn threads_react(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ReactReply, ApiError> {
+    let request: ThreadsReactRequest = parse(&body)?;
+    let action = match request.action {
+        ReactionActionRequest::Add => boma_app::ports::ReactionAction::Add,
+        ReactionActionRequest::Remove => boma_app::ports::ReactionAction::Remove,
+    };
+    let outcome = usecases::react_to_message(
+        state.app(),
+        &auth.actor.context,
+        &request.message_id,
+        &request.emoji,
+        action,
+    )
+    .await?;
+    Ok(ReactReply {
+        message_id: outcome.message_id.as_str().to_owned(),
+        reactions: outcome
+            .reactions
+            .iter()
+            .map(crate::wire::ReactionView::from)
+            .collect(),
+    })
 }
 
 /// `runs.list` — the activity projection, newest first.

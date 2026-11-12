@@ -319,6 +319,7 @@ impl TestAppBuilder {
             Arc::new(database.cards()),
             Arc::new(database.effects()),
             Arc::new(database.tools()),
+            Arc::new(database.reactions()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,

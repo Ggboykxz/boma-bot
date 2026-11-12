@@ -14,15 +14,15 @@ use std::sync::Arc;
 use boma_app::ports::IdGenerator as _;
 use boma_app::{App, ports::*};
 use boma_domain::{
-    BotId, Email, MessageId, MessageRole, RunStatus, RunTrigger, SpaceId, TenantContext, ThreadId,
-    UserId,
+    Block, BotId, Email, MessageId, MessageRole, RunStatus, RunTrigger, SpaceId, TenantContext,
+    ThreadId, UserId,
 };
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMessageStore, PostgresRunStore, PostgresSessionStore,
-    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock,
-    TokenGenerator,
+    PostgresInvitationStore, PostgresMessageStore, PostgresReactionStore, PostgresRunStore,
+    PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
+    PostgresUserStore, SystemClock, TokenGenerator,
 };
 
 mod common;
@@ -65,7 +65,8 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresInvitationStore::new(pool.clone())),
             Arc::new(PostgresCardStore::new(pool.clone())),
             Arc::new(PostgresEffectStore::new(pool.clone())),
-            Arc::new(PostgresToolStore::new(pool)),
+            Arc::new(PostgresToolStore::new(pool.clone())),
+            Arc::new(PostgresReactionStore::new(pool)),
         ),
         boma_app::Services::new(
             publisher,
@@ -737,5 +738,154 @@ async fn req_042_invitations_are_created_and_looked_up_by_token() {
         .expect("the lookup answers")
         .expect("the invitation exists");
     assert_eq!(found.email.as_str(), "invitee@example.com");
+    cleanup(&database, &organization_id, &email).await;
+}
+
+/// Seeds a bot, its thread and one user message; returns their thread and message ids.
+async fn seed_thread_with_message(
+    app: &App,
+    context: &TenantContext,
+    space_id: &SpaceId,
+    user_id: &UserId,
+) -> (ThreadId, MessageId) {
+    let bot_id = BotId::new(ids().new_id("bot")).expect("an id is valid");
+    let thread_id = ThreadId::new(ids().new_id("thr")).expect("an id is valid");
+    let (_bot, thread) = app
+        .stores
+        .bots
+        .create_with_thread(
+            NewBot {
+                id: bot_id.clone(),
+                space_id: space_id.clone(),
+                user_id: user_id.clone(),
+                name: "Analyst".to_owned(),
+                description: None,
+                color: None,
+                created_at: app.services.clock.now(),
+            },
+            NewThread {
+                id: thread_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot_id.clone(),
+                user_id: user_id.clone(),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+        .expect("the bot is created");
+
+    let message_id = MessageId::new(ids().new_id("msg")).expect("an id is valid");
+    app.stores
+        .messages
+        .insert(
+            context,
+            NewMessage {
+                id: message_id.clone(),
+                space_id: space_id.clone(),
+                thread_id: thread.id.clone(),
+                role: MessageRole::User,
+                blocks: vec![Block::Text {
+                    text: "a message to react to".to_owned(),
+                }],
+                bot_id: None,
+                author_user_id: Some(user_id.clone()),
+                run_id: None,
+                client_nonce: None,
+                created_at: app.services.clock.now(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is written");
+    (thread.id, message_id)
+}
+
+#[tokio::test]
+async fn req_008_reactions_round_trip_in_postgres() {
+    let database = common::database().await;
+    let app = app(&database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "reactions").await;
+
+    let (thread_id, message_id) =
+        seed_thread_with_message(&app, &context, &space_id, &user_id).await;
+
+    // The first reaction lands and reads back with the truth for the message.
+    let added = boma_app::usecases::react_to_message(
+        &app,
+        &context,
+        message_id.as_str(),
+        "\u{1F44D}",
+        ReactionAction::Add,
+    )
+    .await
+    .expect("the reaction lands");
+    assert_eq!(
+        added.reactions,
+        vec![boma_domain::Reaction {
+            emoji: "\u{1F44D}".to_owned(),
+            count: 1,
+            reacted: true,
+        }],
+    );
+
+    // Retrying the same add changes nothing: one row per (message, person, emoji).
+    let retried = boma_app::usecases::react_to_message(
+        &app,
+        &context,
+        message_id.as_str(),
+        "\u{1F44D}",
+        ReactionAction::Add,
+    )
+    .await
+    .expect("a retry is harmless");
+    assert_eq!(retried.reactions[0].count, 1);
+
+    // The page of history carries the reaction, so it survives a reload.
+    let page =
+        boma_app::usecases::page_messages(&app, &context, thread_id.as_str(), None, Some(10))
+            .await
+            .expect("the page answers");
+    let found = page
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+        .expect("the message is on the page");
+    assert_eq!(found.reactions[0].emoji, "\u{1F44D}");
+
+    // A message that does not exist in this tenant is not found.
+    let missing = boma_app::usecases::react_to_message(
+        &app,
+        &context,
+        "msg_missing",
+        "\u{1F44D}",
+        ReactionAction::Add,
+    )
+    .await;
+    assert!(matches!(missing, Err(boma_app::AppError::NotFound)));
+
+    // An empty emoji is refused by the boundary.
+    let refused = boma_app::usecases::react_to_message(
+        &app,
+        &context,
+        message_id.as_str(),
+        "   ",
+        ReactionAction::Add,
+    )
+    .await;
+    assert!(matches!(refused, Err(boma_app::AppError::Rule(_))));
+
+    // Removing the caller's reaction empties the list.
+    let removed = boma_app::usecases::react_to_message(
+        &app,
+        &context,
+        message_id.as_str(),
+        "\u{1F44D}",
+        ReactionAction::Remove,
+    )
+    .await
+    .expect("the removal lands");
+    assert_eq!(removed.reactions, []);
+
     cleanup(&database, &organization_id, &email).await;
 }

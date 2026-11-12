@@ -1,6 +1,6 @@
 "use client";
 
-import { RiArrowLeftLine, RiErrorWarningLine, RiReplyLine } from "@remixicon/react";
+import { RiArrowLeftLine, RiEmotionAddLine, RiErrorWarningLine, RiReplyLine } from "@remixicon/react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -11,6 +11,7 @@ import {
   botsGet,
   normalizeMessage,
   threadsMessages,
+  threadsReact,
   threadsSend,
   threadsSubscribe,
   type BotReply,
@@ -26,6 +27,9 @@ type Live = "connecting" | "live" | "offline";
 
 /** How many times the client tries to reopen a stream that closed. */
 const RECONNECT_ATTEMPTS = 3;
+
+/** The quick reactions the picker offers (REQ-008). */
+const QUICK_EMOJIS = ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F389}", "\u{1F440}"];
 
 /**
  * The thread screen (spec/08-ui-ux.md §8.3, REQ-001, REQ-005, REQ-020).
@@ -50,6 +54,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
   const [sendFailed, setSendFailed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [replyTo, setReplyTo] = useState<MessageView | null>(null);
+  const [pickerFor, setPickerFor] = useState<string | null>(null);
 
   const lastSeq = useRef(0);
   const threadIdRef = useRef<string | null>(null);
@@ -185,6 +190,24 @@ export function ThreadScreen({ botId }: { botId: string }) {
     };
   }, [applyMessage, bot?.threadId, phase]);
 
+  // Toggling one emoji goes through one RPC: the server answers with the truth for the message,
+  // so the chips never drift from what other members see (REQ-008).
+  const toggleReaction = useCallback(
+    async (messageId: string, emoji: string, action: "add" | "remove") => {
+      try {
+        const reply = await threadsReact({ messageId, emoji, action });
+        setMessages((current) =>
+          current.map((entry) =>
+            entry.id === messageId ? { ...entry, reactions: reply.reactions } : entry,
+          ),
+        );
+      } catch {
+        // The chip keeps its last known state; the button is the retry.
+      }
+    },
+    [],
+  );
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text.length === 0 || sending) {
@@ -284,7 +307,38 @@ export function ThreadScreen({ botId }: { botId: string }) {
                   >
                     <RiReplyLine size={14} aria-hidden />
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setPickerFor(pickerFor === message.id ? null : message.id)}
+                    aria-label={t("thread.reactions.add")}
+                    aria-expanded={pickerFor === message.id}
+                    className="boma-focus rounded-md p-1 text-text-tertiary hover:bg-background-secondary-hover hover:text-text-primary"
+                  >
+                    <RiEmotionAddLine size={14} aria-hidden />
+                  </button>
                 </div>
+                {pickerFor === message.id ? (
+                  <div
+                    role="group"
+                    aria-label={t("thread.reactions.picker")}
+                    className="flex flex-wrap gap-1 ps-1"
+                  >
+                    {QUICK_EMOJIS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        aria-label={`${t("thread.reactions.toggle")} ${emoji}`}
+                        onClick={() => {
+                          setPickerFor(null);
+                          void toggleReaction(message.id, emoji, "add");
+                        }}
+                        className="boma-focus hover:bg-background-secondary-hover rounded-full p-1"
+                      >
+                        <span aria-hidden>{emoji}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <div
                   className={
                     message.role === "user"
@@ -299,6 +353,36 @@ export function ThreadScreen({ botId }: { botId: string }) {
                   ) : null}
                   <MessageBlocks blocks={message.blocks} />
                 </div>
+                {message.reactions && message.reactions.length > 0 ? (
+                  <ul
+                    className={`flex flex-wrap gap-1 ${message.role === "user" ? "self-end" : "self-start"}`}
+                  >
+                    {message.reactions.map((reaction) => (
+                      <li key={reaction.emoji}>
+                        <button
+                          type="button"
+                          aria-pressed={reaction.reacted}
+                          aria-label={`${t("thread.reactions.toggle")} ${reaction.emoji}`}
+                          onClick={() =>
+                            void toggleReaction(
+                              message.id,
+                              reaction.emoji,
+                              reaction.reacted ? "remove" : "add",
+                            )
+                          }
+                          className={
+                            reaction.reacted
+                              ? "boma-focus border-border-button-default bg-background-tertiary-default text-text-primary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-body-2-medium"
+                              : "boma-focus border-separator-border text-text-secondary hover:bg-background-secondary-hover hover:text-text-primary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-body-2-medium"
+                          }
+                        >
+                          <span aria-hidden>{reaction.emoji}</span>
+                          <span>{reaction.count}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </li>
             ))}
           </ul>

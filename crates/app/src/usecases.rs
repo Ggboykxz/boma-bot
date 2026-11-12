@@ -27,7 +27,7 @@ pub use crate::accounts::{SignIn, SignUp};
 use crate::{
     accounts::Accounts,
     error::AppError,
-    ports::{AnswerCardOutcome, NewBot, NewEffect, NewMessage, NewRun, NewThread},
+    ports::{AnswerCardOutcome, NewBot, NewEffect, NewMessage, NewRun, NewThread, ReactionAction},
     service::{Actor, App, SendOutcome},
 };
 
@@ -328,6 +328,29 @@ pub struct SendMessage {
     pub reply_quote: Option<String>,
 }
 
+/// Picks the model for one run, from the bot's pinned or chosen model (REQ-015).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the pinned model is one this deployment cannot reach.
+fn model_choice_for(
+    bot: &boma_domain::Bot,
+    models: &boma_domain::model::DeploymentModels,
+) -> Result<boma_domain::model::ModelChoice, AppError> {
+    let preferences = boma_domain::model::ModelPreferences {
+        bot: bot.model_id.clone().map(|model| {
+            let provider = bot
+                .model_provider
+                .clone()
+                .unwrap_or_else(|| "custom".to_owned());
+            (format!("{provider}/{model}"), bot.model_pinned)
+        }),
+        space: None,
+        person: None,
+    };
+    Ok(boma_domain::model::resolve(&preferences, models)?)
+}
+
 /// Sends a message to a bot and starts the run that answers it.
 ///
 /// The send returns before any model call: one message row and one queued run, then the worker
@@ -419,18 +442,7 @@ pub async fn send_message(
 
     // The model is picked before the run exists (REQ-015): a pinned choice the deployment cannot
     // reach fails visibly instead of silently running elsewhere.
-    let preferences = boma_domain::model::ModelPreferences {
-        bot: bot.model_id.clone().map(|model| {
-            let provider = bot
-                .model_provider
-                .clone()
-                .unwrap_or_else(|| "custom".to_owned());
-            (format!("{provider}/{model}"), bot.model_pinned)
-        }),
-        space: None,
-        person: None,
-    };
-    let choice = boma_domain::model::resolve(&preferences, &app.services.models)?;
+    let choice = model_choice_for(&bot, &app.services.models)?;
 
     let run = app
         .stores
@@ -492,10 +504,38 @@ pub async fn page_messages(
         .messages
         .page(context, &thread_id, before, limit)
         .await?;
+    let messages = hydrate_reactions(app, context, page.messages).await?;
     Ok(MessagesPage {
-        messages: page.messages,
+        messages,
         next_cursor: page.next_cursor,
     })
+}
+
+/// Attaches the reactions a page of messages carries (REQ-008).
+///
+/// One attribution per page: the caller sees, for each emoji, how many people reacted and
+/// whether they did.
+async fn hydrate_reactions(
+    app: &App,
+    context: &TenantContext,
+    mut messages: Vec<boma_domain::Message>,
+) -> Result<Vec<boma_domain::Message>, AppError> {
+    if messages.is_empty() {
+        return Ok(messages);
+    }
+    let ids: Vec<boma_domain::MessageId> =
+        messages.iter().map(|message| message.id.clone()).collect();
+    let reactions = app
+        .stores
+        .reactions
+        .list_for_messages(context, &ids)
+        .await?;
+    for message in &mut messages {
+        if let Some(list) = reactions.get(&message.id) {
+            message.reactions = list.clone();
+        }
+    }
+    Ok(messages)
 }
 
 /// The activity projection: the runs of a bot, newest first (REQ-011).
@@ -792,6 +832,45 @@ pub async fn answer_card(
     Ok(AnswerCardOutcome {
         card,
         effect_recorded,
+    })
+}
+
+/// The outcome of an emoji reaction a member left on a message (REQ-008).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactOutcome {
+    /// The message reacted to.
+    pub message_id: boma_domain::MessageId,
+    /// The truth for the message after the change, so one RPC answers completely.
+    pub reactions: Vec<boma_domain::Reaction>,
+}
+
+/// Adds or removes an emoji reaction a member leaves on a message (REQ-008).
+///
+/// One person, one emoji, one row: repeating the same `add` changes nothing, which is what makes
+/// a retry harmless.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the message does not exist in the caller's tenant, and
+/// [`AppError::Rule`] when the emoji is refused.
+pub async fn react_to_message(
+    app: &App,
+    context: &TenantContext,
+    message_id: &str,
+    emoji: &str,
+    action: ReactionAction,
+) -> Result<ReactOutcome, AppError> {
+    let message_id =
+        boma_domain::MessageId::new(message_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
+    let reactions = app
+        .stores
+        .reactions
+        .react(context, &message_id, &user_id, emoji, action)
+        .await?;
+    Ok(ReactOutcome {
+        message_id,
+        reactions,
     })
 }
 

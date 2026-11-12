@@ -207,7 +207,19 @@ const SEED_ONE_MESSAGE = [
   },
 ];
 
-/** A handful of messages, of both roles, with a tool call and a file in the middle. */
+/** A message that carries reactions already (REQ-008). */
+const SEED_REACTED_MESSAGE = [
+  {
+    id: "msg_1",
+    seq: 1,
+    role: "user",
+    blocks: [{ type: "text", text: "Plan my week." }],
+    createdAt: "2026-01-01T00:00:01Z",
+    reactions: [{ emoji: "\u{1F44D}", count: 2, reacted: true }],
+  },
+];
+
+/** A thread with a conversation in it. */
 const SEED_MANY_MESSAGES = [
   {
     id: "msg_1",
@@ -296,6 +308,20 @@ const SEEDS: Record<string, (page: Page) => Promise<void>> = {
         "bots/get": SEED_BOT,
         "threads/messages": { messages: SEED_ONE_MESSAGE },
         "threads/send": { messageId: "msg_sent", runId: "run_sent", status: "queued" },
+      },
+    });
+  },
+
+  /** A message that already carries reactions, one of them from the caller (REQ-008). */
+  "thread-with-reacted-message": async (page) => {
+    await seedRpc(page, {
+      answers: {
+        "bots/get": SEED_BOT,
+        "threads/messages": { messages: SEED_REACTED_MESSAGE },
+        "threads/react": {
+          messageId: "msg_1",
+          reactions: [{ emoji: "\u{1F44D}", count: 2, reacted: true }],
+        },
       },
     });
   },

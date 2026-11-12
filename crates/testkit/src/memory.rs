@@ -32,14 +32,16 @@ use boma_app::{
         Account, AccountStore, ActivityPage, BotStore, CardStore, Clock, EffectStore,
         EventPublisher, EventStore, Invitation, InvitationStore, MessageStore, NewAccount, NewBot,
         NewEffect, NewEvent, NewInvitation, NewMessage, NewRun, NewSession, NewSpace, NewThread,
-        RunActivity, RunStore, SessionStore, SpaceStore, StoredMessage, ThreadStore, ToolStore,
-        UserStore,
+        ReactionAction, ReactionStore, RunActivity, RunStore, SessionStore, SpaceStore,
+        StoredMessage, ThreadStore, ToolStore, UserStore,
     },
 };
+use boma_domain::DomainError;
 use boma_domain::{
     Block, Bot, BotId, Card, CardId, CardStatus, Email, Event, ExternalEffect, Message, MessageId,
-    MessagePage, OrganizationId, Run, RunId, RunStatus, Session, SessionId, Space, SpaceId,
-    SpaceRole, TenantContext, Thread, ThreadId, ToolKind, ToolSpec, User, UserId, cursor_from_seq,
+    MessagePage, OrganizationId, Reaction, Run, RunId, RunStatus, Session, SessionId, Space,
+    SpaceId, SpaceRole, TenantContext, Thread, ThreadId, ToolKind, ToolSpec, User, UserId,
+    cursor_from_seq,
 };
 use tokio::sync::broadcast;
 
@@ -129,6 +131,19 @@ struct MessageRow {
     /// The message.
     message: Message,
     /// The tenant.
+    space_id: SpaceId,
+}
+
+/// A reaction somebody left on a message (REQ-008).
+#[derive(Debug, Clone)]
+struct ReactionRow {
+    /// The emoji.
+    emoji: String,
+    /// Who reacted.
+    user_id: UserId,
+    /// The message reacted to.
+    message_id: MessageId,
+    /// The tenant the message belongs to.
     space_id: SpaceId,
 }
 
@@ -226,6 +241,8 @@ struct State {
     invitations: Vec<InvitationRow>,
     /// The cards, with the space they belong to.
     cards: Vec<CardRow>,
+    /// The reactions people left on messages.
+    reactions: Vec<ReactionRow>,
     /// The effects runs perform.
     effects: Vec<EffectRow>,
     /// The tools the spaces installed.
@@ -393,6 +410,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn tools(&self) -> MemoryToolStore {
         MemoryToolStore::new(self)
+    }
+
+    /// The store of reactions.
+    #[must_use]
+    pub fn reactions(&self) -> MemoryReactionStore {
+        MemoryReactionStore::new(self)
     }
 
     /// Seeds a conversation with explicit sequences.
@@ -1102,6 +1125,7 @@ impl MessageStore for MemoryMessageStore {
             created_at: message.created_at.clone(),
             reply_to_message_id: message.reply_to_message_id.clone(),
             reply_quote: message.reply_quote.clone(),
+            reactions: Vec::new(),
         };
         state.messages.push(MessageRow {
             message: stored.clone(),
@@ -1880,6 +1904,149 @@ impl EffectStore for MemoryEffectStore {
         let _ = context;
         Ok(effect)
     }
+}
+
+/// The store of reactions (REQ-008).
+#[derive(Debug, Clone)]
+pub struct MemoryReactionStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryReactionStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryReactionStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl ReactionStore for MemoryReactionStore {
+    async fn react(
+        &self,
+        context: &TenantContext,
+        message_id: &MessageId,
+        user_id: &UserId,
+        emoji: &str,
+        action: ReactionAction,
+    ) -> Result<Vec<Reaction>, AppError> {
+        if !valid_emoji(emoji) {
+            return Err(AppError::Rule(DomainError::InvalidName(
+                "the emoji is not valid".to_owned(),
+            )));
+        }
+        let emoji = emoji.trim().to_owned();
+        let mut state = write(&self.state);
+        let space_id = match state.message(message_id) {
+            Some(row) if visible(context, &row.space_id) => row.space_id.clone(),
+            _ => return Err(AppError::NotFound),
+        };
+        match action {
+            ReactionAction::Add => {
+                if !state.reactions.iter().any(|row| {
+                    row.message_id == *message_id && row.user_id == *user_id && row.emoji == emoji
+                }) {
+                    state.reactions.push(ReactionRow {
+                        emoji: emoji.clone(),
+                        user_id: user_id.clone(),
+                        message_id: message_id.clone(),
+                        space_id,
+                    });
+                }
+            }
+            ReactionAction::Remove => {
+                state.reactions.retain(|row| {
+                    !(row.message_id == *message_id
+                        && row.user_id == *user_id
+                        && row.emoji == emoji)
+                });
+            }
+        }
+        let mut counts: std::collections::BTreeMap<&str, (u32, bool)> =
+            std::collections::BTreeMap::new();
+        for row in state
+            .reactions
+            .iter()
+            .filter(|row| row.message_id == *message_id)
+        {
+            let entry = counts.entry(row.emoji.as_str()).or_insert((0, false));
+            entry.0 += 1;
+            if row.user_id == *user_id {
+                entry.1 = true;
+            }
+        }
+        Ok(counts
+            .into_iter()
+            .map(|(emoji, (count, reacted))| Reaction {
+                emoji: emoji.to_owned(),
+                count,
+                reacted,
+            })
+            .collect())
+    }
+
+    async fn list_for_messages(
+        &self,
+        context: &TenantContext,
+        message_ids: &[MessageId],
+    ) -> Result<std::collections::HashMap<MessageId, Vec<Reaction>>, AppError> {
+        if message_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let caller = context.user_id().cloned();
+        let state = read(&self.state);
+        let mut grouped: std::collections::HashMap<
+            MessageId,
+            std::collections::BTreeMap<String, (u32, bool)>,
+        > = std::collections::HashMap::new();
+        for row in state
+            .reactions
+            .iter()
+            .filter(|row| message_ids.contains(&row.message_id))
+            .filter(|row| visible(context, &row.space_id))
+        {
+            let entry = grouped
+                .entry(row.message_id.clone())
+                .or_default()
+                .entry(row.emoji.clone())
+                .or_insert((0, false));
+            entry.0 += 1;
+            if caller.as_ref().is_some_and(|id| *id == row.user_id) {
+                entry.1 = true;
+            }
+        }
+        Ok(grouped
+            .into_iter()
+            .map(|(message_id, emoji_counts)| {
+                let reactions = emoji_counts
+                    .into_iter()
+                    .map(|(emoji, (count, reacted))| Reaction {
+                        emoji,
+                        count,
+                        reacted,
+                    })
+                    .collect::<Vec<_>>();
+                (message_id, reactions)
+            })
+            .collect())
+    }
+}
+
+/// Whether the string is a plausible emoji for this product.
+fn valid_emoji(emoji: &str) -> bool {
+    let trimmed = emoji.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 16 {
+        return false;
+    }
+    trimmed.chars().all(|c| !c.is_control())
 }
 
 /// The in-memory publisher: one broadcast channel per thread.

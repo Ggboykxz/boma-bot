@@ -49,25 +49,41 @@
   delegate by itself — the agent engine does that, and it is not built yet; a scripted test drives
   `delegate_helper_run` directly and asserts the child run exists with the parent reference and
   the helper trigger. The "helper answers, parent continues" branch of REQ-019 lands with M3.
+- **REQ-008 (reactions, MUST)** is done: a member toggles one emoji on a message with one RPC
+  (`threads.react` `{ messageId, emoji, action: add|remove }`), the store keeps one row per
+  (message, person, emoji), the reply carries the full truth for the message so the client never
+  counts, and the transcript renders the chips (toggle on click, quick-picker for a new emoji).
+  Reactions survive a reload (hydrated into `page_messages` with one attributed query — one
+  `SELECT ... WHERE message_id = ANY($1)` in Postgres, one pass in memory). Proved at three levels
+  (memory → RPC surface → real Postgres) plus the web spec (`reactions.spec.ts`). Migration
+  `0009_reactions.sql` creates `message_reactions` with RLS. Mentions (REQ-008) wait on REQ-010
+  group chats; that stays documented, not faked.
 - **REQ-008 (replies and quotes, MUST)** is done for its send path: `SendMessage` carries
   `reply_to_message_id` and `reply_quote`; a reply to a message references it and carries the
   quote of its text. The wire `MessageView` exposes both fields; the composer shows a reply
   banner with the quote; the transcript renders replies as a quoted block; the composer keeps a
-  reply context with a cancel button; a Playwright test covers the click-to-reply flow. Mentions
-  (REQ-008) wait on REQ-010 group chats, reactions wait on a `message_reactions` table — both
-  are deliberately left for the next slice.
+  reply context with a cancel button; a Playwright test covers the click-to-reply flow.
 
-Remaining in M2, in dependency order: REQ-009 read state (SHOULD), reactions (REQ-008), mentions
-(REQ-008); the tool-call loop and the refusal audit event from REQ-016 are the last piece of
-REQ-016 and land with the agent engine that makes the call (milestone M3/M5); the BYOK and
-provider OAuth login legs of REQ-015 land with M8 (models and credentials); the "helper answers,
-parent continues" branch of REQ-019 lands with M3 (the agent engine).
+Remaining in M2, in dependency order: REQ-009 read state (SHOULD); mentions (REQ-008) wait on
+REQ-010 group chats (M2 scope decision, documented above); the tool-call loop and the refusal
+audit event from REQ-016 are the last piece of REQ-016 and land with the agent engine that makes
+the call (milestone M3/M5); the BYOK and provider OAuth login legs of REQ-015 land with M8
+(models and credentials); the "helper answers, parent continues" branch of REQ-019 lands with M3
+(the agent engine).
 
-The current commit carries REQ-003, REQ-006, REQ-007, REQ-008 (replies/quotes only), REQ-015,
-REQ-016, REQ-017 and REQ-019 (skeleton); M2 is not done yet.
+The current commit carries REQ-003, REQ-006, REQ-007, REQ-008 (replies/quotes and reactions),
+REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton); M2 is not done yet — REQ-009 read state is the
+next slice.
 
 ## Done
 
+- 2026-11-12 — Toolchain rebuilt from scratch after the sandbox wiped `/tmp/opencode`: rustup
+  installed Rust 1.91.1 (minimal profile + rustfmt/clippy/rust-src), `cargo-nextest` 0.9.151 from
+  source, gcc 16.2 and PostgreSQL 17.7 through nix, `/tmp/opencode/env.sh` recreated (port 5433,
+  db `boma`, trust auth). Headless Chromium's system libraries (glib, nss, nspr, atk, at-spi,
+  dbus, X11/xcb/composite/damage/ext/fixes/randr, xkbcommon, alsa, expat, gbm, udev) restored
+  through nix and referenced by `LD_LIBRARY_PATH` in `/tmp/opencode/ldpath.sh`; the Playwright
+  suite passes with `FONTCONFIG_FILE=/tmp/opencode/fonts.conf`.
 - 2026-11-12 — **M1 walking skeleton implemented and committed** (`feat(app,api,infra,bin,conformance): M1 walking skeleton`).
   - `boma-domain`: runs gained lease fields (`lease_owner`, `lease_fence`, `lease_expires_at`) and
     `holds_lease`; tenancy, ids, password validation, cursor helpers, event and message models,
