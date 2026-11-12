@@ -1,0 +1,21 @@
+[package]
+name = "boma-app"
+description = "Use cases and ports for Boma Bot: orchestration without a concrete adapter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+boma-domain = { workspace = true }

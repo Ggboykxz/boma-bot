@@ -1,0 +1,30 @@
+[package]
+name = "boma-bin"
+description = "The `boma` executable: serve, worker, migrate, admin and probe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "boma"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+boma-api = { workspace = true }
+boma-app = { workspace = true }
+boma-infra = { workspace = true }

@@ -1,0 +1,9 @@
+# Tests may unwrap, expect and panic; production code may not (enforced by [workspace.lints.clippy]).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+# Keep in step with [workspace.package].rust-version: sqlx 0.9 requires 1.94.
+msrv = "1.94"

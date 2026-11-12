@@ -1,0 +1,191 @@
+{
+  "api": {
+    "artifact-create": {
+      "status": "pending",
+      "req": "REQ-036",
+      "reason": "M6 - artifacts, versions and the content-addressed blob store are not implemented"
+    },
+    "artifact-versions": {
+      "status": "pending",
+      "req": "REQ-036",
+      "reason": "M6 - the version chain needs the artifact table and the blob store"
+    },
+    "auth-capabilities": {
+      "status": "pending",
+      "req": "REQ-040",
+      "reason": "M1 - sign-in methods are reported once the session model exists"
+    },
+    "bot-create": {
+      "status": "pending",
+      "req": "REQ-004",
+      "reason": "M1 - creating a bot and its thread in one transaction lands with the walking skeleton"
+    },
+    "bot-webhook-denied": {
+      "status": "pending",
+      "req": "REQ-050",
+      "reason": "M7 - bot webhooks and their uniform 401 arrive with the signed-ingress layer"
+    },
+    "computer-status": {
+      "status": "pending",
+      "req": "REQ-026",
+      "reason": "M4 - computers are not implemented, so the status projection has nothing to report"
+    },
+    "computer-takeover-conflict": {
+      "status": "pending",
+      "req": "REQ-029",
+      "reason": "M4 - takeover exclusivity needs the computer provider and its leases"
+    },
+    "cross-tenant-not-found": {
+      "status": "pending",
+      "req": "REQ-043",
+      "reason": "M1 - tenancy is enforced by RLS and the typed tenant context, both in M1"
+    },
+    "export-start": {
+      "status": "pending",
+      "req": "REQ-044",
+      "reason": "M9 - there is no account data to export before the domain tables exist"
+    },
+    "group-create": {
+      "status": "pending",
+      "req": "REQ-010",
+      "reason": "M2 - group chats and the shared thread arrive with the run and tool milestone"
+    },
+    "health": {
+      "status": "implemented",
+      "req": "REQ-053",
+      "reason": null
+    },
+    "memory-write": {
+      "status": "pending",
+      "req": "REQ-022",
+      "reason": "M3 - memory revisions are not implemented"
+    },
+    "models-catalog": {
+      "status": "pending",
+      "req": "REQ-052",
+      "reason": "M8 - the model catalogue and BYOK credentials arrive with money and models"
+    },
+    "plugin-submission": {
+      "status": "pending",
+      "req": "REQ-034",
+      "reason": "M5 - plugin submissions belong to the integrations milestone"
+    },
+    "plugin-submission-invalid": {
+      "status": "pending",
+      "req": "REQ-034",
+      "reason": "M5 - the submission parser and its validation are not implemented"
+    },
+    "ready": {
+      "status": "implemented",
+      "req": "REQ-053",
+      "reason": null
+    },
+    "routine-create": {
+      "status": "pending",
+      "req": "REQ-023",
+      "reason": "M3 - schedules and nextRunAt computation are not implemented"
+    },
+    "routine-once": {
+      "status": "pending",
+      "req": "REQ-023",
+      "reason": "M3 - the @once trigger needs the routine table and the dispatcher"
+    },
+    "run-list": {
+      "status": "pending",
+      "req": "REQ-011",
+      "reason": "M1 - the activity projection needs runs in the database"
+    },
+    "run-retry": {
+      "status": "pending",
+      "req": "REQ-012",
+      "reason": "M2 - retry is implemented once leases and fence tokens exist"
+    },
+    "send-message": {
+      "status": "pending",
+      "req": "REQ-001",
+      "reason": "M1 - the RPC dispatcher and the send-message use case are the walking skeleton"
+    },
+    "send-message-replay": {
+      "status": "pending",
+      "req": "REQ-002",
+      "reason": "M1 - idempotency waits for the send-message use case it replays"
+    },
+    "shared-page": {
+      "status": "pending",
+      "req": "REQ-037",
+      "reason": "M6 - token-shared pages are not implemented"
+    },
+    "shared-page-invalid": {
+      "status": "pending",
+      "req": "REQ-037",
+      "reason": "M6 - the uniform not-found answer needs the shared-page lookup"
+    },
+    "space-create": {
+      "status": "pending",
+      "req": "REQ-042",
+      "reason": "M1 - spaces, memberships and invitations are the walking skeleton"
+    },
+    "space-invite": {
+      "status": "pending",
+      "req": "REQ-042",
+      "reason": "M1 - invitations land with the membership model"
+    },
+    "thread-answer": {
+      "status": "pending",
+      "req": "REQ-017",
+      "reason": "M2 - answering resumes a run that is waiting on an approval"
+    },
+    "thread-messages": {
+      "status": "pending",
+      "req": "REQ-005",
+      "reason": "M1 - the ordered message page needs the thread tables"
+    },
+    "thread-subscribe": {
+      "status": "pending",
+      "req": "REQ-020",
+      "reason": "M1 - the SSE stream lands with the walking skeleton"
+    },
+    "unauthorized": {
+      "status": "pending",
+      "req": "REQ-040",
+      "reason": "M1 - the envelope exists and is tested, but this fixture replays /rpc/threads/send"
+    }
+  },
+  "ui": {
+    "REQ-001-send-message": {
+      "status": "pending",
+      "req": "REQ-001",
+      "reason": "M1 - the app shell exists, the thread screen arrives with the walking skeleton"
+    },
+    "REQ-007-pending-card": {
+      "status": "pending",
+      "req": "REQ-007",
+      "reason": "M2 - approval and question cards are part of the runs and tools milestone"
+    },
+    "REQ-009-unread-divider": {
+      "status": "pending",
+      "req": "REQ-009",
+      "reason": "M2 - read state and the unread divider need the thread with live updates"
+    },
+    "REQ-012-run-statuses": {
+      "status": "pending",
+      "req": "REQ-012",
+      "reason": "M1 - the eight status roles render once runs exist and the thread is on screen"
+    },
+    "REQ-026-computer-panel": {
+      "status": "pending",
+      "req": "REQ-026",
+      "reason": "M4 - the computer panel lands with the computer milestone"
+    },
+    "REQ-037-shared-page": {
+      "status": "pending",
+      "req": "REQ-037",
+      "reason": "M6 - shared pages have no screen before the sharing milestone"
+    },
+    "REQ-037-shared-page-invalid": {
+      "status": "pending",
+      "req": "REQ-037",
+      "reason": "M6 - the invalid-token screen arrives with the shared page"
+    }
+  }
+}

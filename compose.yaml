@@ -1,0 +1,72 @@
+name: boma
+
+# Everything a self-hoster needs: one database, one migration step, one server (ADR-018).
+# The API is published on loopback only; putting it on a network is a deliberate edit.
+
+x-app-environment: &app-environment
+  BOMA_DATABASE_URL: postgres://boma:${POSTGRES_PASSWORD:-boma}@db:5432/boma
+  BOMA_BIND_ADDR: 0.0.0.0:3000
+  BOMA_LOG_FORMAT: json
+  BOMA_LOG_FILTER: ${BOMA_LOG_FILTER:-info}
+  BOMA_VERSION: ${BOMA_VERSION:-0.1.0}
+  BOMA_REVISION: ${BOMA_REVISION:-}
+  BOMA_RUNTIME: sandboxed
+  BOMA_SANDBOX: docker
+  BOMA_JOBS: postgres
+  BOMA_REALTIME: postgres
+  BOMA_DEGRADED: ${BOMA_DEGRADED:-false}
+
+services:
+  db:
+    image: postgres:17.11-alpine
+    # A statement timeout at the server closes the gap a client-side timeout cannot: a query that
+    # outlives the readiness deadline is killed by Postgres too (REQ-053).
+    command:
+      - postgres
+      - -c
+      - statement_timeout=5000
+      - -c
+      - idle_in_transaction_session_timeout=30000
+    environment:
+      POSTGRES_USER: boma
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-boma}
+      POSTGRES_DB: boma
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=boma --dbname=boma"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build: .
+    command: ["serve"]
+    environment: *app-environment
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/boma", "probe", "--addr", "127.0.0.1:3000", "--path", "/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  db-data:

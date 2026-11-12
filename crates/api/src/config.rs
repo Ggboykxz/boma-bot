@@ -1,0 +1,218 @@
+//! HTTP settings, validated once at startup.
+
+use std::{
+    fmt,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
+
+/// An HTTP setting that cannot be used.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HttpConfigError {
+    /// A timeout was zero, which would disable the protection it exists for.
+    #[error("`{name}` must be greater than zero")]
+    ZeroDuration {
+        /// Name of the setting, as it appears in the environment.
+        name: &'static str,
+    },
+    /// The request body limit is outside the range the server accepts.
+    #[error("`BOMA_MAX_BODY_BYTES` must be between {min} and {max}, got {value}")]
+    BodyLimitOutOfRange {
+        /// Value the operator supplied.
+        value: usize,
+        /// Smallest accepted value.
+        min: usize,
+        /// Largest accepted value.
+        max: usize,
+    },
+    /// The readiness deadline is longer than the whole request deadline.
+    #[error("the readiness timeout must not exceed the request timeout")]
+    ReadinessTimeoutTooLong,
+}
+
+/// How the HTTP server behaves.
+///
+/// Every value has a bound on purpose: an unbounded body is a memory exhaustion, and an unbounded
+/// request is a stuck task (AGENTS.md "Rust standards", REQ-053).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpConfig {
+    bind: SocketAddr,
+    request_timeout: Duration,
+    readiness_timeout: Duration,
+    body_limit_bytes: usize,
+    trusted_proxies: Vec<IpAddr>,
+}
+
+impl HttpConfig {
+    /// Smallest accepted request body limit: 4 KiB.
+    pub const MIN_BODY_BYTES: usize = 4 * 1024;
+    /// Largest accepted request body limit: 1 MiB, raised per route by an explicit decision.
+    pub const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+    /// Validates the parts and builds the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpConfigError::ZeroDuration`] for a zero timeout,
+    /// [`HttpConfigError::BodyLimitOutOfRange`] for a body limit outside
+    /// `4 KiB..=1 MiB`, and [`HttpConfigError::ReadinessTimeoutTooLong`] when the readiness
+    /// deadline outlives the request deadline.
+    pub fn new(
+        bind: SocketAddr,
+        request_timeout: Duration,
+        readiness_timeout: Duration,
+        body_limit_bytes: usize,
+        trusted_proxies: Vec<IpAddr>,
+    ) -> Result<Self, HttpConfigError> {
+        if request_timeout.is_zero() {
+            return Err(HttpConfigError::ZeroDuration {
+                name: "BOMA_REQUEST_TIMEOUT_MS",
+            });
+        }
+        if readiness_timeout.is_zero() {
+            return Err(HttpConfigError::ZeroDuration {
+                name: "BOMA_READINESS_TIMEOUT_MS",
+            });
+        }
+        if readiness_timeout > request_timeout {
+            return Err(HttpConfigError::ReadinessTimeoutTooLong);
+        }
+        if !(Self::MIN_BODY_BYTES..=Self::MAX_BODY_BYTES).contains(&body_limit_bytes) {
+            return Err(HttpConfigError::BodyLimitOutOfRange {
+                value: body_limit_bytes,
+                min: Self::MIN_BODY_BYTES,
+                max: Self::MAX_BODY_BYTES,
+            });
+        }
+        Ok(Self {
+            bind,
+            request_timeout,
+            readiness_timeout,
+            body_limit_bytes,
+            trusted_proxies,
+        })
+    }
+
+    /// Address the listener binds to; loopback by default.
+    #[must_use]
+    pub const fn bind(&self) -> SocketAddr {
+        self.bind
+    }
+
+    /// Deadline for one request.
+    #[must_use]
+    pub const fn request_timeout(&self) -> Duration {
+        self.request_timeout
+    }
+
+    /// Deadline for the whole readiness pass.
+    #[must_use]
+    pub const fn readiness_timeout(&self) -> Duration {
+        self.readiness_timeout
+    }
+
+    /// Maximum request body size, in bytes.
+    #[must_use]
+    pub const fn body_limit_bytes(&self) -> usize {
+        self.body_limit_bytes
+    }
+
+    /// Peers whose forwarded headers are trusted. Empty means nothing is trusted, so a spoofed
+    /// `x-forwarded-for` cannot change the client address (D-04).
+    #[must_use]
+    pub fn trusted_proxies(&self) -> &[IpAddr] {
+        &self.trusted_proxies
+    }
+}
+
+impl fmt::Display for HttpConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "bind={} request_timeout={:?} readiness_timeout={:?} body_limit={}B trusted_proxies={}",
+            self.bind,
+            self.request_timeout,
+            self.readiness_timeout,
+            self.body_limit_bytes,
+            self.trusted_proxies.len()
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        time::Duration,
+    };
+
+    use super::{HttpConfig, HttpConfigError};
+
+    fn loopback() -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 3000))
+    }
+
+    #[test]
+    fn req_053_http_config_rejects_a_zero_timeout() {
+        let outcome = HttpConfig::new(
+            loopback(),
+            Duration::ZERO,
+            Duration::ZERO,
+            8192,
+            Vec::new(),
+        );
+        assert!(matches!(outcome, Err(HttpConfigError::ZeroDuration { .. })));
+    }
+
+    #[test]
+    fn req_053_http_config_bounds_the_body_limit() {
+        for limit in [0, HttpConfig::MAX_BODY_BYTES + 1] {
+            let outcome = HttpConfig::new(
+                loopback(),
+                Duration::from_secs(30),
+                Duration::from_secs(5),
+                limit,
+                Vec::new(),
+            );
+            assert!(matches!(
+                outcome,
+                Err(HttpConfigError::BodyLimitOutOfRange { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn req_053_http_config_refuses_a_readiness_deadline_longer_than_the_request() {
+        let outcome = HttpConfig::new(
+            loopback(),
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+            8192,
+            Vec::new(),
+        );
+        assert_eq!(outcome, Err(HttpConfigError::ReadinessTimeoutTooLong));
+    }
+
+    #[test]
+    fn req_053_http_config_defaults_to_trusting_no_proxy() {
+        let config = HttpConfig::new(
+            loopback(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            8192,
+            Vec::new(),
+        )
+        .expect("the fixture is valid");
+        assert!(config.trusted_proxies().is_empty());
+        assert_eq!(config.bind(), loopback());
+        let config = HttpConfig::new(
+            loopback(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            8192,
+            vec![IpAddr::from(Ipv4Addr::new(10, 0, 0, 2))],
+        )
+        .expect("the fixture is valid");
+        assert_eq!(config.trusted_proxies().len(), 1);
+    }
+}

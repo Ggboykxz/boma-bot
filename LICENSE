@@ -1,0 +1,19 @@
+TO BE CHOSEN BY THE OWNER
+
+This file is a placeholder, on purpose.
+
+No licence has been chosen for Boma Bot yet. Until the owner writes one here, the default is
+"all rights reserved": the code may be read and run locally, but it may not be redistributed and
+contributions cannot be accepted. Choose before the repository is published, and before the first
+external contribution is merged.
+
+Checklist for the owner:
+
+1. Pick a licence (or a dual licence) and paste its canonical text below this notice.
+2. Keep `license-file = "LICENSE"` in `Cargo.toml`, and re-run `cargo deny check` so the
+   dependency allow-list in `deny.toml` matches the chosen terms.
+3. Record the choice in `docs/STATE.md` and in `docs/DEPENDENCIES.md` (the "project licence" row).
+4. BoardUI: the free components are usable, but confirm the terms before publishing if a Pro
+   component or template ever lands in the tree (`docs/DEPENDENCIES.md`).
+5. Assets: nothing visual was taken from the analysed product. If that changes, record its origin
+   and licence in `docs/UI.md` first.

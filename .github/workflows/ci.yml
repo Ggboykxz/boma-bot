@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: rust (fmt, clippy, test, coverage, deny, trace)
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_USER: boma
+          POSTGRES_PASSWORD: boma
+          POSTGRES_DB: boma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=boma --dbname=boma"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      BOMA_DATABASE_URL: postgres://boma:boma@127.0.0.1:5432/boma
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads rust-toolchain.toml, so CI and a developer machine use the same compiler.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-deny,cargo-machete,cargo-llvm-cov
+
+      # `--locked` everywhere: Cargo.lock is committed (AGENTS.md). A missing lock is a hard
+      # failure on purpose, never a silent resolve. docs/STATE.md records that M0 cannot produce it.
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: test
+        run: cargo nextest run --workspace --all-features --locked
+
+      - name: coverage
+        run: cargo llvm-cov --workspace --all-features --locked --summary-only --fail-under-lines 80
+
+      - name: deny
+        run: cargo deny check
+
+      - name: unused dependencies
+        run: cargo machete --with-metadata
+
+      - name: traceability
+        # Ratchet: the budget only decreases, milestone by milestone (docs/STATE.md).
+        run: python3 tools/trace_check.py spec . --max-missing 50
+
+      - name: secret scan
+        run: python3 tools/secret_scan.py .
+
+  web:
+    name: web (build, typecheck, lint, playwright, golden, axe)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - run: npm ci
+      # Build first: `next build` writes `next-env.d.ts` and `.next/types`, which `tsc --noEmit`
+      # needs for CSS-module and route types on a fresh checkout.
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+
+      - run: npx playwright install --with-deps chromium
+      # Runs the shell suite, the golden replay and axe together.
+      - run: npm run test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7

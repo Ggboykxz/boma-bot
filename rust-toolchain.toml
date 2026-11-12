@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned, not floating: the Docker builder image names the same version, so CI and
+# a developer machine compile with one toolchain. sqlx 0.9 requires 1.94 or newer.
+channel = "1.99.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+profile = "minimal"

@@ -34,6 +34,24 @@ Nouvelle session : `/resume` relit docs/STATE.md et continue.
 | /ui-verify | Vérifie l'UI reconstruite avec Playwright MCP + tests Playwright + axe |
 | /ui-parity | Compare l'UI reconstruite et l'originale écran par écran (docs/UI-PARITY.md) |
 
+## Démarrage rapide (état M0)
+M0 est écrit mais **pas encore compilé** : aucune toolchain Rust, Docker ou base de données n'était disponible pendant le scaffold. Les commandes ci-dessous sont celles que la CI exécute ; tant qu'elles n'ont pas tourné sur une machine outillée, considère le squelette comme non vérifié (docs/STATE.md).
+
+Prérequis : `rustup` (le fichier `rust-toolchain.toml` épingle 1.99.1 ; la MSRV est 1.94, imposée par sqlx 0.9), PostgreSQL 17, Node 22 pour l'UI seulement.
+
+1. Générer les verrous une fois, puis les committer :
+   `make deps-lock` puis `git add Cargo.lock apps/web/package-lock.json`.
+   Sans eux, `cargo build --locked` et `npm ci` échouent volontairement bruyamment.
+2. API en local :
+   `cp .env.example .env`, `cargo run --bin boma -- migrate`, `cargo run --bin boma -- serve`,
+   puis `curl 127.0.0.1:3000/health` et `curl 127.0.0.1:3000/ready`.
+3. UI en local (serveur de dev sur 127.0.0.1:3100) :
+   `npm --prefix apps/web install` puis `npm --prefix apps/web run dev`.
+4. Portes qualité : `make check` (fmt, clippy, tests, trace, secrets) et `make ui-test` (Playwright, goldens UI, axe).
+5. Docker : `docker compose up --build` ; le service `migrate` applique les migrations avant que `app` ne serve.
+
+`/healthz` et `/readyz` existent comme alias exigés par AGENTS.md ; le contrat de la spec reste `/health` et `/ready`. L'écart est assumé et documenté dans docs/STATE.md.
+
 ## UI/UX : BoardUI, Playwright, accessibilité
 BoardUI fournit les composants, les tokens sémantiques, les règles de design et un skill. `boardui_get_started` confirme le framework (Tailwind v4 / shadcn) avant de s'engager. La clé Pro se colle dans la conversation, jamais dans un fichier ni un commit.
 Deux directions valides : parité visuelle fidèle (palette, typo, espacements, wording, assets — si la licence le permet) ou design original qui répond au même comportement. Le choix est un ADR ; les captures de `../re-workspace/notes/ui/` servent de références.

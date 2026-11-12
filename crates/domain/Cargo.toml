@@ -1,0 +1,15 @@
+[package]
+name = "boma-domain"
+description = "Pure business rules for Boma Bot: no IO, no async, no clock."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

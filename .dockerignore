@@ -1,0 +1,13 @@
+.git
+.gitignore
+.github
+target
+apps/web/node_modules
+apps/web/.next
+apps/web/out
+apps/web/test-results
+apps/web/playwright-report
+spec
+docs
+re-workspace
+**/*.md
