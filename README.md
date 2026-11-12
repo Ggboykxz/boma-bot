@@ -12,7 +12,7 @@ Dans `re-workspace` : finis l'analyse (étapes 2 à 5), lance `/ui-probe` si l'i
 Relis `re-workspace/notes/spec/`, surtout 05-known-defects.md, 06-decisions-needed.md, 08-ui-ux.md, golden/ et les captures de notes/ui/.
 Ici : `./tools/export-spec.sh ../re-workspace` (ajoute `--review` pour relire avant de copier). Aucune porte bloquante : les fichiers manquants, le scan de secrets et les exemples golden sont des avertissements. spec/EXPORT.md garde la provenance (horodatage UTC, sha256, compteurs) ; l'ancien import part dans `spec.bak-<horodatage>`.
 Une seule fois : `git config user.name "..."` et `git config user.email "..."` dans ce dossier.
-Lance `./tools/sandbox.sh` (optionnel : Rust, Playwright et les outils qualité préinstallés) ou `opencode` sur ta machine après `./tools/install-rust-tools.sh`. Puis `/connect` et `/models`.
+Lance `./tools/sandbox.sh` (optionnel : Rust, Playwright et les outils qualité préinstallés) ou `opencode` sur ta machine après `./tools/install-rust-tools.sh`. Le provider **Coarena** (API Model gratuite) est déjà branché : pas de `/connect`, `/models` sert à vérifier les 18 modèles disponibles, défaut `coarena/claude-opus-5-5`.
 `/plan` : l'agent décide la stack, écrit les ADR et le plan, puis s'arrête. Réponds aux décisions, pose tes vetos, écris « go ».
 `/scaffold`, puis `/implement M1`, `/implement M2`... Après chaque jalon : `/parity`. Ensuite `/improve`, `/audit`, corrige, puis `/release 0.1.0`.
 Si la spec a une UI : `/ui-kit` une fois, `/ui-verify` par écran, et `/ui-parity` pour comparer avec l'original.
