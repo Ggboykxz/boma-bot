@@ -184,6 +184,64 @@ impl From<&boma_app::usecases::ThreadHead> for ThreadHeadReply {
     }
 }
 
+/// One bot of the roster, as the rail renders it (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterBotView {
+    /// The bot's id.
+    pub id: String,
+    /// Its name.
+    pub name: String,
+    /// The conversation of this bot.
+    pub thread_id: String,
+    /// When it was archived, if it was.
+    pub archived_at: Option<String>,
+    /// When the caller's snooze ends, when it is still in the future.
+    pub snoozed_until: Option<String>,
+    /// How many visible messages the caller has not read yet.
+    pub unread_count: u64,
+}
+
+impl From<&boma_app::ports::BotSummary> for RosterBotView {
+    fn from(summary: &boma_app::ports::BotSummary) -> Self {
+        Self {
+            id: summary.bot.id.as_str().to_owned(),
+            name: summary.bot.name.clone(),
+            thread_id: summary.thread_id.as_str().to_owned(),
+            archived_at: summary.bot.archived_at.clone(),
+            snoozed_until: summary.snoozed_until.clone(),
+            unread_count: summary.unread_count,
+        }
+    }
+}
+
+/// The reply of `bots.list` (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotsListReply {
+    /// The bots of the caller's space, oldest first.
+    pub bots: Vec<RosterBotView>,
+}
+
+/// The reply of `threads.snooze` and `threads.unsnooze` (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnoozeReply {
+    /// The thread that was (or was not) snoozed.
+    pub thread_id: String,
+    /// The deadline stored, or `None` when the snooze was cleared.
+    pub snoozed_until: Option<String>,
+}
+
+impl From<&boma_app::usecases::SnoozeOutcome> for SnoozeReply {
+    fn from(outcome: &boma_app::usecases::SnoozeOutcome) -> Self {
+        Self {
+            thread_id: outcome.thread_id.clone(),
+            snoozed_until: outcome.snoozed_until.clone(),
+        }
+    }
+}
+
 /// The reply of `threads.messages`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

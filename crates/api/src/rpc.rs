@@ -23,8 +23,9 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AnswerReply, BotReply, CancelReply, InvitationReply, MessagesReply, ReactReply, RunView,
-        RunsReply, SendReply, SpaceReply, ThreadHeadReply,
+        AnswerReply, BotReply, BotsListReply, CancelReply, InvitationReply, MessagesReply,
+        ReactReply, RosterBotView, RunView, RunsReply, SendReply, SnoozeReply, SpaceReply,
+        ThreadHeadReply,
     },
 };
 
@@ -54,8 +55,11 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::THREADS, "head"),
         (namespaces::THREADS, "markRead"),
         (namespaces::THREADS, "markUnread"),
+        (namespaces::THREADS, "snooze"),
+        (namespaces::THREADS, "unsnooze"),
         (namespaces::BOTS, "create"),
         (namespaces::BOTS, "get"),
+        (namespaces::BOTS, "list"),
         (namespaces::SPACES, "create"),
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
@@ -106,10 +110,19 @@ async fn dispatch(
         (namespaces::THREADS, "markUnread") => threads_mark_unread(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
+        (namespaces::THREADS, "snooze") => threads_snooze(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::THREADS, "unsnooze") => threads_unsnooze(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "create") => bots_create(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "get") => bots_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "list") => bots_list(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::SPACES, "create") => spaces_create(state, auth, body)
@@ -406,6 +419,72 @@ async fn threads_mark_unread(
     let request: ThreadHeadRequest = parse(&body)?;
     let head = usecases::mark_unread(state.app(), &auth.actor.context, &request.thread_id).await?;
     Ok(ThreadHeadReply::from(&head))
+}
+
+/// The body of `bots.list` (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotsListRequest {}
+
+/// `bots.list` — the roster the rail renders from, with per-member unread and snooze (REQ-009).
+async fn bots_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<BotsListReply, ApiError> {
+    let _: BotsListRequest = parse(&body)?;
+    let bots = usecases::list_bots(state.app(), &auth.actor.context).await?;
+    Ok(BotsListReply {
+        bots: bots.iter().map(RosterBotView::from).collect(),
+    })
+}
+
+/// The body of `threads.snooze` (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThreadSnoozeRequest {
+    /// The thread to snooze.
+    thread_id: String,
+    /// Until when; absent leaves the chat snoozed until it is explicitly unsnoozed.
+    #[serde(default)]
+    until: Option<String>,
+}
+
+/// The body of `threads.unsnooze` (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThreadUnsnoozeRequest {
+    /// The thread to unsnooze.
+    thread_id: String,
+}
+
+/// `threads.snooze` — hide the chat from the regular list until `until` (REQ-009).
+async fn threads_snooze(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SnoozeReply, ApiError> {
+    let request: ThreadSnoozeRequest = parse(&body)?;
+    let outcome = usecases::snooze_thread(
+        state.app(),
+        &auth.actor.context,
+        &request.thread_id,
+        request.until.as_deref(),
+    )
+    .await?;
+    Ok(SnoozeReply::from(&outcome))
+}
+
+/// `threads.unsnooze` — bring the snoozed chat back to the regular list (REQ-009).
+async fn threads_unsnooze(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SnoozeReply, ApiError> {
+    let request: ThreadUnsnoozeRequest = parse(&body)?;
+    let outcome =
+        usecases::snooze_thread(state.app(), &auth.actor.context, &request.thread_id, None).await?;
+    Ok(SnoozeReply::from(&outcome))
 }
 
 /// The body of `threads.react`.

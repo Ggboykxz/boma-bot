@@ -778,6 +778,49 @@ pub trait ReadStateStore: Send + Sync {
     ) -> Result<i64, AppError>;
 }
 
+/// One bot of the caller's space, with the member-specific state the rail shows (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotSummary {
+    /// The bot.
+    pub bot: Bot,
+    /// The conversation of this bot.
+    pub thread_id: boma_domain::ThreadId,
+    /// When the caller's snooze ends, when (and only when) it is in the future.
+    pub snoozed_until: Option<String>,
+    /// How many visible messages the caller has not read yet.
+    pub unread_count: u64,
+}
+
+/// The roster the rail renders from (REQ-009).
+#[async_trait]
+pub trait RosterStore: Send + Sync {
+    /// The bots of the caller's space, with per-member unread and snooze state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer, or when the caller is not a member
+    /// (a system context has no rail to render).
+    async fn list_bots(
+        &self,
+        context: &boma_domain::TenantContext,
+    ) -> Result<Vec<BotSummary>, AppError>;
+
+    /// Snoozes the thread for the caller until `until` (RFC3339); `None` clears the snooze.
+    ///
+    /// Returns the deadline stored, or `None` when the snooze was cleared.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::NotFound`] when the thread does not exist in the caller's tenant,
+    /// and [`AppError::Rule`] when `until` is refused.
+    async fn set_snooze(
+        &self,
+        context: &boma_domain::TenantContext,
+        thread_id: &boma_domain::ThreadId,
+        until: Option<&str>,
+    ) -> Result<Option<String>, AppError>;
+}
+
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).
 #[async_trait]
 pub trait ToolStore: Send + Sync {

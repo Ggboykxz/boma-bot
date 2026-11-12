@@ -44,13 +44,18 @@ impl ReactionStore for PostgresReactionStore {
         }
         let message_id_key = message_id.as_str().to_owned();
         let user_id_key = user_id.as_str().to_owned();
+        let space_id_key = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let space_id_key = space_id_key.as_str().to_owned();
         let emoji = emoji.trim().to_owned();
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
                 // The message must exist inside this tenant. RLS hides other tenants' rows, so a
                 // miss is simply "no such message for this caller".
-                let exists = sqlx::query("SELECT 1 FROM messages WHERE id = $1")
+                // The space predicate is the defense in fact; the row level security
+                // policy is defense in depth and does not apply to a superuser.
+                let exists = sqlx::query("SELECT 1 FROM messages WHERE id = $1 AND space_id = $2")
                     .bind(&message_id_key)
+                    .bind(&space_id_key)
                     .fetch_optional(&mut *conn)
                     .await
                     .map_err(tenant::unavailable)?;
@@ -66,12 +71,13 @@ impl ReactionStore for PostgresReactionStore {
                             "INSERT INTO message_reactions (thread_id, message_id, space_id, user_id, emoji, created_at)
                              SELECT thread_id, id, space_id, $1, $2, now()
                              FROM messages
-                             WHERE id = $3
+                             WHERE id = $3 AND space_id = $4
                              ON CONFLICT (message_id, user_id, emoji) DO NOTHING",
                         )
                         .bind(&user_id_key)
                         .bind(&emoji)
                         .bind(&message_id_key)
+                        .bind(&space_id_key)
                         .execute(&mut *conn)
                         .await
                         .map_err(tenant::unavailable)?;
@@ -129,6 +135,8 @@ impl ReactionStore for PostgresReactionStore {
             return Ok(std::collections::HashMap::new());
         }
         let caller = context.user_id().map(|id| id.as_str().to_owned());
+        let space_id_key = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let space_id_key = space_id_key.as_str().to_owned();
         let keys: Vec<String> = message_ids
             .iter()
             .map(|id| id.as_str().to_owned())
@@ -138,9 +146,10 @@ impl ReactionStore for PostgresReactionStore {
                 // One pass: the reactions of a page never outgrow a page-full of rows.
                 let rows = sqlx::query_as::<_, ReactionAttributionRow>(
                     "SELECT message_id, emoji, user_id FROM message_reactions
-                     WHERE message_id = ANY($1)",
+                     WHERE message_id = ANY($1) AND space_id = $2",
                 )
                 .bind(&keys)
+                .bind(&space_id_key)
                 .fetch_all(&mut *conn)
                 .await
                 .map_err(tenant::unavailable)?;

@@ -39,8 +39,9 @@ pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
     MemoryAccountStore, MemoryBotStore, MemoryCardStore, MemoryDatabase, MemoryEffectStore,
     MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore, MemoryMessageStore,
-    MemoryReactionStore, MemoryReadStateStore, MemoryRunStore, MemorySessionStore,
-    MemorySpaceStore, MemoryThreadStore, MemoryToolStore, MemoryUserStore, Organization,
+    MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore, MemoryRunStore,
+    MemorySessionStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore, MemoryUserStore,
+    Organization,
 };
 pub use scripts::{FixedHasher, ScriptedClock, ScriptedIds, ScriptedProvider, ScriptedTokens};
 

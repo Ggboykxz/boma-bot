@@ -32,8 +32,8 @@ use boma_app::{
         Account, AccountStore, ActivityPage, BotStore, CardStore, Clock, EffectStore,
         EventPublisher, EventStore, Invitation, InvitationStore, MessageStore, NewAccount, NewBot,
         NewEffect, NewEvent, NewInvitation, NewMessage, NewRun, NewSession, NewSpace, NewThread,
-        ReactionAction, ReactionStore, ReadStateStore, RunActivity, RunStore, SessionStore,
-        SpaceStore, StoredMessage, ThreadStore, ToolStore, UserStore,
+        ReactionAction, ReactionStore, ReadStateStore, RosterStore, RunActivity, RunStore,
+        SessionStore, SpaceStore, StoredMessage, ThreadStore, ToolStore, UserStore,
     },
 };
 use boma_domain::DomainError;
@@ -160,6 +160,19 @@ struct ReadStateRow {
     last_seq: i64,
 }
 
+/// A conversation a member snoozed (REQ-009).
+#[derive(Debug, Clone)]
+struct SnoozeRow {
+    /// The conversation.
+    thread_id: ThreadId,
+    /// The tenant it belongs to.
+    space_id: SpaceId,
+    /// The member who snoozed it.
+    user_id: UserId,
+    /// Until when the snooze lasts (RFC3339).
+    snoozed_until: String,
+}
+
 /// A run.
 #[derive(Debug, Clone)]
 struct RunRow {
@@ -258,6 +271,8 @@ struct State {
     reactions: Vec<ReactionRow>,
     /// The read position of each person, per conversation.
     read_states: Vec<ReadStateRow>,
+    /// The snoozes of each person, per conversation.
+    snoozes: Vec<SnoozeRow>,
     /// The effects runs perform.
     effects: Vec<EffectRow>,
     /// The tools the spaces installed.
@@ -437,6 +452,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn read_states(&self) -> MemoryReadStateStore {
         MemoryReadStateStore::new(self)
+    }
+
+    /// The roster the rail renders from.
+    #[must_use]
+    pub fn roster(&self) -> MemoryRosterStore {
+        MemoryRosterStore::new(self)
     }
 
     /// Seeds a conversation with explicit sequences.
@@ -2165,6 +2186,137 @@ impl ReadStateStore for MemoryReadStateStore {
             }),
         }
         Ok(last_seq)
+    }
+}
+
+/// The roster the rail renders from (REQ-009).
+#[derive(Debug, Clone)]
+pub struct MemoryRosterStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryRosterStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryRosterStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl RosterStore for MemoryRosterStore {
+    async fn list_bots(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::BotSummary>, AppError> {
+        let Some(user_id) = context.user_id().cloned() else {
+            return Err(AppError::NotFound);
+        };
+        let now = time::OffsetDateTime::now_utc();
+        let state = read(&self.state);
+        let mut summaries: Vec<boma_app::ports::BotSummary> = Vec::new();
+        for pair in state
+            .bots
+            .iter()
+            .filter(|row| visible(context, &row.bot.space_id))
+        {
+            let bot = pair.bot.clone();
+            let Some(thread) = state.threads.iter().find(|row| row.thread.bot_id == bot.id) else {
+                continue;
+            };
+            let thread_id = thread.thread.id.clone();
+            let snoozed_until = state
+                .snoozes
+                .iter()
+                .find(|row| row.thread_id == thread_id && row.user_id == user_id)
+                .filter(|row| visible(context, &row.space_id))
+                .filter(|row| {
+                    time::OffsetDateTime::parse(
+                        &row.snoozed_until,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .is_ok_and(|until| until > now)
+                })
+                .map(|row| row.snoozed_until.clone());
+            let read_seq = state
+                .read_states
+                .iter()
+                .find(|row| row.thread_id == thread_id && row.user_id == user_id)
+                .map_or(0, |row| row.last_seq);
+            let unread_count = state
+                .messages
+                .iter()
+                .filter(|row| {
+                    row.message.thread_id == thread_id
+                        && visible(context, &row.space_id)
+                        && row.message.role != boma_domain::MessageRole::Tool
+                        && row.message.seq > read_seq
+                })
+                .count();
+            summaries.push(boma_app::ports::BotSummary {
+                bot,
+                thread_id,
+                snoozed_until,
+                unread_count: u64::try_from(unread_count).unwrap_or(u64::MAX),
+            });
+        }
+        summaries.sort_by(|left, right| {
+            left.bot
+                .created_at
+                .cmp(&right.bot.created_at)
+                .then(left.bot.id.as_str().cmp(right.bot.id.as_str()))
+        });
+        Ok(summaries)
+    }
+
+    async fn set_snooze(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+        until: Option<&str>,
+    ) -> Result<Option<String>, AppError> {
+        let Some(user_id) = context.user_id().cloned() else {
+            return Err(AppError::NotFound);
+        };
+        let Some(space_id) = context.space_id().cloned() else {
+            return Err(AppError::NotFound);
+        };
+        let mut state = write(&self.state);
+        match state.thread(thread_id) {
+            Some(row) if visible(context, &row.thread.space_id) => {}
+            _ => return Err(AppError::NotFound),
+        }
+        if let Some(until) = until {
+            time::OffsetDateTime::parse(until, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| {
+                    AppError::Rule(boma_domain::DomainError::InvalidName(
+                        "until must be an RFC3339 instant".to_owned(),
+                    ))
+                })?;
+        }
+        state
+            .snoozes
+            .retain(|row| !(row.thread_id == *thread_id && row.user_id == user_id));
+        match until {
+            Some(until) => {
+                state.snoozes.push(SnoozeRow {
+                    thread_id: thread_id.clone(),
+                    space_id,
+                    user_id,
+                    snoozed_until: until.to_owned(),
+                });
+                Ok(Some(until.to_owned()))
+            }
+            None => Ok(None),
+        }
     }
 }
 

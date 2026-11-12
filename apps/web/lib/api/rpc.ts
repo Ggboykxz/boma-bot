@@ -81,6 +81,27 @@ export interface ThreadHeadReply {
   unreadCount: number;
 }
 
+/** One bot of the roster, as the rail renders it (REQ-009). */
+export interface RosterBotView {
+  id: string;
+  name: string;
+  threadId: string;
+  archivedAt: string | null;
+  snoozedUntil: string | null;
+  unreadCount: number;
+}
+
+/** The reply of `bots.list` (REQ-009). */
+export interface BotsListReply {
+  bots: RosterBotView[];
+}
+
+/** The reply of `threads.snooze` and `threads.unsnooze` (REQ-009). */
+export interface SnoozeReply {
+  threadId: string;
+  snoozedUntil: string | null;
+}
+
 /** The reply of `threads.react` (REQ-008). The truth for the message after the change. */
 export interface ReactReply {
   messageId: string;
@@ -380,6 +401,27 @@ export function threadsMarkUnread(
   signal?: AbortSignal,
 ): Promise<ThreadHeadReply> {
   return call<ThreadHeadReply>("threads", "markUnread", request, signal);
+}
+
+/** `bots.list` — the roster the rail renders from, with per-member unread and snooze (REQ-009). */
+export function botsList(signal?: AbortSignal): Promise<BotsListReply> {
+  return call<BotsListReply>("bots", "list", {}, signal);
+}
+
+/** `threads.snooze` — hide the chat from the regular list until `until` (REQ-009). */
+export function threadsSnooze(
+  request: { threadId: string; until?: string },
+  signal?: AbortSignal,
+): Promise<SnoozeReply> {
+  return call<SnoozeReply>("threads", "snooze", request, signal);
+}
+
+/** `threads.unsnooze` — bring the snoozed chat back to the regular list (REQ-009). */
+export function threadsUnsnooze(
+  request: { threadId: string },
+  signal?: AbortSignal,
+): Promise<SnoozeReply> {
+  return call<SnoozeReply>("threads", "unsnooze", request, signal);
 }
 
 /** `threads.react` — adds or removes an emoji reaction on a message (REQ-008). */

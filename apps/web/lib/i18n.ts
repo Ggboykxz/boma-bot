@@ -31,6 +31,10 @@ const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
     "shell.rail.activity": "Activity",
     "shell.rail.primary": "Workspace",
     "shell.rail.bots.empty": "No bot yet.",
+    "shell.rail.snoozed": "Snoozed",
+    "shell.rail.unsnooze": "Unsnooze",
+    "thread.snooze": "Snooze this conversation",
+    "thread.unsnooze": "End the snooze",
     "landing.title": "Persistent AI teammates, on hardware you own.",
     "landing.body":
       "This build carries the shell only. The thread, the run timeline and the computer panel arrive milestone by milestone; the API they talk to is already specified.",
@@ -107,6 +111,10 @@ const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
     "shell.rail.activity": "Activité",
     "shell.rail.primary": "Espace de travail",
     "shell.rail.bots.empty": "Aucun bot pour l'instant.",
+    "shell.rail.snoozed": "En veille",
+    "shell.rail.unsnooze": "Réactiver",
+    "thread.snooze": "Mettre cette conversation en veille",
+    "thread.unsnooze": "Fin de la mise en veille",
     "landing.title": "Des colocataires IA persistants, sur ta propre machine.",
     "landing.body":
       "Cette version ne contient que la coque. Le fil, la chronologie des exécutions et le panneau computer arrivent jalon par jalon ; l'API qu'ils interrogent est déjà spécifiée.",
@@ -183,6 +191,10 @@ const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
     "shell.rail.activity": "פעילות",
     "shell.rail.primary": "מרחב עבודה",
     "shell.rail.bots.empty": "אין עדיין בוט.",
+    "shell.rail.snoozed": "מושהה",
+    "shell.rail.unsnooze": "בטל השעיה",
+    "thread.snooze": "השעה את השיחה הזו",
+    "thread.unsnooze": "בטל את ההשעיה",
     "landing.title": "שותפי AI קבועים, על חומרה שבבעלותך.",
     "landing.body":
       "גרסה זו כוללת את מעטפת היישום בלבד. השיחה, ציר ההרצה ולוח המחשב יגיעו אבן דרך אחר אבן דרך; ה-API שאליו הם מתחברים כבר מוגדר.",

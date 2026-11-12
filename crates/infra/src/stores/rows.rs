@@ -236,6 +236,31 @@ pub(crate) fn bot(row: BotRow) -> Result<Bot, AppError> {
     })
 }
 
+/// Turns a roster row into the summary the rail renders (REQ-009).
+pub(crate) fn bot_summary(row: BotSummaryRow) -> Result<boma_app::ports::BotSummary, AppError> {
+    let bot_row = BotRow {
+        id: row.id,
+        space_id: row.space_id,
+        user_id: row.user_id,
+        name: row.name,
+        description: row.description,
+        color: row.color,
+        thread_id: row.thread_id.clone(),
+        archived_at: row.archived_at,
+        created_at: row.created_at,
+        enabled_tools: row.enabled_tools,
+        model_provider: row.model_provider,
+        model_id: row.model_id,
+        model_pinned: row.model_pinned,
+    };
+    Ok(boma_app::ports::BotSummary {
+        bot: bot(bot_row)?,
+        thread_id: ThreadId::new(row.thread_id.unwrap_or_default())?,
+        snoozed_until: row.snoozed_until,
+        unread_count: u64::try_from(row.unread_count).unwrap_or(u64::MAX),
+    })
+}
+
 /// Turns a stored row into the thread it describes.
 pub(crate) fn thread(row: ThreadRow) -> Result<Thread, AppError> {
     Ok(Thread {
@@ -357,6 +382,26 @@ pub(crate) fn card(row: CardRow) -> Result<Card, AppError> {
         created_at: row.created_at,
         answered_at: row.answered_at,
     })
+}
+
+/// A row of `bots`, with the member-specific state the rail renders (REQ-009).
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct BotSummaryRow {
+    pub(crate) id: String,
+    pub(crate) space_id: String,
+    pub(crate) user_id: String,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) color: Option<String>,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) archived_at: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) enabled_tools: Vec<String>,
+    pub(crate) model_provider: Option<String>,
+    pub(crate) model_id: Option<String>,
+    pub(crate) model_pinned: bool,
+    pub(crate) snoozed_until: Option<String>,
+    pub(crate) unread_count: i64,
 }
 
 /// A row of `tool_installs`.

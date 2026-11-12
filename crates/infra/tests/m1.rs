@@ -21,8 +21,8 @@ use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
     PostgresInvitationStore, PostgresMessageStore, PostgresReactionStore, PostgresReadStateStore,
-    PostgresRunStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
-    PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresRosterStore, PostgresRunStore, PostgresSessionStore, PostgresSpaceStore,
+    PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
 };
 
 mod common;
@@ -67,7 +67,8 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
-            Arc::new(PostgresReadStateStore::new(pool)),
+            Arc::new(PostgresReadStateStore::new(pool.clone())),
+            Arc::new(PostgresRosterStore::new(pool)),
         ),
         boma_app::Services::new(
             publisher,
@@ -929,5 +930,80 @@ async fn req_009_the_read_position_round_trips_in_postgres() {
 
     // The cross-tenant denial is proven with the RLS probe in tenancy.rs: here the connection is
     // a superuser, the policies do not apply, and reading through it would prove nothing.
+    cleanup(&database, &organization_id, &email).await;
+}
+
+#[tokio::test]
+async fn req_009_the_roster_reads_unread_and_snooze_in_postgres() {
+    let database = common::database().await;
+    let app = app(&database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "roster").await;
+    let (thread_id, message_id) =
+        seed_thread_with_message(&app, &context, &space_id, &user_id).await;
+    let _ = message_id;
+
+    // The roster shows the bot with one unread message.
+    let roster = boma_app::usecases::list_bots(&app, &context)
+        .await
+        .expect("the roster answers");
+    assert_eq!(roster.len(), 1);
+    assert_eq!(roster[0].unread_count, 1);
+    assert!(roster[0].snoozed_until.is_none());
+
+    // Snoozing with a deadline in the past never hides the chat: it is simply expired.
+    let expired = boma_app::usecases::snooze_thread(
+        &app,
+        &context,
+        thread_id.as_str(),
+        Some("2001-01-01T00:00:00Z"),
+    )
+    .await
+    .expect("the snooze is recorded");
+    assert_eq!(
+        expired.snoozed_until.as_deref(),
+        Some("2001-01-01T00:00:00Z")
+    );
+    let roster = boma_app::usecases::list_bots(&app, &context)
+        .await
+        .expect("the roster answers after an expired snooze");
+    assert!(roster[0].snoozed_until.is_none());
+
+    // Snoozing with a future deadline hides the chat until it passes.
+    let snoozed = boma_app::usecases::snooze_thread(
+        &app,
+        &context,
+        thread_id.as_str(),
+        Some("2999-01-01T00:00:00Z"),
+    )
+    .await
+    .expect("the snooze is recorded");
+    assert_eq!(
+        snoozed.snoozed_until.as_deref(),
+        Some("2999-01-01T00:00:00Z")
+    );
+    let roster = boma_app::usecases::list_bots(&app, &context)
+        .await
+        .expect("the roster answers while snoozed");
+    assert_eq!(
+        roster[0].snoozed_until.as_deref(),
+        Some("2999-01-01T00:00:00Z")
+    );
+
+    // A malformed deadline is refused, nothing is stored.
+    let refused =
+        boma_app::usecases::snooze_thread(&app, &context, thread_id.as_str(), Some("tomorrow"))
+            .await;
+    assert!(matches!(refused, Err(boma_app::AppError::Rule(_))));
+
+    // Unsnoozing brings the chat back and keeps the snooze clear.
+    let unsnoozed = boma_app::usecases::snooze_thread(&app, &context, thread_id.as_str(), None)
+        .await
+        .expect("the snooze is cleared");
+    assert!(unsnoozed.snoozed_until.is_none());
+    let roster = boma_app::usecases::list_bots(&app, &context)
+        .await
+        .expect("the roster answers after the unsnooze");
+    assert!(roster[0].snoozed_until.is_none());
+
     cleanup(&database, &organization_id, &email).await;
 }

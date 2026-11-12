@@ -215,14 +215,19 @@ impl MessageStore for PostgresMessageStore {
         seq: i64,
     ) -> Result<u64, AppError> {
         let thread_key = thread_id.as_str().to_owned();
+        let space_id_key = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let space_id_key = space_id_key.as_str().to_owned();
         let count = tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
+                // The space predicate is the defense in fact; the row level security
+                // policy is defense in depth and does not apply to a superuser.
                 sqlx::query_scalar::<_, i64>(
                     "SELECT count(*) FROM messages
-                     WHERE thread_id = $1 AND seq > $2 AND role <> 'tool'",
+                     WHERE thread_id = $1 AND seq > $2 AND role <> 'tool' AND space_id = $3",
                 )
                 .bind(thread_key.as_str())
                 .bind(seq)
+                .bind(&space_id_key)
                 .fetch_one(&mut *conn)
                 .await
                 .map_err(tenant::unavailable)

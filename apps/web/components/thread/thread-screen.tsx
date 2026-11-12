@@ -9,13 +9,16 @@ import { MessageBlocks } from "@/components/thread/message-blocks";
 import { ThreadComposer } from "@/components/thread/thread-composer";
 import {
   botsGet,
+  botsList,
   normalizeMessage,
   threadsHead,
   threadsMarkRead,
   threadsMessages,
   threadsReact,
   threadsSend,
+  threadsSnooze,
   threadsSubscribe,
+  threadsUnsnooze,
   type BotReply,
   type EventView,
   type MessageView,
@@ -32,6 +35,9 @@ const RECONNECT_ATTEMPTS = 3;
 
 /** The quick reactions the picker offers (REQ-008). */
 const QUICK_EMOJIS = ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F389}", "\u{1F440}"];
+
+/** How long a snooze lasts from the thread header (REQ-009). */
+const SNOOZE_DURATION_MS = 8 * 60 * 60 * 1000;
 
 /**
  * The thread screen (spec/08-ui-ux.md §8.3, REQ-001, REQ-005, REQ-020).
@@ -59,6 +65,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
   const [pickerFor, setPickerFor] = useState<string | null>(null);
   const [readSeq, setReadSeq] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [snoozed, setSnoozed] = useState(false);
 
   const lastSeq = useRef(0);
   const threadIdRef = useRef<string | null>(null);
@@ -96,15 +103,19 @@ export function ThreadScreen({ botId }: { botId: string }) {
       registerBot({ id: reply.id, name: reply.name });
       threadIdRef.current = reply.threadId;
 
-      const [page, head] = await Promise.all([
+      const [page, head, roster] = await Promise.all([
         threadsMessages({ threadId: reply.threadId }, controller.signal),
         threadsHead({ threadId: reply.threadId }, controller.signal),
+        botsList(controller.signal).catch(() => null),
       ]);
       if (controller.signal.aborted) {
         return;
       }
       setReadSeq(head.readSeq);
       setUnreadCount(head.unreadCount);
+      setSnoozed(
+        Boolean(roster?.bots.find((bot) => bot.id === id)?.snoozedUntil),
+      );
       // The server answers newest first; the transcript shows the newest at the bottom.
       const ordered = [...page.messages].reverse();
       setMessages(ordered);
@@ -220,6 +231,28 @@ export function ThreadScreen({ botId }: { botId: string }) {
     [],
   );
 
+  // SNOOZE: the chat leaves the regular list for a while; the rail re-fetches on the event
+  // (REQ-009). The thread screen owns the toggle, the shelf lives in the rail.
+  const toggleSnooze = useCallback(async () => {
+    const threadId = threadIdRef.current;
+    if (!threadId) {
+      return;
+    }
+    try {
+      if (snoozed) {
+        await threadsUnsnooze({ threadId });
+        setSnoozed(false);
+      } else {
+        const until = new Date(Date.now() + SNOOZE_DURATION_MS).toISOString();
+        await threadsSnooze({ threadId, until });
+        setSnoozed(true);
+      }
+      window.dispatchEvent(new CustomEvent("boma:roster-refresh"));
+    } catch {
+      // The state keeps its last value; the button is the retry.
+    }
+  }, [snoozed]);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (text.length === 0 || sending) {
@@ -278,13 +311,21 @@ export function ThreadScreen({ botId }: { botId: string }) {
           <RiArrowLeftLine className="text-foreground-icon-secondary" size={18} aria-hidden />
           {t("thread.back")}
         </Link>
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h1 className="text-title-3-medium text-text-primary">{bot?.name ?? botId}</h1>
           {bot ? (
             <p className="text-text-secondary text-caption-1-semibold">
               {bot.archivedAt ? t("thread.bot.archived") : t("thread.bot.active")}
             </p>
           ) : null}
+          <button
+            type="button"
+            onClick={() => void toggleSnooze()}
+            aria-pressed={snoozed}
+            className="boma-focus text-text-secondary hover:text-text-primary rounded-md px-2 text-body-2-medium ms-auto"
+          >
+            {snoozed ? t("thread.unsnooze") : t("thread.snooze")}
+          </button>
         </div>
       </header>
 

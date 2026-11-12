@@ -106,9 +106,39 @@ export interface RpcSeed {
 export async function seedRpc(page: Page, seed: RpcSeed): Promise<void> {
   // A seed that says nothing about read state describes a returning reader: everything is read,
   // no divider. The read-state golden carries its own explicit `threads/head` (REQ-009).
+  const withRoster = (answers: Record<string, unknown>): Record<string, unknown> => {
+    // The rail asks the roster on every visit; a seed that says nothing sees the golden bot,
+    // quiet, with nothing unread (REQ-009).
+    if (answers["bots/list"] !== undefined) {
+      return answers;
+    }
+    return {
+      ...answers,
+      "threads/snooze": answers["threads/snooze"] ?? {
+        threadId: "thr_golden",
+        snoozedUntil: null,
+      },
+      "threads/unsnooze": answers["threads/unsnooze"] ?? {
+        threadId: "thr_golden",
+        snoozedUntil: null,
+      },
+      "bots/list": {
+        bots: [
+          {
+            id: "bot_golden",
+            name: "Boma Bot",
+            threadId: "thr_golden",
+            archivedAt: null,
+            snoozedUntil: null,
+            unreadCount: 0,
+          },
+        ],
+      },
+    };
+  };
   const withHead = (answers: Record<string, unknown>): Record<string, unknown> => {
     if (answers["threads/head"] !== undefined) {
-      return answers;
+      return withRoster(answers);
     }
     const messages = Array.isArray(
       (answers["threads/messages"] as { messages?: unknown[] } | undefined)?.messages,
@@ -129,7 +159,7 @@ export async function seedRpc(page: Page, seed: RpcSeed): Promise<void> {
       readSeq: lastSeq,
       unreadCount: 0,
     };
-    return { ...answers, "threads/head": head, "threads/markRead": head };
+    return withRoster({ ...answers, "threads/head": head, "threads/markRead": head });
   };
   seed = { ...seed, answers: withHead(seed.answers) };
 
@@ -383,6 +413,43 @@ const SEEDS: Record<string, (page: Page) => Promise<void>> = {
         "bots/get": SEED_BOT,
         "threads/messages": { messages: SEED_ONE_MESSAGE },
         "threads/send": { messageId: "msg_sent", runId: "run_sent", status: "queued" },
+      },
+    });
+  },
+
+  /** A quiet bot snoozed by the caller, hidden from the regular list (REQ-009). */
+  "roster-with-snoozed-bot": async (page) => {
+    await seedRpc(page, {
+      answers: {
+        "bots/get": SEED_BOT,
+        "bots/list": {
+          bots: [
+            {
+              id: "bot_golden",
+              name: "Boma Bot",
+              threadId: "thr_golden",
+              archivedAt: null,
+              snoozedUntil: null,
+              unreadCount: 2,
+            },
+            {
+              id: "bot_quiet",
+              name: "Quiet Bot",
+              threadId: "thr_quiet",
+              archivedAt: null,
+              snoozedUntil: "2999-01-01T00:00:00Z",
+              unreadCount: 4,
+            },
+          ],
+        },
+        "threads/messages": { messages: SEED_ONE_MESSAGE },
+        "threads/head": {
+          threadId: "thr_golden",
+          lastSeq: 1,
+          lastMessageAt: "2026-01-01T00:00:01Z",
+          readSeq: 0,
+          unreadCount: 2,
+        },
       },
     });
   },

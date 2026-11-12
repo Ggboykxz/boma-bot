@@ -64,29 +64,30 @@
   banner with the quote; the transcript renders replies as a quoted block; the composer keeps a
   reply context with a cancel button; a Playwright test covers the click-to-reply flow.
 
-- **REQ-009 (read state, MUST-adjacent SHOULD)** is done for the read-state slice: per-member
-  `thread_read_states` (migration `0010_read_states.sql`, RLS), the `ReadStateStore` port with
-  Postgres and memory adapters, `threads.head`, `threads.markRead` and `threads.markUnread` in the
-  wire. The head answers `{threadId, lastSeq, lastMessageAt, readSeq, unreadCount}` — the unread
-  count excludes background steps (role `tool`). The transcript renders one `role="separator"`
-  divider after the last read message, with the count, and the screen marks the position in the
-  background on load, so the next visit opens clean. Hydrated via the same messages page (no extra
-  round trip for the divider position itself). Proved at three levels (memory, RPC surface, real
-  Postgres) plus the RLS probe for cross-tenant denial, and the `REQ-009-unread-divider` UI golden
-  replays. Honest gap: **snooze** (the second half of REQ-009) is NOT implemented: the wire has no
-  bots roster to hide a snoozed chat from, the rail renders a client-side directory with no
-  per-bot activity signal, and inventing a roster here would be new surface beyond the M2
-  contract. `threads.snooze` is deliberately not stubbed. See "Decisions needed".
+- **REQ-009 (read state, SHOULD)** is done — read state and snooze, owner chose option A:
+  per-member `thread_read_states` and `thread_snoozes` (migrations 0010 and 0011, RLS plus
+  effective space predicates in the roster and reaction queries, which a superuser ignores — the
+  defense in fact lives in the predicate, the policy is defense in depth), `ReadStateStore` and
+  `RosterStore` with Postgres and memory adapters, and the wire gains `threads.head`,
+  `threads.markRead`, `threads.markUnread`, `threads.snooze`, `threads.unsnooze` (`{threadId,
+  until?}` with an RFC3339 check) and **`bots.list`** — an additive procedure the rail needs to
+  render snoozed and unread state per member; it is not in the contract's `threads.*` list, it
+  conflicts with nothing and it changes no existing procedure. The transcript renders one
+  `role="separator"` divider after the last read message; the rail renders a regular list
+  (snoozed bots hidden) plus an expandable "Snoozed (n)" shelf with unsnooze and an unread badge;
+  a snooze expires on its own when `until` passes. The thread header carries the Snooze toggle.
+  Proved at three levels (memory, RPC, Postgres) plus the RLS probe and a Playwright spec; the
+  `REQ-009-unread-divider` UI golden replay is green. Note: this slice widened the `time`
+  workspace dependency to `["formatting", "parsing"]` (same version, no new dependency).
 
 Remaining in M2, in dependency order: mentions (REQ-008) wait on REQ-010 group chats (M11, not
-M2); the snooze half of REQ-009 (documented below); the tool-call loop and the refusal audit
-event from REQ-016 are the last piece of REQ-016 and land with the agent engine that makes the
-call (milestone M3/M5); the BYOK and provider OAuth login legs of REQ-015 land with M8 (models
-and credentials); the "helper answers, parent continues" branch of REQ-019 lands with M3 (the
-agent engine).
+M2); the tool-call loop and the refusal audit event from REQ-016 land with the agent engine that
+makes the call (milestone M3/M5); the BYOK and provider OAuth login legs of REQ-015 land with M8
+(models and credentials); the "helper answers, parent continues" branch of REQ-019 lands with M3
+(the agent engine).
 
 The current commit carries REQ-003, REQ-006, REQ-007, REQ-008 (replies/quotes and reactions),
-REQ-009 (read state), REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton).
+REQ-009 (read state and snooze), REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton).
 
 ## Done
 
@@ -97,12 +98,12 @@ REQ-009 (read state), REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton).
   dbus, X11/xcb/composite/damage/ext/fixes/randr, xkbcommon, alsa, expat, gbm, udev) restored
   through nix and referenced by `LD_LIBRARY_PATH` in `/tmp/opencode/ldpath.sh`; the Playwright
   suite passes with `FONTCONFIG_FILE=/tmp/opencode/fonts.conf`.
-- 2026-11-12 — **REQ-009 (read state) committed locally (`f3a9bc6`) but PUSH BLOCKED**: the
-  `git push` to `origin` hung at the credential step every time (read timeout at 55 s and 600 s),
-  `git credential fill` returns nothing and VS Code's askpass answers "Missing or invalid
-  credentials." — i.e. no token is currently available on this machine. `ls-remote` works
-  anonymously (public repo); the network is up. The user needs to restore the git credentials in
-  VS Code (or paste a PAT); the commit is safe locally on `main`, one ahead of `origin/main`.
+- 2026-11-12 — **REQ-009 (read state) committed locally (`f3a9bc6`); push recovered.** The
+  `git push` hung at the credential step (`git credential fill` empty, VS Code's askpass answered
+  "Missing or invalid credentials."; `ls-remote` anonymous worked). The owner then pasted a PAT
+  which was used for one-off pushes via an inline `credential.helper` — never written to any
+  file, config or log, and nothing was left behind on disk. The owner should rotate that token:
+  it transited the chat in clear.
 - 2026-11-12 — **M1 walking skeleton implemented and committed** (`feat(app,api,infra,bin,conformance): M1 walking skeleton`).
   - `boma-domain`: runs gained lease fields (`lease_owner`, `lease_fence`, `lease_expires_at`) and
     `holds_lease`; tenancy, ids, password validation, cursor helpers, event and message models,
@@ -401,7 +402,6 @@ recommendation stands.
 
 | REQ | Why | Where recorded |
 |---|---|---|
-| REQ-009 (snooze) | The spec bundles it with read state; the wire has no bots roster to hide a snoozed chat from and the rail renders a client-side directory, so any honest implementation needs the roster + snoozed shelf as its own slice. The golden only pins the unread divider. Not stubbed. | STATE, PLAN §5, this entry |
 | REQ-049 (voice, COULD) | Not needed for a functional core; interfaces stay additive | PLAN §5 |
 | REQ-055 (desktop, SHOULD) | Tauri shell lands at M10, after screens and signed releases exist | ADR-016, `apps/desktop/README.md` |
 | REQ-056 (mobile, SHOULD) | PWA ships in M1; the Expo shell waits until device pairing is exercised | ADR-016, PLAN §5 |

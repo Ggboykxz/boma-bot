@@ -605,11 +605,20 @@ async fn head_with(
 ) -> Result<ThreadHead, AppError> {
     let thread_id =
         boma_domain::ThreadId::new(thread_id.to_owned()).map_err(|_| AppError::NotFound)?;
-    app.stores
+    let thread = app
+        .stores
         .threads
         .find(context, &thread_id)
         .await?
         .ok_or(AppError::NotFound)?;
+    // The thread must belong to the caller's space. The store's own guards are the defense
+    // in fact for the writes; this check is the same for the reads, and holds even where
+    // the row level security does not apply (a superuser connection).
+    if let Some(space_id) = context.space_id()
+        && thread.space_id != *space_id
+    {
+        return Err(AppError::NotFound);
+    }
     let page = app
         .stores
         .messages
@@ -640,6 +649,79 @@ async fn head_with(
         read_seq,
         unread_count,
     })
+}
+
+/// The outcome of one snooze call (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnoozeOutcome {
+    /// The thread that was (or was not) snoozed.
+    pub thread_id: String,
+    /// The deadline stored, or `None` when the snooze was cleared.
+    pub snoozed_until: Option<String>,
+}
+
+/// The roster the rail renders from (REQ-009).
+///
+/// # Errors
+///
+/// Returns an error when the database cannot answer, or when the caller is not a member.
+pub async fn list_bots(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::BotSummary>, AppError> {
+    app.stores.roster.list_bots(context).await
+}
+
+/// Snoozes one conversation for the caller, or clears the snooze (REQ-009).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the thread does not exist in the caller's tenant, and
+/// [`AppError::Rule`] when `until` is not an RFC3339 instant.
+pub async fn snooze_thread(
+    app: &App,
+    context: &TenantContext,
+    thread_id: &str,
+    until: Option<&str>,
+) -> Result<SnoozeOutcome, AppError> {
+    let thread_id =
+        boma_domain::ThreadId::new(thread_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    if let Some(until) = until {
+        validate_until(until)?;
+    }
+    let thread = app
+        .stores
+        .threads
+        .find(context, &thread_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if let Some(space_id) = context.space_id()
+        && thread.space_id != *space_id
+    {
+        return Err(AppError::NotFound);
+    }
+    let snoozed_until = app
+        .stores
+        .roster
+        .set_snooze(context, &thread_id, until)
+        .await?;
+    Ok(SnoozeOutcome {
+        thread_id: thread_id.as_str().to_owned(),
+        snoozed_until,
+    })
+}
+
+/// Checks the `until` instant a snooze carries (REQ-009).
+fn validate_until(until: &str) -> Result<(), AppError> {
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+    OffsetDateTime::parse(until, &Rfc3339)
+        .map(|_| ())
+        .map_err(|_| {
+            AppError::Rule(boma_domain::DomainError::InvalidName(
+                "until must be an RFC3339 instant".to_owned(),
+            ))
+        })
 }
 
 /// The activity projection: the runs of a bot, newest first (REQ-011).

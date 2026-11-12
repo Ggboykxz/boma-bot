@@ -12,7 +12,8 @@ use crate::{
     ports::{
         AccountStore, BotStore, CardStore, Clock, EffectStore, EventPublisher, EventStore,
         IdGenerator, InvitationStore, MessageStore, PasswordHasher, ReactionStore, ReadStateStore,
-        RunStore, SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
+        RosterStore, RunStore, SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore,
+        UserStore,
     },
 };
 
@@ -49,6 +50,8 @@ pub struct Stores {
     pub reactions: Arc<dyn ReactionStore>,
     /// Per-member read positions (REQ-009).
     pub read_states: Arc<dyn ReadStateStore>,
+    /// The roster the rail renders from (REQ-009).
+    pub roster: Arc<dyn RosterStore>,
 }
 
 impl Stores {
@@ -74,6 +77,7 @@ impl Stores {
         tools: Arc<dyn ToolStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
+        roster: Arc<dyn RosterStore>,
     ) -> Self {
         Self {
             accounts,
@@ -91,6 +95,7 @@ impl Stores {
             tools,
             reactions,
             read_states,
+            roster,
         }
     }
 }

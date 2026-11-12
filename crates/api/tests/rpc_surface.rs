@@ -761,3 +761,110 @@ async fn req_009_head_and_marks_move_the_read_position() {
     .await;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
+
+/// The caller's first bot in the roster (the world() fixture seeds exactly one).
+async fn roster_bot(test_app: &TestApp, caller: &Caller) -> serde_json::Value {
+    let list = post(
+        state(test_app),
+        "/rpc/bots/list",
+        Some(caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = json(list).await;
+    body["bots"][0].clone()
+}
+
+#[tokio::test]
+async fn req_009_the_roster_snooze_and_unsnooze_round_trip() {
+    let world = world().await;
+
+    // The roster of a quiet bot: read position at zero, no snooze.
+    let bot = roster_bot(&world.app, &world.caller).await;
+    assert_eq!(bot["id"], serde_json::json!(world.bot_id));
+    assert_eq!(bot["threadId"], serde_json::json!(world.thread_id));
+    assert_eq!(bot["snoozedUntil"], serde_json::Value::Null);
+    assert_eq!(bot["unreadCount"], serde_json::json!(0));
+
+    // A message lands: the badge counts it.
+    let send = post(
+        state(&world.app),
+        "/rpc/threads/send",
+        Some(&world.caller),
+        serde_json::json!({"botId": world.bot_id, "text": "a message to snooze with"}),
+    )
+    .await;
+    assert_eq!(send.status(), StatusCode::OK);
+
+    let bot = roster_bot(&world.app, &world.caller).await;
+    assert_eq!(bot["unreadCount"], serde_json::json!(1));
+
+    // Marking read clears the badge again.
+    let marked = post(
+        state(&world.app),
+        "/rpc/threads/markRead",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id}),
+    )
+    .await;
+    assert_eq!(marked.status(), StatusCode::OK);
+    let bot = roster_bot(&world.app, &world.caller).await;
+    assert_eq!(bot["unreadCount"], serde_json::json!(0));
+
+    // Snoozing moves the bot off the regular list until the deadline.
+    let snoozed = post(
+        state(&world.app),
+        "/rpc/threads/snooze",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id, "until": "2999-01-01T00:00:00Z"}),
+    )
+    .await;
+    assert_eq!(snoozed.status(), StatusCode::OK);
+    let body = json(snoozed).await;
+    assert_eq!(
+        body["snoozedUntil"],
+        serde_json::json!("2999-01-01T00:00:00Z")
+    );
+
+    let bot = roster_bot(&world.app, &world.caller).await;
+    assert_eq!(
+        bot["snoozedUntil"],
+        serde_json::json!("2999-01-01T00:00:00Z")
+    );
+
+    // An instant the roster cannot read is refused, not stored.
+    let refused = post(
+        state(&world.app),
+        "/rpc/threads/snooze",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id, "until": "tomorrow"}),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    // A snooze on a thread the caller cannot see is refused with the same envelope.
+    let missing = post(
+        state(&world.app),
+        "/rpc/threads/snooze",
+        Some(&world.caller),
+        serde_json::json!({"threadId": "thr_does_not_exist", "until": "2999-01-01T00:00:00Z"}),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    // Unsnoozing brings the chat back.
+    let unsnoozed = post(
+        state(&world.app),
+        "/rpc/threads/unsnooze",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id}),
+    )
+    .await;
+    assert_eq!(unsnoozed.status(), StatusCode::OK);
+    let body = json(unsnoozed).await;
+    assert_eq!(body["snoozedUntil"], serde_json::Value::Null);
+
+    let bot = roster_bot(&world.app, &world.caller).await;
+    assert_eq!(bot["snoozedUntil"], serde_json::Value::Null);
+}

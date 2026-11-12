@@ -8,7 +8,7 @@
 
 mod common;
 
-use boma_app::ports::{BotStore, MessageStore, ReadStateStore};
+use boma_app::ports::{BotStore, MessageStore, ReadStateStore, RosterStore};
 use boma_domain::{SystemReason, TenantContext};
 use boma_infra::{PostgresBotStore, PostgresMessageStore, PostgresReadStateStore};
 
@@ -150,6 +150,64 @@ async fn req_009_a_read_position_cannot_cross_tenants() {
         .await
         .expect("the position answers");
     assert_eq!(position, 7);
+
+    common::cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn req_009_a_snooze_cannot_cross_tenants() {
+    let database = common::database().await;
+    let pool = common::tenant_pool(&database).await;
+    let prefix = common::unique_id();
+
+    let first = common::fixture(&pool, &format!("{prefix}a")).await;
+    let second = common::fixture(&pool, &format!("{prefix}b")).await;
+
+    let roster = boma_infra::PostgresRosterStore::new(pool.clone());
+
+    // A snooze against another tenant's thread is refused: nothing is stored.
+    let refused = roster
+        .set_snooze(
+            &first.context,
+            &second.thread_id,
+            Some("2999-01-01T00:00:00Z"),
+        )
+        .await;
+    assert!(matches!(refused, Err(boma_app::AppError::NotFound)));
+
+    // The roster of the first tenant shows its own bot only.
+    let bots = roster
+        .list_bots(&first.context)
+        .await
+        .expect("the roster answers");
+    assert_eq!(bots.len(), 1);
+    assert_eq!(bots[0].thread_id, first.thread_id);
+
+    // A snooze inside the tenant works and is remembered.
+    let stored = roster
+        .set_snooze(
+            &first.context,
+            &first.thread_id,
+            Some("2999-01-01T00:00:00Z"),
+        )
+        .await
+        .expect("the snooze is recorded");
+    assert_eq!(stored.as_deref(), Some("2999-01-01T00:00:00Z"));
+    let bots = roster
+        .list_bots(&first.context)
+        .await
+        .expect("the roster answers");
+    assert_eq!(
+        bots[0].snoozed_until.as_deref(),
+        Some("2999-01-01T00:00:00Z")
+    );
+
+    // Clearing it works as well.
+    let cleared = roster
+        .set_snooze(&first.context, &first.thread_id, None)
+        .await
+        .expect("the snooze is cleared");
+    assert!(cleared.is_none());
 
     common::cleanup(&pool, &prefix).await;
 }
