@@ -154,13 +154,7 @@ mod tests {
 
     #[test]
     fn req_053_http_config_rejects_a_zero_timeout() {
-        let outcome = HttpConfig::new(
-            loopback(),
-            Duration::ZERO,
-            Duration::ZERO,
-            8192,
-            Vec::new(),
-        );
+        let outcome = HttpConfig::new(loopback(), Duration::ZERO, Duration::ZERO, 8192, Vec::new());
         assert!(matches!(outcome, Err(HttpConfigError::ZeroDuration { .. })));
     }
 
@@ -203,7 +197,7 @@ mod tests {
             Vec::new(),
         )
         .expect("the fixture is valid");
-        assert!(config.trusted_proxies().is_empty());
+        assert_eq!(config.trusted_proxies(), &[] as &[IpAddr]);
         assert_eq!(config.bind(), loopback());
         let config = HttpConfig::new(
             loopback(),

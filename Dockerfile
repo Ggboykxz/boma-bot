@@ -11,6 +11,10 @@ COPY rust-toolchain.toml rustfmt.toml clippy.toml Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
 
+# The image ships rustfmt and clippy, but not llvm-tools-preview; `rust-toolchain.toml` lists it,
+# and rustup refuses to run a toolchain whose components are missing.
+RUN rustup component add rustfmt clippy llvm-tools-preview
+
 # `--locked` makes a missing or stale Cargo.lock a build failure instead of a silent resolve.
 RUN cargo build --release --locked --bin boma
 

@@ -47,3 +47,60 @@ pub async fn probe(addr: SocketAddr, path: &str) -> anyhow::Result<()> {
     tracing::info!(%addr, path, "probe succeeded");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::probe;
+
+    /// A one-shot HTTP server that answers with the given status line.
+    async fn answer(status: &'static str) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the test binds a port");
+        let addr = listener.local_addr().expect("the bound address is known");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("a client connects");
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer).await;
+            let response = format!("{status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.flush().await;
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn req_053_the_probe_accepts_a_200() {
+        let addr = answer("HTTP/1.1 200 OK").await;
+        probe(addr, "/ready")
+            .await
+            .expect("a 200 is a healthy answer");
+    }
+
+    #[tokio::test]
+    async fn req_053_the_probe_refuses_anything_but_a_200() {
+        let addr = answer("HTTP/1.1 503 Service Unavailable").await;
+        let error = probe(addr, "/ready")
+            .await
+            .expect_err("a 503 is not a healthy answer");
+        assert!(error.to_string().contains("503"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn req_053_the_probe_fails_when_nothing_listens() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the test binds a port");
+        let addr = listener.local_addr().expect("the bound address is known");
+        drop(listener);
+
+        probe(addr, "/ready")
+            .await
+            .expect_err("a closed port is not a healthy answer");
+    }
+}

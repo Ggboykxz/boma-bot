@@ -3,11 +3,15 @@
 //! A spec export must never enlarge the fixture set silently, and a fixture must never be dropped
 //! from the manifest to make the suite green. Both directions fail here.
 
+// An integration test file is compiled as its own crate, so clippy's `allow-*-in-tests` (which
+// covers `#[test]` functions and `#[cfg(test)]` modules only) does not reach the helpers below.
+// AGENTS.md allows unwrap, expect and panic in test code; this is where that permission is taken,
+// once and in writing.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use std::collections::BTreeSet;
 
-use boma_conformance::{
-    Manifest, Status, fixture_stems, load_fixture, load_ui_fixture, repo_path,
-};
+use boma_conformance::{Manifest, Status, fixture_stems, load_fixture, load_ui_fixture, repo_path};
 
 fn stems(relative: &str) -> Vec<String> {
     fixture_stems(&repo_path(relative)).expect("the spec directory is readable")
@@ -52,7 +56,10 @@ fn req_053_a_pending_fixture_says_why_and_names_its_milestone() {
         match entry.status {
             Status::Pending => {
                 let reason = entry.reason.as_deref().unwrap_or_default();
-                assert!(!reason.trim().is_empty(), "{name} must say why it is pending");
+                assert!(
+                    !reason.trim().is_empty(),
+                    "{name} must say why it is pending"
+                );
                 assert!(
                     reason.starts_with('M') && reason.contains(" - "),
                     "{name} must name its milestone and a reason, got `{reason}`"

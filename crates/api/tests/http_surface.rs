@@ -3,6 +3,12 @@
 //! These run against the real router with no network and no database: the probes are fakes, which
 //! is what the readiness contract allows. The tenant and persistence suites arrive with M1.
 
+// An integration test file is compiled as its own crate, so clippy's `allow-*-in-tests` (which
+// covers `#[test]` functions and `#[cfg(test)]` modules only) does not reach the helpers below.
+// AGENTS.md allows unwrap, expect and panic in test code; this is where that permission is taken,
+// once and in writing.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;

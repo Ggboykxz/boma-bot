@@ -3,7 +3,7 @@
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::{HeaderName, HeaderValue, header, Request},
+    http::{HeaderName, HeaderValue, Request, StatusCode, header},
     routing::get,
 };
 use tower_http::{
@@ -20,7 +20,6 @@ use crate::{error::ApiError, health, state::AppState};
 /// The spec's contract is `/health` and `/ready` (`spec/openapi.yaml`). `/healthz` and `/readyz`
 /// are aliases required by AGENTS.md "Observability"; they are deliberately absent from the
 /// generated document, and the contract test asserts that (docs/STATE.md records the deviation).
-#[must_use]
 pub fn router(state: AppState) -> Router {
     let http = state.http().clone();
     let request_id_header = HeaderName::from_static("x-request-id");
@@ -34,7 +33,10 @@ pub fn router(state: AppState) -> Router {
         .fallback(not_found)
         .with_state(state)
         .layer(DefaultBodyLimit::max(http.body_limit_bytes()))
-        .layer(TimeoutLayer::new(http.request_timeout()))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            http.request_timeout(),
+        ))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
@@ -48,10 +50,7 @@ pub fn router(state: AppState) -> Router {
             HeaderValue::from_static("no-store"),
         ))
         .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
-        .layer(SetRequestIdLayer::new(
-            request_id_header,
-            RequestIdFactory::default(),
-        ))
+        .layer(SetRequestIdLayer::new(request_id_header, RequestIdFactory))
         .layer(TraceLayer::new_for_http())
 }
 

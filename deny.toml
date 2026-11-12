@@ -28,6 +28,9 @@ allow = [
   "CC0-1.0",
   "MPL-2.0",
   "BSL-1.0",
+  # The Mozilla root store shipped by webpki-roots (pulled in by sqlx's rustls feature).
+  # CDLA-Permissive-2.0 is permissive and compatible with the project's own licence.
+  "CDLA-Permissive-2.0",
 ]
 exceptions = []
 

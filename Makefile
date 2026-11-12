@@ -8,8 +8,13 @@ COVERAGE_MIN ?= 80
 # The traceability ratchet: how many requirements may still be uncovered. It only goes down.
 # M0 = 50 (8 covered), M1 tightens to 40, and so on; docs/STATE.md records the value.
 TRACE_MAX_MISSING ?= 50
+# The integration tests in crates/infra/tests/ talk to a real Postgres, as AGENTS.md asks. The
+# database must be up before `make test` (`docker compose up -d db`); the test fails loudly when
+# the variable is missing rather than skipping itself.
+BOMA_DATABASE_URL ?= postgres://boma:boma@127.0.0.1:5432/boma
+export BOMA_DATABASE_URL
 
-.PHONY: help install deps-lock run build fmt fmt-check lint typecheck test coverage deny bench \
+.PHONY: help install deps-lock run build fmt fmt-check lint typecheck test coverage deny machete bench \
         migrate trace secrets check ui-install ui-run ui-build ui-typecheck ui-lint ui-test ui-a11y
 
 help: ## Show the available targets
@@ -50,7 +55,9 @@ coverage: ## Line coverage with the floor from docs/PLAN.md
 
 deny: ## Licences, advisories, duplicates, unused dependencies
 	$(CARGO) deny check
-	$(CARGO) machete
+
+machete: ## Dependencies that are declared but never used
+	$(CARGO) machete --with-metadata
 
 bench: ## Benchmarks (arrive with M1 hot paths)
 	$(CARGO) bench --workspace
@@ -64,7 +71,7 @@ trace: ## Traceability ratchet: REQ ids in test names
 secrets: ## Refuse a credential in the tree
 	python3 tools/secret_scan.py .
 
-check: fmt-check lint typecheck test trace secrets ## Everything CI runs, in order
+check: fmt-check lint typecheck test coverage deny machete trace secrets ## Everything CI runs, in order
 
 ui-install: ## Install the web dependencies
 	$(NPM) --prefix $(WEB) ci

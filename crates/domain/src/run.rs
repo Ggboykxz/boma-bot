@@ -109,6 +109,11 @@ impl RunStatus {
     }
 
     /// Applies a transition or returns the rule that forbids it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DomainError::InvalidTransition` when the table does not allow the move. The error
+    /// names both statuses so the caller can log the pair it attempted.
     pub fn transition_to(self, next: Self) -> Result<Self, DomainError> {
         if self.can_transition_to(next) {
             Ok(next)
@@ -277,22 +282,24 @@ mod tests {
     }
 
     #[test]
-    fn req_012_only_failed_may_return_to_the_queue() {
+    fn req_012_only_the_releasable_statuses_may_return_to_the_queue() {
+        // The reference table (`packages/core/src/run-state.ts`, `allowed`) allows a lease to be
+        // released (`leased -> queued`), a waiting run to be re-queued
+        // (`waiting_input|waiting_takeover -> queued`) and a failed run to be retried
+        // (`failed -> queued`). Nothing else may go back to the queue.
         for from in RunStatus::ALL {
-            if from == RunStatus::Failed {
-                assert!(from.can_transition_to(RunStatus::Queued));
-            } else {
-                assert!(
-                    !from.can_transition_to(RunStatus::Queued) || from == RunStatus::WaitingInput,
-                    "{from} must not return to queued"
-                );
-                assert!(
-                    !from.can_transition_to(RunStatus::Queued)
-                        || from == RunStatus::WaitingTakeover
-                        || from == RunStatus::Leased,
-                    "{from} must not return to queued"
-                );
-            }
+            let may_requeue = matches!(
+                from,
+                RunStatus::Failed
+                    | RunStatus::Leased
+                    | RunStatus::WaitingInput
+                    | RunStatus::WaitingTakeover
+            );
+            assert_eq!(
+                from.can_transition_to(RunStatus::Queued),
+                may_requeue,
+                "{from} -> queued"
+            );
         }
     }
 
@@ -321,8 +328,10 @@ mod tests {
     fn req_003_non_conversational_triggers_never_take_steering() {
         for trigger in RunTrigger::ALL {
             let conversational = trigger.is_conversational();
-            let expected =
-                matches!(trigger, RunTrigger::User | RunTrigger::Helper | RunTrigger::Retry);
+            let expected = matches!(
+                trigger,
+                RunTrigger::User | RunTrigger::Helper | RunTrigger::Retry
+            );
             assert_eq!(conversational, expected, "{trigger}");
         }
         assert!(RunTrigger::Tickets.is_background());
@@ -345,9 +354,7 @@ mod tests {
 
     #[test]
     fn req_012_an_illegal_transition_is_an_error_not_a_no_op() {
-        let error = RunStatus::Completed
-            .transition_to(RunStatus::Running)
-            .err();
+        let error = RunStatus::Completed.transition_to(RunStatus::Running).err();
         assert!(matches!(error, Some(DomainError::InvalidTransition { .. })));
         assert_eq!(
             RunStatus::Queued.transition_to(RunStatus::Leased),

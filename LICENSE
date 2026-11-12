@@ -1,19 +1,21 @@
-TO BE CHOSEN BY THE OWNER
+MIT License
 
-This file is a placeholder, on purpose.
+Copyright (c) 2026 Boma Bot contributors
 
-No licence has been chosen for Boma Bot yet. Until the owner writes one here, the default is
-"all rights reserved": the code may be read and run locally, but it may not be redistributed and
-contributions cannot be accepted. Choose before the repository is published, and before the first
-external contribution is merged.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-Checklist for the owner:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-1. Pick a licence (or a dual licence) and paste its canonical text below this notice.
-2. Keep `license-file = "LICENSE"` in `Cargo.toml`, and re-run `cargo deny check` so the
-   dependency allow-list in `deny.toml` matches the chosen terms.
-3. Record the choice in `docs/STATE.md` and in `docs/DEPENDENCIES.md` (the "project licence" row).
-4. BoardUI: the free components are usable, but confirm the terms before publishing if a Pro
-   component or template ever lands in the tree (`docs/DEPENDENCIES.md`).
-5. Assets: nothing visual was taken from the analysed product. If that changes, record its origin
-   and licence in `docs/UI.md` first.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

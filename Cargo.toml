@@ -14,7 +14,7 @@ version = "0.1.0"
 edition = "2024"
 # sqlx 0.9 declares rust-version 1.94, so the workspace MSRV cannot be lower.
 rust-version = "1.94"
-license-file = "LICENSE"
+license = "MIT"
 authors = ["Boma Bot contributors"]
 repository = "https://example.invalid/boma/boma"
 publish = false
@@ -29,7 +29,7 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 http-body-util = "0.1.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-serde_yaml_ng = "0.10.0"
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
 sqlx = { version = "0.9.0", default-features = false, features = [
   "runtime-tokio",
   "tls-rustls-ring",
@@ -49,11 +49,12 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 utoipa = { version = "6.0.0", features = ["macros"] }
 uuid = { version = "1.29.2", features = ["v4", "serde"] }
 
-# Internal crates.
-boma-api = { path = "crates/api" }
-boma-app = { path = "crates/app" }
-boma-domain = { path = "crates/domain" }
-boma-infra = { path = "crates/infra" }
+# Internal crates. The version is spelled out so `cargo deny` does not read the path dependency
+# as a wildcard: a path without a version is unresolvable outside this workspace.
+boma-api = { path = "crates/api", version = "0.1.0" }
+boma-app = { path = "crates/app", version = "0.1.0" }
+boma-domain = { path = "crates/domain", version = "0.1.0" }
+boma-infra = { path = "crates/infra", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

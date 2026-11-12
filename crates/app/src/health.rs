@@ -198,7 +198,7 @@ mod tests {
         ]);
         let report = readiness.report(Duration::from_millis(50)).await;
         assert!(report.is_ready());
-        assert!(report.failing().is_empty());
+        assert_eq!(report.failing(), &[] as &[&str]);
         assert_eq!(readiness.len(), 2);
     }
 

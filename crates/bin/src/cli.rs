@@ -14,7 +14,11 @@ use crate::{commands, config::Config, probe, telemetry};
 
 /// `boma` — server, worker and operator tools for Boma Bot.
 #[derive(Debug, Parser)]
-#[command(name = "boma", version, about = "Boma Bot server, worker and operator tools")]
+#[command(
+    name = "boma",
+    version,
+    about = "Boma Bot server, worker and operator tools"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -68,7 +72,7 @@ pub async fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Serve => commands::serve(load_config()?).await,
-        Command::Worker => commands::worker(load_config()?).await,
+        Command::Worker => commands::worker(load_config()?),
         Command::Migrate => commands::migrate(load_config()?).await,
     }
 }
@@ -77,4 +81,58 @@ fn load_config() -> anyhow::Result<Config> {
     let config = Config::from_env().context("the configuration is not usable")?;
     telemetry::init(&config.telemetry)?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{AdminCommand, Cli, Command};
+
+    #[test]
+    fn req_058_every_job_has_a_command_line() {
+        for (arguments, expected) in [
+            (vec!["boma", "serve"], "serve"),
+            (vec!["boma", "worker"], "worker"),
+            (vec!["boma", "migrate"], "migrate"),
+            (vec!["boma", "probe"], "probe"),
+        ] {
+            let cli = Cli::try_parse_from(&arguments).expect("the command parses");
+            let name = match cli.command {
+                Command::Serve => "serve",
+                Command::Worker => "worker",
+                Command::Migrate => "migrate",
+                Command::Probe { .. } => "probe",
+                Command::Admin { .. } => "admin",
+            };
+            assert_eq!(name, expected);
+        }
+    }
+
+    #[test]
+    fn req_058_the_probe_defaults_to_the_local_readiness_path() {
+        let cli = Cli::try_parse_from(["boma", "probe"]).expect("the command parses");
+        let Command::Probe { addr, path } = cli.command else {
+            panic!("the command must be the probe");
+        };
+        assert_eq!(addr.to_string(), "127.0.0.1:3000");
+        assert_eq!(path, "/ready");
+    }
+
+    #[test]
+    fn req_058_the_operator_tools_are_a_subcommand_of_admin() {
+        let cli =
+            Cli::try_parse_from(["boma", "admin", "check-config"]).expect("the command parses");
+        let Command::Admin { command } = cli.command else {
+            panic!("the command must be admin");
+        };
+        assert!(matches!(command, AdminCommand::CheckConfig));
+    }
+
+    #[test]
+    fn req_058_an_unknown_job_is_refused() {
+        let error = Cli::try_parse_from(["boma", "launch-the-missiles"])
+            .expect_err("an unknown job must not parse");
+        assert!(error.to_string().contains("launch-the-missiles"), "{error}");
+    }
 }

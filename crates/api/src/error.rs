@@ -10,10 +10,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use boma_app::AppError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The machine-readable code of an error response.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
     /// No valid session or token.
@@ -49,7 +49,7 @@ impl ErrorCode {
 }
 
 /// The body of every error response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ErrorBody {
     /// Machine-readable code clients branch on.
     pub code: ErrorCode,
@@ -62,13 +62,21 @@ pub struct ErrorBody {
 pub struct ApiError {
     code: ErrorCode,
     message: &'static str,
+    status: StatusCode,
 }
 
 impl ApiError {
     /// Builds a failure from a code and a static, safe message.
+    ///
+    /// The status comes from the code, which is the right default for every failure a client can
+    /// act on.
     #[must_use]
     pub const fn new(code: ErrorCode, message: &'static str) -> Self {
-        Self { code, message }
+        Self {
+            code,
+            message,
+            status: code.status(),
+        }
     }
 
     /// Missing or expired credentials. The wording matches the golden fixture.
@@ -90,9 +98,17 @@ impl ApiError {
     }
 
     /// A dependency the request needs is down or too slow.
+    ///
+    /// The code stays `INTERNAL` — the failure is on our side and nothing internal may leak — but
+    /// the status is `503`, which is what `spec/openapi.yaml` calls `Unavailable` and what tells a
+    /// client the request is worth repeating.
     #[must_use]
     pub const fn unavailable() -> Self {
-        Self::new(ErrorCode::Internal, "A dependency is unavailable.")
+        Self {
+            code: ErrorCode::Internal,
+            message: "A dependency is unavailable.",
+            status: StatusCode::SERVICE_UNAVAILABLE,
+        }
     }
 
     /// The machine code.
@@ -105,6 +121,12 @@ impl ApiError {
     #[must_use]
     pub const fn message(&self) -> &'static str {
         self.message
+    }
+
+    /// The status this failure is reported with.
+    #[must_use]
+    pub const fn status(&self) -> StatusCode {
+        self.status
     }
 }
 
@@ -126,7 +148,7 @@ impl IntoResponse for ApiError {
         };
         // A cached error is a cached authorization failure; the spec forbids storing either.
         (
-            self.code.status(),
+            self.status,
             [(header::CACHE_CONTROL, "no-store")],
             Json(body),
         )
@@ -194,6 +216,20 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&code).expect("codes serialise"), wire);
         }
+    }
+
+    #[test]
+    fn req_053_an_unavailable_dependency_is_a_503_that_stays_internal() {
+        let error = ApiError::unavailable();
+        assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code(), ErrorCode::Internal);
+        assert_eq!(error.message(), "A dependency is unavailable.");
+        // A genuine internal failure keeps the 500 its code carries; only the dependency case is
+        // a 503, so a client can tell "try again" from "we are broken".
+        assert_eq!(
+            ApiError::new(ErrorCode::Internal, "boom").status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[tokio::test]

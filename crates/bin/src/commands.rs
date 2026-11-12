@@ -20,9 +20,7 @@ use crate::config::Config;
 pub async fn serve(config: Config) -> anyhow::Result<()> {
     let database =
         Postgres::connect_lazy(&config.database).context("the database pool cannot be built")?;
-    let readiness = Readiness::new(vec![
-        database.readiness(config.http.readiness_timeout()),
-    ]);
+    let readiness = Readiness::new(vec![database.readiness(config.http.readiness_timeout())]);
     let state = AppState::new(readiness, config.capabilities.clone(), config.http.clone());
 
     let listener = TcpListener::bind(config.http.bind())
@@ -60,7 +58,7 @@ pub async fn migrate(config: Config) -> anyhow::Result<()> {
 ///
 /// Always returns an error today: the queue lands in M1. A worker that exits `0` without working
 /// would tell a supervisor that jobs are being processed.
-pub async fn worker(_config: Config) -> anyhow::Result<()> {
+pub fn worker(_config: Config) -> anyhow::Result<()> {
     anyhow::bail!("the worker loop arrives in milestone M1 (docs/PLAN.md); nothing is drained yet")
 }
 
@@ -98,4 +96,38 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutdown requested, draining in-flight requests");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_config, worker};
+    use crate::config::Config;
+
+    fn fixture_config() -> Config {
+        Config::from_pairs([("BOMA_DATABASE_URL", "postgres://boma@127.0.0.1:5432/boma")])
+            .expect("the fixture configuration is valid")
+    }
+
+    #[test]
+    fn req_058_the_worker_refuses_to_pretend_it_processed_a_job() {
+        let error = worker(fixture_config()).expect_err("the worker loop does not exist yet");
+        assert!(
+            error.to_string().contains("M1"),
+            "the message must say when the worker arrives: {error}"
+        );
+    }
+
+    #[test]
+    fn req_054_the_configuration_is_logged_with_the_credentials_redacted() {
+        // The rendering must not contain the password; `Config`'s own `Display` is what the log
+        // line uses.
+        let config = fixture_config();
+        let rendered = format!("{config}");
+        assert!(
+            !rendered.contains("postgres://boma@127.0.0.1"),
+            "{rendered}"
+        );
+
+        check_config(&config);
+    }
 }

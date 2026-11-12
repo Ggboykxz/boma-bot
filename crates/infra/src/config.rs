@@ -146,11 +146,8 @@ mod tests {
             );
             assert!(matches!(outcome, Err(ConfigError::OutOfRange { .. })));
         }
-        let outcome = DatabaseSettings::new(
-            "postgres://boma:boma@localhost/boma",
-            10,
-            Duration::ZERO,
-        );
+        let outcome =
+            DatabaseSettings::new("postgres://boma:boma@localhost/boma", 10, Duration::ZERO);
         assert!(matches!(outcome, Err(ConfigError::ZeroDuration { .. })));
     }
 

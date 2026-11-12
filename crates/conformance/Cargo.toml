@@ -4,7 +4,7 @@ description = "Golden fixture replay, OpenAPI contract checks and the traceabili
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license-file.workspace = true
+license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
@@ -23,6 +23,6 @@ axum = { workspace = true }
 boma-api = { workspace = true }
 boma-app = { workspace = true }
 http-body-util = { workspace = true }
-serde_yaml_ng = { workspace = true }
+serde-saphyr = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }

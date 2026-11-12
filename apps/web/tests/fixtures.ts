@@ -147,7 +147,9 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const PASSTHROUGH_PROTOCOLS = new Set(["data:", "blob:", "about:"]);
 
 export const test = base.extend({
-  context: async ({ context }, use) => {
+  // The parameter is named `next`, not `use`: the React hooks lint reads a `use` call as a hook
+  // call, and this is a Playwright fixture, not a component.
+  context: async ({ context }, next) => {
     const blocked: string[] = [];
 
     await context.route("**/*", async (route) => {
@@ -168,7 +170,7 @@ export const test = base.extend({
       await route.continue();
     });
 
-    await use(context);
+    await next(context);
 
     if (blocked.length > 0) {
       throw new Error(

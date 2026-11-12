@@ -5,6 +5,12 @@
 //! the generator is free to order `properties` differently. Every other difference is caught by the
 //! Rust type system or by the response goldens.
 
+// An integration test file is compiled as its own crate, so clippy's `allow-*-in-tests` (which
+// covers `#[test]` functions and `#[cfg(test)]` modules only) does not reach the helpers below.
+// AGENTS.md allows unwrap, expect and panic in test code; this is where that permission is taken,
+// once and in writing.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use std::collections::BTreeSet;
 
 use boma_conformance::repo_path;
@@ -16,7 +22,7 @@ fn generated() -> serde_json::Value {
 fn spec() -> serde_json::Value {
     let path = repo_path("spec/openapi.yaml");
     let text = std::fs::read_to_string(&path).expect("spec/openapi.yaml is readable");
-    serde_yaml_ng::from_str(&text).expect("spec/openapi.yaml is valid YAML")
+    serde_saphyr::from_str(&text).expect("spec/openapi.yaml is valid YAML")
 }
 
 fn statuses(operation: &serde_json::Value) -> BTreeSet<String> {

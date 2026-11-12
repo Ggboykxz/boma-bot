@@ -23,10 +23,28 @@ pub fn init(settings: &TelemetrySettings) -> anyhow::Result<()> {
             .with_current_span(true)
             .with_span_list(true)
             .try_init()
-            .context("installing the JSON log subscriber failed"),
+            .map_err(|error| anyhow::anyhow!("installing the JSON log subscriber failed: {error}")),
         LogFormat::Pretty => tracing_subscriber::fmt()
             .with_env_filter(filter)
             .try_init()
-            .context("installing the log subscriber failed"),
+            .map_err(|error| anyhow::anyhow!("installing the log subscriber failed: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LogFormat, TelemetrySettings, init};
+
+    #[test]
+    fn req_054_an_invalid_filter_is_an_error_and_not_a_silent_fallback() {
+        let settings = TelemetrySettings {
+            filter: "boma_api=not-a-level".to_owned(),
+            format: LogFormat::Pretty,
+        };
+        let error = init(&settings).expect_err("an invalid filter must fail loudly");
+        assert!(
+            error.to_string().contains("BOMA_LOG_FILTER"),
+            "the message must name the variable to fix: {error}"
+        );
     }
 }

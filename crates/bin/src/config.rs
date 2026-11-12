@@ -118,8 +118,16 @@ impl Config {
                 "BOMA_BIND_ADDR",
                 SocketAddr::from(([127, 0, 0, 1], 3000)),
             )?,
-            Duration::from_millis(optional_parsed(&env, "BOMA_REQUEST_TIMEOUT_MS", 30_000_u64)?),
-            Duration::from_millis(optional_parsed(&env, "BOMA_READINESS_TIMEOUT_MS", 5_000_u64)?),
+            Duration::from_millis(optional_parsed(
+                &env,
+                "BOMA_REQUEST_TIMEOUT_MS",
+                30_000_u64,
+            )?),
+            Duration::from_millis(optional_parsed(
+                &env,
+                "BOMA_READINESS_TIMEOUT_MS",
+                5_000_u64,
+            )?),
             optional_parsed(&env, "BOMA_MAX_BODY_BYTES", 64 * 1024_usize)?,
             parse_ip_list(&env, "BOMA_TRUSTED_PROXIES")?,
         )?;
@@ -167,7 +175,10 @@ impl fmt::Display for Config {
         write!(
             f,
             "http=[{}] database=[{:?}] logs=[filter={} format={:?}] version={}",
-            self.http, self.database, self.telemetry.filter, self.telemetry.format,
+            self.http,
+            self.database,
+            self.telemetry.filter,
+            self.telemetry.format,
             self.capabilities.version
         )
     }
@@ -192,10 +203,9 @@ where
     T: FromStr,
 {
     optional(env, name).map_or(Ok(default), |value| {
-        value.parse::<T>().map_err(|_| ConfigError::Invalid {
-            name,
-            value,
-        })
+        value
+            .parse::<T>()
+            .map_err(|_| ConfigError::Invalid { name, value })
     })
 }
 
@@ -242,7 +252,9 @@ mod tests {
         let outcome = Config::from_pairs(Vec::<(&str, &str)>::new());
         assert!(matches!(outcome, Err(ConfigError::Missing { .. })));
         assert_eq!(
-            Config::from_pairs([("BOMA_DATABASE_URL", "  ")]).err().map(|e| e.to_string()),
+            Config::from_pairs([("BOMA_DATABASE_URL", "  ")])
+                .err()
+                .map(|e| e.to_string()),
             Some("`BOMA_DATABASE_URL` is required".to_owned())
         );
     }
@@ -253,7 +265,10 @@ mod tests {
         assert_eq!(config.http.bind().ip().to_string(), "127.0.0.1");
         assert_eq!(config.http.bind().port(), 3000);
         assert_eq!(config.http.body_limit_bytes(), 64 * 1024);
-        assert!(config.http.trusted_proxies().is_empty(), "no proxy is trusted by default");
+        assert!(
+            config.http.trusted_proxies().is_empty(),
+            "no proxy is trusted by default"
+        );
         assert_eq!(config.database.max_connections(), 10);
         assert_eq!(config.telemetry.format, LogFormat::Pretty);
         assert_eq!(config.capabilities.version, env!("CARGO_PKG_VERSION"));

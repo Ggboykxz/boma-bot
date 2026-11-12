@@ -4,7 +4,11 @@
 //! dependency with a deadline and reports the deployment's capabilities. Neither route is
 //! authenticated — that is the point of a probe — so neither may disclose a secret (REQ-054).
 
-use axum::{Json, extract::State, response::{IntoResponse, Response}};
+use axum::{
+    Json,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use boma_app::Capabilities;
 use serde::{Deserialize, Serialize};
 
@@ -106,7 +110,10 @@ pub async fn liveness() -> Json<Liveness> {
     )
 )]
 pub async fn readiness(State(state): State<AppState>) -> Response {
-    let report = state.readiness().report(state.http().readiness_timeout()).await;
+    let report = state
+        .readiness()
+        .report(state.http().readiness_timeout())
+        .await;
     if report.is_ready() {
         return Json(ReadinessBody::from_capabilities(state.capabilities())).into_response();
     }
@@ -180,7 +187,10 @@ mod tests {
             "degraded",
             "revision",
         ] {
-            assert!(keys.iter().any(|key| key.as_str() == expected), "{expected}");
+            assert!(
+                keys.iter().any(|key| key.as_str() == expected),
+                "{expected}"
+            );
         }
         assert_eq!(json["ok"], serde_json::json!(true));
     }

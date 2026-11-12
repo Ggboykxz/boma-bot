@@ -5,7 +5,7 @@ import next from "eslint-config-next";
  * than wrapped in `extends`. The generated outputs are ignored: linting them would report the
  * framework's own code.
  */
-export default [
+const config = [
   {
     ignores: [
       ".next/**",
@@ -18,3 +18,5 @@ export default [
   },
   ...next,
 ];
+
+export default config;

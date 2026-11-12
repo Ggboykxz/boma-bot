@@ -4,6 +4,12 @@
 //! Pending fixtures are not silently ignored: each one prints `SKIP <name> (<req>): <reason>`, and
 //! `tests/golden_manifest.rs` refuses a pending entry without a reason.
 
+// An integration test file is compiled as its own crate, so clippy's `allow-*-in-tests` (which
+// covers `#[test]` functions and `#[cfg(test)]` modules only) does not reach the helpers below.
+// AGENTS.md allows unwrap, expect and panic in test code; this is where that permission is taken,
+// once and in writing.
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -67,7 +73,7 @@ fn golden_state() -> AppState {
     )
 }
 
-async fn replay(fixture: &Fixture) -> Response {
+async fn replay(fixture: &Fixture) -> Response<Body> {
     let mut builder = Request::builder()
         .method(fixture.request.method.as_str())
         .uri(fixture.request.path.as_str());
@@ -78,9 +84,9 @@ async fn replay(fixture: &Fixture) -> Response {
         );
     }
     let body = match &fixture.request.body {
-        Some(value) => Body::from(
-            serde_json::to_vec(value).expect("the fixture request body is serialisable"),
-        ),
+        Some(value) => {
+            Body::from(serde_json::to_vec(value).expect("the fixture request body is serialisable"))
+        }
         None => Body::empty(),
     };
     let request = builder.body(body).expect("the fixture request builds");
