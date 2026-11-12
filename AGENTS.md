@@ -3,6 +3,8 @@ Mission
 
 Rebuild, from the specification in ./spec, a new software that does everything the spec requires and does it better. The backend is written in Rust, and the user interface, when the spec has one, is built with BoardUI. You may consult the original workspace and the running original whenever it helps; the spec remains the contract. Reply to me in informal French. Everything you write to disk (code, docs, commit messages) is in English, except user-facing texts when the spec says otherwise.
 
+The product you are building is called Boma Bot. Use that name for the product, the binaries, the package scope (@boma/*), the environment prefix (BOMA_*), the app ids (com.boma.app) and any user-visible string. Never ship the original's brand, domain, package scope or identifiers; the analysed tree in ../re-workspace keeps its own names so its citations stay valid.
+
 Source of truth
 
 Work from ./spec. If ./spec has no 01-requirements.md, stop and tell me to run /spec in the analysis workspace and then tools/export-spec.sh.

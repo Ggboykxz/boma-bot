@@ -1,6 +1,9 @@
 # rebuild-workspace : reconstruire le logiciel analysé, en Rust et en mieux
 Uniquement pour un logiciel que tu possèdes ou que tu es autorisé à reproduire ou remplacer. La spec est le contrat ; l'original reste une référence disponible. Ce n'est pas un avis juridique : vérifie licences, CLUF et droits sur les assets avant de publier quoi que ce soit.
 
+## Le produit
+Le logiciel reconstruit s'appelle **Boma Bot**. C'est la cible de `re-workspace` (Rakazo) réécrite : même comportement attendu, nom, marque, scope de paquets (`@boma/*`), variables d'environnement (`BOMA_*`) et identifiants d'applis (`com.boma.app`) à toi. Aucun asset, logo, domaine ou texte de la marque d'origine n'est repris sans vérification de licence.
+
 ## Le principe
 `re-workspace` produit une spec de comportement (notes/spec/) et des captures de référence (notes/ui/). Tu relis, puis `rebuild-workspace` reconstruit à partir de cette spec. L'agent peut consulter l'original et l'exécuter à côté du nouveau pour comparer ; il note ce qu'il a consulté dans docs/STATE.md, et préfère réimplémenter plutôt que copier. Backend en Rust ; pour tout le reste (base de données, UI, mobile, CLI, déploiement...) l'agent choisit lui-même et justifie chaque choix dans un ADR (docs/adr/). Tu n'as qu'à poser ton veto.
 
