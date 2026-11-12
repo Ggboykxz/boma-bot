@@ -4,16 +4,20 @@ Every third-party artefact, why it is here, and its licence. Versions were resol
 registry on **2026-11-12** (`crates.io` API `max_stable_version`, `registry.npmjs.org` `/latest`),
 never typed from memory. Refresh this table and `docs/STATE.md` together when you bump something.
 
-**CONFIRMED**: resolved from the registries above. **Not confirmed**: that the workspace compiles
-with this set — no Rust toolchain or Docker is installed in this session (see `docs/STATE.md`).
+**CONFIRMED**: resolved from the registries above, and the workspace compiles, lints, tests and
+passes `cargo deny check` with this exact set (commands and results in `docs/STATE.md`).
 
 ## Project licence
 
 | Subject | Value |
 | --- | --- |
-| Boma Bot | **TO BE CHOSEN BY THE OWNER** (`LICENSE`) |
+| Boma Bot | **MIT** (`LICENSE`) — chosen by the agent on 2026-11-12 to unblock `cargo deny`; the owner may change it in one edit (`Cargo.toml` + `LICENSE`) and re-run `cargo deny check` |
 | Constraint on dependencies | every licence below is compatible with an open-source release |
 | Enforcement | `cargo deny check` with the allow-list in `deny.toml` |
+
+`cargo deny` reads an SPDX expression, not a prose file: a workspace without `license = "…"` is
+reported as `unlicensed` and the gate fails. That is why the licence is an expression in
+`[workspace.package]` rather than only a file.
 
 ## Rust crates
 
@@ -29,7 +33,7 @@ maintenance, licence, simplicity).
 | `sqlx` | 0.9.0 | MIT OR Apache-2.0 | checked queries, migrations, pool (ADR-001). MSRV 1.94 sets ours |
 | `serde` | 1.0.229 | MIT OR Apache-2.0 | DTOs, fixtures, manifest |
 | `serde_json` | 1.0.154 | MIT OR Apache-2.0 | JSON bodies and golden comparison |
-| `serde_yaml_ng` | 0.10.0 | MIT | parse `spec/openapi.yaml` in the contract test (maintained fork of `serde_yaml`) |
+| `serde-saphyr` | 2.1.1 | MIT OR Apache-2.0 | parse `spec/openapi.yaml` in the contract test. Replaces `serde_yaml_ng`, whose `unsafe-libyaml` base is archived (RUSTSEC-2024-0449) |
 | `thiserror` | 2.0.21 | MIT OR Apache-2.0 | typed errors in libraries |
 | `anyhow` | 1.0.104 | MIT OR Apache-2.0 | binary edge only, per AGENTS.md |
 | `tracing` | 0.1.44 | MIT | structured logs with spans |
@@ -42,6 +46,17 @@ maintenance, licence, simplicity).
 Deliberately **not** added yet, so no unused dependency rots in the tree: `argon2`, `secrecy`,
 `aes-gcm`, `proptest`, `wiremock`, `testcontainers`, `criterion`, `reqwest`. Each arrives with the
 milestone that needs it (M1 for argon2/`secrecy`/proptest, M2 for `wiremock`, M4 for HTTP providers).
+
+**YAML parser (deliberate).** The contract test parses the spec's OpenAPI document, so one YAML
+parser is needed. `serde_yaml_ng` was replaced by **`serde-saphyr` 2.1.1** (published 2026-11-05,
+MSRV 1.89): the old one depends on `unsafe-libyaml`, whose repository was archived in 2024 and
+carries RUSTSEC-2024-0449, and `cargo deny` refuses it. `serde-saphyr` is a typed, panic-free
+parser with no unsafe code of its own; the crate is used with `default-features = false` and only
+the `deserialize` feature, so the optional validation and diagnostic stacks stay out of the graph.
+
+**One extra allowed licence.** `webpki-roots` (pulled in by `sqlx`'s `tls-rustls-ring` feature)
+ships the Mozilla root store under `CDLA-Permissive-2.0`. It is permissive and compatible with the
+project's own licence, so `deny.toml` allows it explicitly rather than disabling the check.
 
 ## Node packages (`apps/web`)
 

@@ -35,22 +35,22 @@ Nouvelle session : `/resume` relit docs/STATE.md et continue.
 | /ui-parity | Compare l'UI reconstruite et l'originale écran par écran (docs/UI-PARITY.md) |
 
 ## Démarrage rapide (état M0)
-M0 est écrit mais **pas encore compilé** : aucune toolchain Rust, Docker ou base de données n'était disponible pendant le scaffold. Les commandes ci-dessous sont celles que la CI exécute ; tant qu'elles n'ont pas tourné sur une machine outillée, considère le squelette comme non vérifié (docs/STATE.md).
+M0 est écrit, compilé, linté et testé : `make check` et `make ui-test` passent (résultats et commandes exactes dans docs/STATE.md). Le squelette a été éprouvé contre un vrai PostgreSQL 17 et un vrai Chromium.
 
-Prérequis : `rustup` (le fichier `rust-toolchain.toml` épingle 1.99.1 ; la MSRV est 1.94, imposée par sqlx 0.9), PostgreSQL 17, Node 22 pour l'UI seulement.
+Prérequis : `rustup` (le fichier `rust-toolchain.toml` épingle 1.99.1 ; la MSRV est 1.94, imposée par sqlx 0.9), PostgreSQL 17, Node 22 pour l'UI seulement, et les outils qualité `cargo-nextest`, `cargo-llvm-cov`, `cargo-deny`, `cargo-machete` (la CI les installe toute seule).
 
-1. Générer les verrous une fois, puis les committer :
-   `make deps-lock` puis `git add Cargo.lock apps/web/package-lock.json`.
-   Sans eux, `cargo build --locked` et `npm ci` échouent volontairement bruyamment.
-2. API en local :
-   `cp .env.example .env`, `cargo run --bin boma -- migrate`, `cargo run --bin boma -- serve`,
+1. Verrous déjà générés et commités : `Cargo.lock` et `apps/web/package-lock.json` existent. Si tu les régénères, `make deps-lock` puis `git add`.
+2. Base : `docker compose up -d db`, ou un PostgreSQL local avec `BOMA_DATABASE_URL` pointant dessus.
+3. API en local :
+   `cargo run --bin boma -- migrate`, `cargo run --bin boma -- serve`,
    puis `curl 127.0.0.1:3000/health` et `curl 127.0.0.1:3000/ready`.
-3. UI en local (serveur de dev sur 127.0.0.1:3100) :
-   `npm --prefix apps/web install` puis `npm --prefix apps/web run dev`.
-4. Portes qualité : `make check` (fmt, clippy, tests, trace, secrets) et `make ui-test` (Playwright, goldens UI, axe).
-5. Docker : `docker compose up --build` ; le service `migrate` applique les migrations avant que `app` ne serve.
+4. UI en local (serveur de dev sur 127.0.0.1:3100) :
+   `npm --prefix apps/web ci` puis `npm --prefix apps/web run dev`.
+5. Portes qualité : `make check` (fmt, clippy, types, tests, couverture, deny, machete, trace, secrets) et `make ui-test` (Playwright, goldens UI, axe).
+6. Docker : `docker compose up --build` ; le service `migrate` applique les migrations avant que `app` ne serve.
 
-`/healthz` et `/readyz` existent comme alias exigés par AGENTS.md ; le contrat de la spec reste `/health` et `/ready`. L'écart est assumé et documenté dans docs/STATE.md.
+Le contrat de la spec reste `/health` et `/ready` ; `/healthz` et `/readyz` existent en plus comme alias exigés par AGENTS.md. L'écart est assumé et documenté dans docs/STATE.md (DEV-01).
+La licence du projet est MIT (choix de l'agent pour débloquer `cargo deny`) : change-la dans `Cargo.toml` + `LICENSE` et relance `cargo deny check` si tu veux autre chose.
 
 ## UI/UX : BoardUI, Playwright, accessibilité
 BoardUI fournit les composants, les tokens sémantiques, les règles de design et un skill. `boardui_get_started` confirme le framework (Tailwind v4 / shadcn) avant de s'engager. La clé Pro se colle dans la conversation, jamais dans un fichier ni un commit.
