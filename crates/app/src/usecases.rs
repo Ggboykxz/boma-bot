@@ -538,6 +538,110 @@ async fn hydrate_reactions(
     Ok(messages)
 }
 
+/// The head of a thread as the caller sees it (REQ-009).
+///
+/// `lastSeq` is the highest sequence the thread has allocated, `readSeq` is the caller's
+/// position in it and `unreadCount` counts the visible messages above it. Background steps
+/// (role `tool`) are not counted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadHead {
+    /// The thread's id.
+    pub thread_id: String,
+    /// The highest sequence the thread has allocated.
+    pub last_seq: i64,
+    /// When the newest message was written, when there is one.
+    pub last_message_at: Option<String>,
+    /// The caller's read position.
+    pub read_seq: i64,
+    /// How many visible messages sit above the caller's position.
+    pub unread_count: u64,
+}
+
+/// Reads the head of a thread for the caller (REQ-009).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the thread does not exist in the caller's tenant.
+pub async fn thread_head(
+    app: &App,
+    context: &TenantContext,
+    thread_id: &str,
+) -> Result<ThreadHead, AppError> {
+    head_with(app, context, thread_id, None).await
+}
+
+/// Marks the caller's read position to the newest message of the thread (REQ-009).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the thread does not exist in the caller's tenant.
+pub async fn mark_read(
+    app: &App,
+    context: &TenantContext,
+    thread_id: &str,
+) -> Result<ThreadHead, AppError> {
+    head_with(app, context, thread_id, Some(true)).await
+}
+
+/// Marks the caller's read position to zero (REQ-009).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the thread does not exist in the caller's tenant.
+pub async fn mark_unread(
+    app: &App,
+    context: &TenantContext,
+    thread_id: &str,
+) -> Result<ThreadHead, AppError> {
+    head_with(app, context, thread_id, Some(false)).await
+}
+
+/// The head a caller sees; `mark` decides whether to move the read position first.
+async fn head_with(
+    app: &App,
+    context: &TenantContext,
+    thread_id: &str,
+    mark: Option<bool>,
+) -> Result<ThreadHead, AppError> {
+    let thread_id =
+        boma_domain::ThreadId::new(thread_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .threads
+        .find(context, &thread_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let page = app
+        .stores
+        .messages
+        .page(context, &thread_id, None, 1)
+        .await?;
+    let last = page.messages.first();
+    let last_seq = last.map_or(0, |message| message.seq);
+    let last_message_at = last.map(|message| message.created_at.clone());
+    let read_seq = match mark {
+        Some(true) => {
+            app.stores
+                .read_states
+                .set(context, &thread_id, last_seq)
+                .await?
+        }
+        Some(false) => app.stores.read_states.set(context, &thread_id, 0).await?,
+        None => app.stores.read_states.position(context, &thread_id).await?,
+    };
+    let unread_count = app
+        .stores
+        .messages
+        .count_above(context, &thread_id, read_seq)
+        .await?;
+    Ok(ThreadHead {
+        thread_id: thread_id.as_str().to_owned(),
+        last_seq,
+        last_message_at,
+        read_seq,
+        unread_count,
+    })
+}
+
 /// The activity projection: the runs of a bot, newest first (REQ-011).
 ///
 /// # Errors

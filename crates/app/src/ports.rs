@@ -460,6 +460,21 @@ pub trait MessageStore: Send + Sync {
         client_nonce: &str,
     ) -> Result<Option<Message>, AppError>;
 
+    /// The number of visible messages above `seq` in this thread (REQ-009).
+    ///
+    /// Background steps (role `tool`) are not counted: the unread divider and its badge
+    /// describe the conversation the person can see.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn count_above(
+        &self,
+        context: &boma_domain::TenantContext,
+        thread_id: &boma_domain::ThreadId,
+        seq: i64,
+    ) -> Result<u64, AppError>;
+
     /// A page of the thread's history, newest first.
     ///
     /// # Errors
@@ -734,6 +749,33 @@ pub enum ReactionAction {
     Add,
     /// Remove the emoji for this person.
     Remove,
+}
+
+/// The per-member read position of a conversation (REQ-009).
+#[async_trait]
+pub trait ReadStateStore: Send + Sync {
+    /// The caller's read position in this thread; zero when they never read it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn position(
+        &self,
+        context: &boma_domain::TenantContext,
+        thread_id: &boma_domain::ThreadId,
+    ) -> Result<i64, AppError>;
+
+    /// Sets the caller's read position, returning the value stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn set(
+        &self,
+        context: &boma_domain::TenantContext,
+        thread_id: &boma_domain::ThreadId,
+        last_seq: i64,
+    ) -> Result<i64, AppError>;
 }
 
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).

@@ -20,9 +20,9 @@ use boma_domain::{
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMessageStore, PostgresReactionStore, PostgresRunStore,
-    PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
-    PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresInvitationStore, PostgresMessageStore, PostgresReactionStore, PostgresReadStateStore,
+    PostgresRunStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
 };
 
 mod common;
@@ -66,7 +66,8 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresCardStore::new(pool.clone())),
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
-            Arc::new(PostgresReactionStore::new(pool)),
+            Arc::new(PostgresReactionStore::new(pool.clone())),
+            Arc::new(PostgresReadStateStore::new(pool)),
         ),
         boma_app::Services::new(
             publisher,
@@ -887,5 +888,46 @@ async fn req_008_reactions_round_trip_in_postgres() {
     .expect("the removal lands");
     assert_eq!(removed.reactions, []);
 
+    cleanup(&database, &organization_id, &email).await;
+}
+
+#[tokio::test]
+async fn req_009_the_read_position_round_trips_in_postgres() {
+    let database = common::database().await;
+    let app = app(&database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "readstate").await;
+    let (thread_id, message_id) =
+        seed_thread_with_message(&app, &context, &space_id, &user_id).await;
+
+    // An unread thread: the caller's head reports zero read, one unread, the newest message set.
+    let head = boma_app::usecases::thread_head(&app, &context, thread_id.as_str())
+        .await
+        .expect("the head answers");
+    assert_eq!(head.read_seq, 0);
+    assert_eq!(head.unread_count, 1);
+    assert_eq!(head.last_seq, 1);
+    assert!(head.last_message_at.is_some());
+    let _ = message_id;
+
+    // Marking read moves the position to the newest sequence, and a reload keeps it.
+    let marked = boma_app::usecases::mark_read(&app, &context, thread_id.as_str())
+        .await
+        .expect("the mark lands");
+    assert_eq!(marked.read_seq, 1);
+    assert_eq!(marked.unread_count, 0);
+    let after = boma_app::usecases::thread_head(&app, &context, thread_id.as_str())
+        .await
+        .expect("the head answers after marking");
+    assert_eq!(after.read_seq, 1);
+
+    // Marking unread moves it back to zero, and the badge counts everything again.
+    let unread = boma_app::usecases::mark_unread(&app, &context, thread_id.as_str())
+        .await
+        .expect("the mark lands");
+    assert_eq!(unread.read_seq, 0);
+    assert_eq!(unread.unread_count, 1);
+
+    // The cross-tenant denial is proven with the RLS probe in tenancy.rs: here the connection is
+    // a superuser, the policies do not apply, and reading through it would prove nothing.
     cleanup(&database, &organization_id, &email).await;
 }

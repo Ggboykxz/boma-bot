@@ -8,9 +8,9 @@
 
 mod common;
 
-use boma_app::ports::{BotStore, MessageStore};
+use boma_app::ports::{BotStore, MessageStore, ReadStateStore};
 use boma_domain::{SystemReason, TenantContext};
-use boma_infra::{PostgresBotStore, PostgresMessageStore};
+use boma_infra::{PostgresBotStore, PostgresMessageStore, PostgresReadStateStore};
 
 #[tokio::test]
 async fn req_043_rls_hides_another_tenants_rows() {
@@ -112,6 +112,44 @@ async fn req_043_a_system_context_reaches_every_tenant() {
         1,
         "the system path reaches the messages of the second tenant"
     );
+
+    common::cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn req_009_a_read_position_cannot_cross_tenants() {
+    let database = common::database().await;
+    let pool = common::tenant_pool(&database).await;
+    let prefix = common::unique_id();
+
+    let first = common::fixture(&pool, &format!("{prefix}a")).await;
+    let second = common::fixture(&pool, &format!("{prefix}b")).await;
+
+    let reads = PostgresReadStateStore::new(pool.clone());
+
+    // A write against another tenant's thread is refused: nothing is stored, and nothing is
+    // silently attributed to the wrong space.
+    let refused = reads.set(&first.context, &second.thread_id, 7).await;
+    assert!(matches!(refused, Err(boma_app::AppError::NotFound)));
+
+    // A read for that thread defaults to zero: the other tenant's position never leaks.
+    let position = reads
+        .position(&first.context, &second.thread_id)
+        .await
+        .expect("the position answers");
+    assert_eq!(position, 0);
+
+    // The write inside the caller's tenant works and is remembered.
+    let stored = reads
+        .set(&first.context, &first.thread_id, 7)
+        .await
+        .expect("the write lands");
+    assert_eq!(stored, 7);
+    let position = reads
+        .position(&first.context, &first.thread_id)
+        .await
+        .expect("the position answers");
+    assert_eq!(position, 7);
 
     common::cleanup(&pool, &prefix).await;
 }

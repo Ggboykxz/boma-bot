@@ -320,6 +320,7 @@ impl TestAppBuilder {
             Arc::new(database.effects()),
             Arc::new(database.tools()),
             Arc::new(database.reactions()),
+            Arc::new(database.read_states()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,

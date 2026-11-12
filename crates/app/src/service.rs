@@ -11,8 +11,8 @@ use crate::{
     error::AppError,
     ports::{
         AccountStore, BotStore, CardStore, Clock, EffectStore, EventPublisher, EventStore,
-        IdGenerator, InvitationStore, MessageStore, PasswordHasher, ReactionStore, RunStore,
-        SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
+        IdGenerator, InvitationStore, MessageStore, PasswordHasher, ReactionStore, ReadStateStore,
+        RunStore, SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -47,6 +47,8 @@ pub struct Stores {
     pub tools: Arc<dyn ToolStore>,
     /// Emoji reactions on messages (REQ-008).
     pub reactions: Arc<dyn ReactionStore>,
+    /// Per-member read positions (REQ-009).
+    pub read_states: Arc<dyn ReadStateStore>,
 }
 
 impl Stores {
@@ -71,6 +73,7 @@ impl Stores {
         effects: Arc<dyn EffectStore>,
         tools: Arc<dyn ToolStore>,
         reactions: Arc<dyn ReactionStore>,
+        read_states: Arc<dyn ReadStateStore>,
     ) -> Self {
         Self {
             accounts,
@@ -87,6 +90,7 @@ impl Stores {
             effects,
             tools,
             reactions,
+            read_states,
         }
     }
 }

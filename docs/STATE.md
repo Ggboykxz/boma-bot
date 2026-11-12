@@ -64,16 +64,29 @@
   banner with the quote; the transcript renders replies as a quoted block; the composer keeps a
   reply context with a cancel button; a Playwright test covers the click-to-reply flow.
 
-Remaining in M2, in dependency order: REQ-009 read state (SHOULD); mentions (REQ-008) wait on
-REQ-010 group chats (M2 scope decision, documented above); the tool-call loop and the refusal
-audit event from REQ-016 are the last piece of REQ-016 and land with the agent engine that makes
-the call (milestone M3/M5); the BYOK and provider OAuth login legs of REQ-015 land with M8
-(models and credentials); the "helper answers, parent continues" branch of REQ-019 lands with M3
-(the agent engine).
+- **REQ-009 (read state, MUST-adjacent SHOULD)** is done for the read-state slice: per-member
+  `thread_read_states` (migration `0010_read_states.sql`, RLS), the `ReadStateStore` port with
+  Postgres and memory adapters, `threads.head`, `threads.markRead` and `threads.markUnread` in the
+  wire. The head answers `{threadId, lastSeq, lastMessageAt, readSeq, unreadCount}` — the unread
+  count excludes background steps (role `tool`). The transcript renders one `role="separator"`
+  divider after the last read message, with the count, and the screen marks the position in the
+  background on load, so the next visit opens clean. Hydrated via the same messages page (no extra
+  round trip for the divider position itself). Proved at three levels (memory, RPC surface, real
+  Postgres) plus the RLS probe for cross-tenant denial, and the `REQ-009-unread-divider` UI golden
+  replays. Honest gap: **snooze** (the second half of REQ-009) is NOT implemented: the wire has no
+  bots roster to hide a snoozed chat from, the rail renders a client-side directory with no
+  per-bot activity signal, and inventing a roster here would be new surface beyond the M2
+  contract. `threads.snooze` is deliberately not stubbed. See "Decisions needed".
+
+Remaining in M2, in dependency order: mentions (REQ-008) wait on REQ-010 group chats (M11, not
+M2); the snooze half of REQ-009 (documented below); the tool-call loop and the refusal audit
+event from REQ-016 are the last piece of REQ-016 and land with the agent engine that makes the
+call (milestone M3/M5); the BYOK and provider OAuth login legs of REQ-015 land with M8 (models
+and credentials); the "helper answers, parent continues" branch of REQ-019 lands with M3 (the
+agent engine).
 
 The current commit carries REQ-003, REQ-006, REQ-007, REQ-008 (replies/quotes and reactions),
-REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton); M2 is not done yet — REQ-009 read state is the
-next slice.
+REQ-009 (read state), REQ-015, REQ-016, REQ-017 and REQ-019 (skeleton).
 
 ## Done
 
@@ -382,6 +395,7 @@ recommendation stands.
 
 | REQ | Why | Where recorded |
 |---|---|---|
+| REQ-009 (snooze) | The spec bundles it with read state; the wire has no bots roster to hide a snoozed chat from and the rail renders a client-side directory, so any honest implementation needs the roster + snoozed shelf as its own slice. The golden only pins the unread divider. Not stubbed. | STATE, PLAN §5, this entry |
 | REQ-049 (voice, COULD) | Not needed for a functional core; interfaces stay additive | PLAN §5 |
 | REQ-055 (desktop, SHOULD) | Tauri shell lands at M10, after screens and signed releases exist | ADR-016, `apps/desktop/README.md` |
 | REQ-056 (mobile, SHOULD) | PWA ships in M1; the Expo shell waits until device pairing is exercised | ADR-016, PLAN §5 |

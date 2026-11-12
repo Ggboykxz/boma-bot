@@ -10,6 +10,8 @@ import { ThreadComposer } from "@/components/thread/thread-composer";
 import {
   botsGet,
   normalizeMessage,
+  threadsHead,
+  threadsMarkRead,
   threadsMessages,
   threadsReact,
   threadsSend,
@@ -55,6 +57,8 @@ export function ThreadScreen({ botId }: { botId: string }) {
   const [reloadToken, setReloadToken] = useState(0);
   const [replyTo, setReplyTo] = useState<MessageView | null>(null);
   const [pickerFor, setPickerFor] = useState<string | null>(null);
+  const [readSeq, setReadSeq] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const lastSeq = useRef(0);
   const threadIdRef = useRef<string | null>(null);
@@ -92,15 +96,23 @@ export function ThreadScreen({ botId }: { botId: string }) {
       registerBot({ id: reply.id, name: reply.name });
       threadIdRef.current = reply.threadId;
 
-      const page = await threadsMessages({ threadId: reply.threadId }, controller.signal);
+      const [page, head] = await Promise.all([
+        threadsMessages({ threadId: reply.threadId }, controller.signal),
+        threadsHead({ threadId: reply.threadId }, controller.signal),
+      ]);
       if (controller.signal.aborted) {
         return;
       }
+      setReadSeq(head.readSeq);
+      setUnreadCount(head.unreadCount);
       // The server answers newest first; the transcript shows the newest at the bottom.
       const ordered = [...page.messages].reverse();
       setMessages(ordered);
       lastSeq.current = ordered.reduce((highest, message) => Math.max(highest, message.seq), 0);
       setPhase("ready");
+      // The read position is marked right away, in the background: this visit keeps whatever
+      // divider the fetched readSeq rendered; the next visit opens clean (REQ-009).
+      threadsMarkRead({ threadId: reply.threadId }).catch(() => undefined);
     };
 
     load().catch(() => {
@@ -248,6 +260,11 @@ export function ThreadScreen({ botId }: { botId: string }) {
     }
   }, [applyMessage, botId, draft, sending, replyTo]);
 
+  // The divider sits after the last message the caller had read (REQ-009). Messages are ordered
+  // by sequence, so it is the position of the first message above the read position.
+  const dividerIndex = messages.findIndex((entry) => entry.seq > readSeq);
+  const dividerCount =
+    dividerIndex === -1 ? 0 : Math.max(unreadCount, messages.length - dividerIndex);
   const runKey = runStatus === null ? null : runStatusKey(runStatus);
   const runLabel = runStatus === null ? null : (runKey === null ? runStatus : t(runKey));
 
@@ -293,7 +310,23 @@ export function ThreadScreen({ botId }: { botId: string }) {
 
         {messages.length > 0 ? (
           <ul className="flex flex-col gap-4">
-            {messages.map((message) => (
+            {messages.flatMap((message, index) => {
+              const divider =
+                index === dividerIndex ? (
+                  <li
+                    key="unread-divider"
+                    role="separator"
+                    aria-label={`${dividerCount} ${t("thread.unread.label")}`}
+                    className="flex items-center gap-2 py-1"
+                  >
+                    <span aria-hidden="true" className="border-separator-border flex-1 border-t" />
+                    <span className="text-text-secondary text-caption-1-semibold whitespace-nowrap">
+                      {dividerCount} {t("thread.unread.label")}
+                    </span>
+                    <span aria-hidden="true" className="border-separator-border flex-1 border-t" />
+                  </li>
+                ) : null;
+              const row = (
               <li key={message.id} className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <p className="text-text-tertiary text-caption-1-semibold">
@@ -384,7 +417,9 @@ export function ThreadScreen({ botId }: { botId: string }) {
                   </ul>
                 ) : null}
               </li>
-            ))}
+              );
+              return divider ? [divider, row] : [row];
+            })}
           </ul>
         ) : null}
 

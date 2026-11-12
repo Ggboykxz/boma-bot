@@ -156,6 +156,34 @@ pub struct SendReply {
     pub status: String,
 }
 
+/// The head of a thread, as the client renders the unread divider and its badge (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHeadReply {
+    /// The thread's id.
+    pub thread_id: String,
+    /// The highest sequence the thread has allocated.
+    pub last_seq: i64,
+    /// When the newest message was written, when there is one.
+    pub last_message_at: Option<String>,
+    /// The caller's read position.
+    pub read_seq: i64,
+    /// How many visible messages sit above the caller's position.
+    pub unread_count: u64,
+}
+
+impl From<&boma_app::usecases::ThreadHead> for ThreadHeadReply {
+    fn from(head: &boma_app::usecases::ThreadHead) -> Self {
+        Self {
+            thread_id: head.thread_id.clone(),
+            last_seq: head.last_seq,
+            last_message_at: head.last_message_at.clone(),
+            read_seq: head.read_seq,
+            unread_count: head.unread_count,
+        }
+    }
+}
+
 /// The reply of `threads.messages`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

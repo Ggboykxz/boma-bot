@@ -208,6 +208,30 @@ impl MessageStore for PostgresMessageStore {
         })
     }
 
+    async fn count_above(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+        seq: i64,
+    ) -> Result<u64, AppError> {
+        let thread_key = thread_id.as_str().to_owned();
+        let count = tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM messages
+                     WHERE thread_id = $1 AND seq > $2 AND role <> 'tool'",
+                )
+                .bind(thread_key.as_str())
+                .bind(seq)
+                .fetch_one(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)
+            })
+        })
+        .await?;
+        Ok(u64::try_from(count).unwrap_or(u64::MAX))
+    }
+
     async fn set_text(
         &self,
         context: &TenantContext,

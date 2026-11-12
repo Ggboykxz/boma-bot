@@ -24,7 +24,7 @@ use crate::{
     state::AppState,
     wire::{
         AnswerReply, BotReply, CancelReply, InvitationReply, MessagesReply, ReactReply, RunView,
-        RunsReply, SendReply, SpaceReply,
+        RunsReply, SendReply, SpaceReply, ThreadHeadReply,
     },
 };
 
@@ -51,6 +51,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::THREADS, "subscribe"),
         (namespaces::THREADS, "answer"),
         (namespaces::THREADS, "react"),
+        (namespaces::THREADS, "head"),
+        (namespaces::THREADS, "markRead"),
+        (namespaces::THREADS, "markUnread"),
         (namespaces::BOTS, "create"),
         (namespaces::BOTS, "get"),
         (namespaces::SPACES, "create"),
@@ -92,6 +95,15 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::THREADS, "react") => threads_react(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::THREADS, "head") => threads_head(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::THREADS, "markRead") => threads_mark_read(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::THREADS, "markUnread") => threads_mark_unread(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "create") => bots_create(state, auth, body)
@@ -353,6 +365,47 @@ struct ThreadAnswerRequest {
     card_id: String,
     /// The answer a member gives.
     answer: String,
+}
+
+/// The body of `threads.head`, `threads.markRead` and `threads.markUnread` (REQ-009).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThreadHeadRequest {
+    /// The thread whose head the caller wants.
+    thread_id: String,
+}
+
+/// `threads.head` — the caller's view of the thread's tail and own read position (REQ-009).
+async fn threads_head(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ThreadHeadReply, ApiError> {
+    let request: ThreadHeadRequest = parse(&body)?;
+    let head = usecases::thread_head(state.app(), &auth.actor.context, &request.thread_id).await?;
+    Ok(ThreadHeadReply::from(&head))
+}
+
+/// `threads.markRead` — move the caller's read position to the newest message (REQ-009).
+async fn threads_mark_read(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ThreadHeadReply, ApiError> {
+    let request: ThreadHeadRequest = parse(&body)?;
+    let head = usecases::mark_read(state.app(), &auth.actor.context, &request.thread_id).await?;
+    Ok(ThreadHeadReply::from(&head))
+}
+
+/// `threads.markUnread` — move the caller's read position back to zero (REQ-009).
+async fn threads_mark_unread(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ThreadHeadReply, ApiError> {
+    let request: ThreadHeadRequest = parse(&body)?;
+    let head = usecases::mark_unread(state.app(), &auth.actor.context, &request.thread_id).await?;
+    Ok(ThreadHeadReply::from(&head))
 }
 
 /// The body of `threads.react`.

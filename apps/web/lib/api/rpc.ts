@@ -72,6 +72,15 @@ export interface SendReply {
   status: string;
 }
 
+/** The head of a thread, as the unread divider is rendered (REQ-009). `lastMessageAt` is null for an empty thread. */
+export interface ThreadHeadReply {
+  threadId: string;
+  lastSeq: number;
+  lastMessageAt: string | null;
+  readSeq: number;
+  unreadCount: number;
+}
+
 /** The reply of `threads.react` (REQ-008). The truth for the message after the change. */
 export interface ReactReply {
   messageId: string;
@@ -347,6 +356,30 @@ export function normalizeMessage(raw: unknown): MessageView | null {
 /** Whether a value is one of the four roles the domain spells. */
 export function isMessageRole(value: unknown): value is MessageRole {
   return value === "user" || value === "bot" || value === "system" || value === "tool";
+}
+
+/** `threads.head` — the tail of the thread and the caller's own read position (REQ-009). */
+export function threadsHead(
+  request: { threadId: string },
+  signal?: AbortSignal,
+): Promise<ThreadHeadReply> {
+  return call<ThreadHeadReply>("threads", "head", request, signal);
+}
+
+/** `threads.markRead` — move the caller's read position to the newest message (REQ-009). */
+export function threadsMarkRead(
+  request: { threadId: string },
+  signal?: AbortSignal,
+): Promise<ThreadHeadReply> {
+  return call<ThreadHeadReply>("threads", "markRead", request, signal);
+}
+
+/** `threads.markUnread` — move the caller's read position back to zero (REQ-009). */
+export function threadsMarkUnread(
+  request: { threadId: string },
+  signal?: AbortSignal,
+): Promise<ThreadHeadReply> {
+  return call<ThreadHeadReply>("threads", "markUnread", request, signal);
 }
 
 /** `threads.react` — adds or removes an emoji reaction on a message (REQ-008). */

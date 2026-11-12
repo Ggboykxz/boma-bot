@@ -604,7 +604,10 @@ async fn req_008_reacting_to_a_message_reads_back_the_truth() {
     )
     .await;
     let sent_body = json(send).await;
-    let message_id = sent_body["messageId"].as_str().expect("a message id").to_owned();
+    let message_id = sent_body["messageId"]
+        .as_str()
+        .expect("a message id")
+        .to_owned();
 
     // Adding a reaction returns the truth for the message.
     let response = post(
@@ -685,4 +688,76 @@ async fn req_008_reacting_to_a_message_reads_back_the_truth() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn req_009_head_and_marks_move_the_read_position() {
+    let world = world().await;
+    let send = post(
+        state(&world.app),
+        "/rpc/threads/send",
+        Some(&world.caller),
+        serde_json::json!({"botId": world.bot_id, "text": "a message to read"}),
+    )
+    .await;
+    assert_eq!(send.status(), StatusCode::OK);
+
+    // The head of an unread thread: nothing read, everything above zero is unread.
+    let head = post(
+        state(&world.app),
+        "/rpc/threads/head",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id}),
+    )
+    .await;
+    assert_eq!(head.status(), StatusCode::OK);
+    let body = json(head).await;
+    assert_eq!(body["readSeq"], serde_json::json!(0));
+    assert!(body["unreadCount"].as_u64().expect("a count") >= 1);
+
+    // Marking read moves the position to the newest message.
+    let marked = post(
+        state(&world.app),
+        "/rpc/threads/markRead",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id}),
+    )
+    .await;
+    assert_eq!(marked.status(), StatusCode::OK);
+    let body = json(marked).await;
+    assert_eq!(body["readSeq"], body["lastSeq"]);
+    assert_eq!(body["unreadCount"], serde_json::json!(0));
+
+    // A reload keeps the position: zero separators next visit.
+    let again = post(
+        state(&world.app),
+        "/rpc/threads/head",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id}),
+    )
+    .await;
+    let body = json(again).await;
+    assert_eq!(body["readSeq"], body["lastSeq"]);
+
+    // Marking unread moves the position back to zero and the badge counts again.
+    let cleared = post(
+        state(&world.app),
+        "/rpc/threads/markUnread",
+        Some(&world.caller),
+        serde_json::json!({"threadId": world.thread_id}),
+    )
+    .await;
+    let body = json(cleared).await;
+    assert_eq!(body["readSeq"], serde_json::json!(0));
+    assert!(body["unreadCount"].as_u64().expect("a count") >= 1);
+
+    // A thread the caller cannot see is not found, not zero.
+    let missing = post(
+        state(&world.app),
+        "/rpc/threads/head",
+        Some(&world.caller),
+        serde_json::json!({"threadId": "thr_does_not_exist"}),
+    )
+    .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }

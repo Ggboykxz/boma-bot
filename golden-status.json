@@ -163,9 +163,9 @@
       "reason": null
     },
     "REQ-009-unread-divider": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-009",
-      "reason": "M2 - read state and the unread divider need the thread with live updates"
+      "reason": null
     },
     "REQ-012-run-statuses": {
       "status": "implemented",

@@ -32,6 +32,7 @@ pub use stores::events::PostgresEventStore;
 pub use stores::invitations::PostgresInvitationStore;
 pub use stores::messages::PostgresMessageStore;
 pub use stores::reactions::PostgresReactionStore;
+pub use stores::read_states::PostgresReadStateStore;
 pub use stores::runs::PostgresRunStore;
 pub use stores::sessions::PostgresSessionStore;
 pub use stores::spaces::PostgresSpaceStore;

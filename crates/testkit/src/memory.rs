@@ -32,8 +32,8 @@ use boma_app::{
         Account, AccountStore, ActivityPage, BotStore, CardStore, Clock, EffectStore,
         EventPublisher, EventStore, Invitation, InvitationStore, MessageStore, NewAccount, NewBot,
         NewEffect, NewEvent, NewInvitation, NewMessage, NewRun, NewSession, NewSpace, NewThread,
-        ReactionAction, ReactionStore, RunActivity, RunStore, SessionStore, SpaceStore,
-        StoredMessage, ThreadStore, ToolStore, UserStore,
+        ReactionAction, ReactionStore, ReadStateStore, RunActivity, RunStore, SessionStore,
+        SpaceStore, StoredMessage, ThreadStore, ToolStore, UserStore,
     },
 };
 use boma_domain::DomainError;
@@ -147,6 +147,19 @@ struct ReactionRow {
     space_id: SpaceId,
 }
 
+/// The read position of one person in one conversation (REQ-009).
+#[derive(Debug, Clone)]
+struct ReadStateRow {
+    /// The conversation.
+    thread_id: ThreadId,
+    /// The tenant it belongs to.
+    space_id: SpaceId,
+    /// The reader.
+    user_id: UserId,
+    /// The highest sequence the reader had read.
+    last_seq: i64,
+}
+
 /// A run.
 #[derive(Debug, Clone)]
 struct RunRow {
@@ -243,6 +256,8 @@ struct State {
     cards: Vec<CardRow>,
     /// The reactions people left on messages.
     reactions: Vec<ReactionRow>,
+    /// The read position of each person, per conversation.
+    read_states: Vec<ReadStateRow>,
     /// The effects runs perform.
     effects: Vec<EffectRow>,
     /// The tools the spaces installed.
@@ -416,6 +431,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn reactions(&self) -> MemoryReactionStore {
         MemoryReactionStore::new(self)
+    }
+
+    /// The store of read positions.
+    #[must_use]
+    pub fn read_states(&self) -> MemoryReadStateStore {
+        MemoryReadStateStore::new(self)
     }
 
     /// Seeds a conversation with explicit sequences.
@@ -1151,6 +1172,23 @@ impl MessageStore for MemoryMessageStore {
             return Ok(None);
         }
         Ok(message_with_nonce(&state, thread_id, client_nonce).map(|row| row.message.clone()))
+    }
+
+    async fn count_above(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+        seq: i64,
+    ) -> Result<u64, AppError> {
+        let state = read(&self.state);
+        let count = state
+            .messages
+            .iter()
+            .filter(|row| visible(context, &row.space_id))
+            .filter(|row| row.message.thread_id == *thread_id && row.message.seq > seq)
+            .filter(|row| row.message.role != boma_domain::MessageRole::Tool)
+            .count();
+        Ok(u64::try_from(count).unwrap_or(u64::MAX))
     }
 
     async fn page(
@@ -2047,6 +2085,87 @@ fn valid_emoji(emoji: &str) -> bool {
         return false;
     }
     trimmed.chars().all(|c| !c.is_control())
+}
+
+/// The store of read positions (REQ-009).
+#[derive(Debug, Clone)]
+pub struct MemoryReadStateStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryReadStateStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryReadStateStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl ReadStateStore for MemoryReadStateStore {
+    async fn position(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+    ) -> Result<i64, AppError> {
+        let Some(user_id) = context.user_id().cloned() else {
+            return Err(AppError::NotFound);
+        };
+        let state = read(&self.state);
+        let found = state
+            .read_states
+            .iter()
+            .find(|row| row.thread_id == *thread_id && row.user_id == user_id)
+            .filter(|row| visible(context, &row.space_id));
+        Ok(found.map_or(0, |row| row.last_seq))
+    }
+
+    async fn set(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+        last_seq: i64,
+    ) -> Result<i64, AppError> {
+        if last_seq < 0 {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the read position cannot be negative".to_owned(),
+            )));
+        }
+        let Some(user_id) = context.user_id().cloned() else {
+            return Err(AppError::NotFound);
+        };
+        let Some(space_id) = context.space_id().cloned() else {
+            return Err(AppError::NotFound);
+        };
+        let mut state = write(&self.state);
+        // The write only lands when the thread belongs to the caller's space.
+        match state.thread(thread_id) {
+            Some(row) if visible(context, &row.thread.space_id) => {}
+            _ => return Err(AppError::NotFound),
+        }
+        match state
+            .read_states
+            .iter_mut()
+            .find(|row| row.thread_id == *thread_id && row.user_id == user_id)
+        {
+            Some(row) => row.last_seq = last_seq,
+            None => state.read_states.push(ReadStateRow {
+                thread_id: thread_id.clone(),
+                space_id,
+                user_id,
+                last_seq,
+            }),
+        }
+        Ok(last_seq)
+    }
 }
 
 /// The in-memory publisher: one broadcast channel per thread.

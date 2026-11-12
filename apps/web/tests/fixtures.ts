@@ -104,6 +104,35 @@ export interface RpcSeed {
  * open for the client to read it — a network answer ends the stream.
  */
 export async function seedRpc(page: Page, seed: RpcSeed): Promise<void> {
+  // A seed that says nothing about read state describes a returning reader: everything is read,
+  // no divider. The read-state golden carries its own explicit `threads/head` (REQ-009).
+  const withHead = (answers: Record<string, unknown>): Record<string, unknown> => {
+    if (answers["threads/head"] !== undefined) {
+      return answers;
+    }
+    const messages = Array.isArray(
+      (answers["threads/messages"] as { messages?: unknown[] } | undefined)?.messages,
+    )
+      ? ((answers["threads/messages"] as { messages: unknown[] }).messages as Array<{
+          seq?: unknown;
+          role?: unknown;
+        }>)
+      : [];
+    const lastSeq = messages.reduce(
+      (highest, message) => Math.max(highest, typeof message.seq === "number" ? message.seq : 0),
+      0,
+    );
+    const head = {
+      threadId: "thr_golden",
+      lastSeq,
+      lastMessageAt: lastSeq > 0 ? `2026-01-01T00:00:${String(lastSeq).padStart(2, "0")}Z` : null,
+      readSeq: lastSeq,
+      unreadCount: 0,
+    };
+    return { ...answers, "threads/head": head, "threads/markRead": head };
+  };
+  seed = { ...seed, answers: withHead(seed.answers) };
+
   await page.addInitScript((frames: unknown[]) => {
     const listeners: Array<(frame: unknown) => void> = [];
     const scope = window as unknown as { __bomaPushFrame?: (frame: unknown) => void };
@@ -220,6 +249,52 @@ const SEED_REACTED_MESSAGE = [
 ];
 
 /** A thread with a conversation in it. */
+/** Six unread messages, none of them a background step: the divider case (REQ-009). */
+const SEED_SIX_MESSAGES = [
+  {
+    id: "msg_1",
+    seq: 1,
+    role: "user",
+    blocks: [{ type: "text", text: "Plan my week." }],
+    createdAt: "2026-01-01T00:00:01Z",
+  },
+  {
+    id: "msg_2",
+    seq: 2,
+    role: "bot",
+    blocks: [{ type: "text", text: "Here is the plan." }],
+    createdAt: "2026-01-01T00:00:02Z",
+  },
+  {
+    id: "msg_3",
+    seq: 3,
+    role: "user",
+    blocks: [{ type: "text", text: "Add the notes." }],
+    createdAt: "2026-01-01T00:00:03Z",
+  },
+  {
+    id: "msg_4",
+    seq: 4,
+    role: "bot",
+    blocks: [{ type: "text", text: "The notes are in." }],
+    createdAt: "2026-01-01T00:00:04Z",
+  },
+  {
+    id: "msg_5",
+    seq: 5,
+    role: "user",
+    blocks: [{ type: "text", text: "And the attachments." }],
+    createdAt: "2026-01-01T00:00:05Z",
+  },
+  {
+    id: "msg_6",
+    seq: 6,
+    role: "bot",
+    blocks: [{ type: "text", text: "Attachments are in." }],
+    createdAt: "2026-01-01T00:00:06Z",
+  },
+];
+
 const SEED_MANY_MESSAGES = [
   {
     id: "msg_1",
@@ -308,6 +383,30 @@ const SEEDS: Record<string, (page: Page) => Promise<void>> = {
         "bots/get": SEED_BOT,
         "threads/messages": { messages: SEED_ONE_MESSAGE },
         "threads/send": { messageId: "msg_sent", runId: "run_sent", status: "queued" },
+      },
+    });
+  },
+
+  /** Six unread messages and a caller who read nothing yet: the divider (REQ-009). */
+  "six-unread-messages": async (page) => {
+    await seedRpc(page, {
+      answers: {
+        "bots/get": SEED_BOT,
+        "threads/messages": { messages: SEED_SIX_MESSAGES },
+        "threads/head": {
+          threadId: "thr_golden",
+          lastSeq: 6,
+          lastMessageAt: "2026-01-01T00:00:06Z",
+          readSeq: 0,
+          unreadCount: 6,
+        },
+        "threads/markRead": {
+          threadId: "thr_golden",
+          lastSeq: 6,
+          lastMessageAt: "2026-01-01T00:00:06Z",
+          readSeq: 6,
+          unreadCount: 0,
+        },
       },
     });
   },

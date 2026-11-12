@@ -58,7 +58,7 @@ Installed today (M0): `direction` (foundation), `button` (base), `cx`, `directio
 | REQ-001, REQ-002 | `/app/:botId` thread | `textarea` (composer), `button` (send, stop) | idle, sending, streaming, error | M1 |
 | REQ-003, REQ-004 | thread | transcript list, `divider` (unread) | streaming, steering, empty | M1–M2 |
 | REQ-007 | thread | `card` (pending question, approval) | pending, answered, timed out | M2 |
-| REQ-009 | thread | `divider`, `badge` (unread count) | read, unread, snoozed | M3 |
+| REQ-009 | thread | `divider`, `badge` (unread count) | read, unread, snoozed | M2 (read state done; snoozed waits on a roster, see STATE.md) |
 | REQ-012 | thread and activity | `chip` (run status) | queued, leased, running, waiting, completed, failed, cancelled | M4 |
 | REQ-026 | `/app/:botId` computer panel | `drawer`, `spinner`, `skeleton` | starting, running, taken over, released | M5 |
 | REQ-037 | `/app/x/:linkId` shared page | `table`, `divider` | shared, invalid, expired | M6 |
