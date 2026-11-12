@@ -448,6 +448,7 @@ pub async fn send_message(
             model_provider: Some(choice.provider),
             model_id: Some(choice.model),
             model_pinned: choice.pinned,
+            parent_run_id: None,
         })
         .await?;
 
@@ -646,7 +647,10 @@ pub async fn set_run_status(
         .await
 }
 
-/// Writes the bot's answer into the thread and announces it.
+/// Writes the bot's (or helper's) answer into the thread and announces it.
+///
+/// Helper runs write with role `tool`, so the person never sees the helper's internal
+/// conversation as chat (REQ-019).
 ///
 /// # Errors
 ///
@@ -660,6 +664,18 @@ pub async fn write_reply(
     text: &str,
 ) -> Result<Message, AppError> {
     let space_id = thread.space_id.clone();
+    let role = if app
+        .stores
+        .runs
+        .find(context, run_id)
+        .await?
+        .is_some_and(|run| run.is_helper())
+    {
+        boma_domain::MessageRole::Tool
+    } else {
+        boma_domain::MessageRole::Bot
+    };
+
     let stored = app
         .stores
         .messages
@@ -669,7 +685,7 @@ pub async fn write_reply(
                 id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
                 space_id: space_id.clone(),
                 thread_id: thread.id.clone(),
-                role: boma_domain::MessageRole::Bot,
+                role,
                 blocks: vec![boma_domain::Block::Text {
                     text: text.to_owned(),
                 }],
@@ -787,6 +803,84 @@ pub async fn answer_card(
 /// these built-ins, as the acceptance criteria require. A silent non-empty list here would be a
 /// lie about what exists; each milestone appends, it never removes.
 pub const BUILTIN_TOOLS: &[ToolSpec] = &[];
+
+/// Delegates a scoped task to a helper run on the same bot and thread (REQ-019).
+///
+/// The helper run is a `HelperResult` trigger child of the parent run: it does the work on the
+/// same conversation as the parent, but its outcome is recorded as helper output, not as a
+/// chat message of the bot. The parent consumes it when it continues (REQ-019 acceptance).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the parent run does not exist in the caller's tenant.
+pub async fn delegate_helper_run(
+    app: &App,
+    context: &TenantContext,
+    parent_run_id: &str,
+    prompt: &str,
+) -> Result<Run, AppError> {
+    let parent = app
+        .stores
+        .runs
+        .find(
+            context,
+            &boma_domain::RunId::new(parent_run_id.to_owned()).map_err(|_| AppError::NotFound)?,
+        )
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    validate_message_text(prompt)?;
+
+    let thread = app
+        .stores
+        .threads
+        .for_bot(context, &parent.bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let preferences = boma_domain::model::ModelPreferences {
+        bot: parent.model_id.clone().map(|model| {
+            (
+                format!(
+                    "{}/{}",
+                    parent
+                        .model_provider
+                        .clone()
+                        .unwrap_or_else(|| "custom".to_owned()),
+                    model
+                ),
+                parent.model_pinned,
+            )
+        }),
+        space: None,
+        person: None,
+    };
+    let choice = boma_domain::model::resolve(&preferences, &app.services.models)?;
+    let now = app.services.clock.now();
+
+    let run = app
+        .stores
+        .runs
+        .create(NewRun {
+            id: boma_domain::RunId::new(app.services.ids.new_id("hrun"))?,
+            space_id: parent.space_id.clone(),
+            bot_id: parent.bot_id.clone(),
+            thread_id: thread.id.clone(),
+            user_id: parent.user_id.clone(),
+            trigger: RunTrigger::HelperResult,
+            client_nonce: None,
+            source_message_id: parent.source_message_id.clone(),
+            created_at: now,
+            model_provider: Some(choice.provider),
+            model_id: Some(choice.model),
+            model_pinned: choice.pinned,
+            parent_run_id: Some(parent.id.clone()),
+        })
+        .await?;
+
+    tracing::info!(run = %run.id, parent = %parent.id, "the parent delegated to a helper run");
+    Ok(run)
+}
 
 /// The tool catalogue of one run: the built-ins plus the tools the bot may use (REQ-016).
 ///

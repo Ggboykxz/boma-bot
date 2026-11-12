@@ -260,6 +260,7 @@ async fn req_001_a_send_writes_one_message_and_starts_one_run() {
             model_provider: None,
             model_id: None,
             model_pinned: false,
+            parent_run_id: None,
         })
         .await
         .expect("the run is created");
@@ -338,6 +339,7 @@ async fn req_012_the_claim_moves_a_run_to_leased_and_the_fence_guards_the_write(
             model_provider: None,
             model_id: None,
             model_pinned: false,
+            parent_run_id: None,
         })
         .await
         .expect("the run is created");
@@ -554,6 +556,7 @@ async fn req_014_an_expired_lease_is_reclaimed_by_another_worker() {
             model_provider: None,
             model_id: None,
             model_pinned: false,
+            parent_run_id: None,
         })
         .await
         .expect("the run is created");
@@ -652,6 +655,7 @@ async fn req_017_answer_a_card_and_record_its_effect_once_in_postgres() {
             model_provider: None,
             model_id: None,
             model_pinned: false,
+            parent_run_id: None,
         })
         .await
         .expect("the run is created");

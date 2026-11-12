@@ -1290,6 +1290,7 @@ impl RunStore for MemoryRunStore {
             model_provider: run.model_provider,
             model_id: run.model_id,
             model_pinned: run.model_pinned,
+            parent_run_id: run.parent_run_id,
         };
         state.runs.push(RunRow {
             run: stored.clone(),
@@ -2162,6 +2163,7 @@ mod tests {
             model_provider: None,
             model_id: None,
             model_pinned: false,
+            parent_run_id: None,
         }
     }
 

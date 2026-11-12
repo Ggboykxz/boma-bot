@@ -35,7 +35,7 @@ Status values:
 | REQ-016 | M2 | `crates/testkit/src/build.rs::req_016_the_catalogue_carries_only_granted_tools`, `crates/testkit/src/build.rs::req_016_the_worker_asks_with_only_granted_tools` | `crates/app/src/usecases.rs::tool_catalogue`, `crates/infra/src/stores/tools.rs`, `migrations/0005_tools.sql` |
 | REQ-017 | M2 | `crates/testkit/src/build.rs::req_017_answering_a_card_records_the_effect_exactly_once`, `crates/api/tests/rpc_surface.rs::req_017_answering_a_card_resumes_the_run_and_is_refused_twice`, `crates/infra/tests/m1.rs::req_017_answer_a_card_and_record_its_effect_once_in_postgres`, golden `thread-answer` | `crates/app/src/usecases.rs::answer_card`, `crates/api/src/rpc.rs::threads_answer`, `crates/infra/src/stores/cards.rs`, `migrations/0004_cards.sql` |
 | REQ-018 | M8 | — | — |
-| REQ-019 | M2 | — | — |
+| REQ-019 | M2 | `crates/testkit/src/build.rs::req_019_delegate_helper_run_creates_a_child_run` | `crates/app/src/usecases.rs::delegate_helper_run`, `crates/domain/src/run.rs::is_helper`, `migrations/0008_helper_runs.sql`, `crates/app/src/usecases.rs::write_reply` (helper run writes role `tool`) |
 | REQ-020 | M1 | `crates/app/src/worker.rs::req_020_the_prompt_is_the_last_thing_the_person_wrote` | `crates/app/src/worker.rs`, `crates/api/src/realtime.rs` |
 | REQ-021 | M1 | `crates/testkit/src/build.rs::req_021_a_run_that_fails_carries_a_legible_reason` | `crates/app/src/worker.rs::fail_run`, `crates/app/src/service.rs::Failure` |
 | REQ-022 | M3 | — | — |

@@ -299,6 +299,9 @@ pub struct Run {
     /// Whether the resolved model was pinned: a pinned model is never substituted silently.
     #[serde(default)]
     pub model_pinned: bool,
+    /// The run that delegated to this one, when this run is a helper (REQ-019).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<RunId>,
 }
 
 impl Run {
@@ -326,6 +329,12 @@ impl Run {
             self.model_id.as_deref()?,
             self.model_pinned,
         ))
+    }
+
+    /// Whether this run is a helper spawned by another run (REQ-019).
+    #[must_use]
+    pub const fn is_helper(&self) -> bool {
+        matches!(self.trigger, RunTrigger::HelperResult) && self.parent_run_id.is_some()
     }
 }
 

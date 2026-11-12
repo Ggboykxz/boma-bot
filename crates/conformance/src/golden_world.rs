@@ -292,6 +292,7 @@ fn seed_history(
         model_provider: None,
         model_id: None,
         model_pinned: false,
+        parent_run_id: None,
     });
 }
 

@@ -41,6 +41,14 @@
   memory, RPC surface, real Postgres) plus the `thread-answer` golden replay. The domain gains
   `Card`/`CardKind`/`CardStatus`/`ExternalEffect`; migration `0004_cards.sql` creates `cards` and
   `external_effects` with RLS.
+- **REQ-019 (subagent delegation, SHOULD)** is wired in its M2 skeleton slice: a run can delegate to
+  a helper run on the same bot and thread. The helper run carries `trigger: helper_result` and
+  `parent_run_id` (migration `0008_helper_runs.sql`), and `write_reply` writes the result as a
+  `role: tool` message instead of a bot message, so the helper's internal steps do not leak into
+  the chat. The domain gains `Run::is_helper`. Honest boundary: the model never yet decides to
+  delegate by itself — the agent engine does that, and it is not built yet; a scripted test drives
+  `delegate_helper_run` directly and asserts the child run exists with the parent reference and
+  the helper trigger. The "helper answers, parent continues" branch of REQ-019 lands with M3.
 - **REQ-008 (replies and quotes, MUST)** is done for its send path: `SendMessage` carries
   `reply_to_message_id` and `reply_quote`; a reply to a message references it and carries the
   quote of its text. The wire `MessageView` exposes both fields; the composer shows a reply
@@ -49,14 +57,14 @@
   (REQ-008) wait on REQ-010 group chats, reactions wait on a `message_reactions` table — both
   are deliberately left for the next slice.
 
-Remaining in M2, in dependency order: REQ-019 delegation (helper runs), REQ-009 read state
-(SHOULD), reactions (REQ-008), mentions (REQ-008); the tool-call loop and the refusal audit event
-from REQ-016 are the last piece of REQ-016 and lands with the agent engine that makes the call
-(milestone M3/M5); the BYOK and provider OAuth login legs of REQ-015 land with M8 (models and
-credentials).
+Remaining in M2, in dependency order: REQ-009 read state (SHOULD), reactions (REQ-008), mentions
+(REQ-008); the tool-call loop and the refusal audit event from REQ-016 are the last piece of
+REQ-016 and land with the agent engine that makes the call (milestone M3/M5); the BYOK and
+provider OAuth login legs of REQ-015 land with M8 (models and credentials); the "helper answers,
+parent continues" branch of REQ-019 lands with M3 (the agent engine).
 
 The current commit carries REQ-003, REQ-006, REQ-007, REQ-008 (replies/quotes only), REQ-015,
-REQ-016 and REQ-017; M2 is not done yet.
+REQ-016, REQ-017 and REQ-019 (skeleton); M2 is not done yet.
 
 ## Done
 

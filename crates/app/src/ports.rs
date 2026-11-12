@@ -202,6 +202,8 @@ pub struct NewRun {
     pub model_id: Option<String>,
     /// Whether the resolved model is pinned: a pinned decision never falls back silently.
     pub model_pinned: bool,
+    /// The run that delegated to this one, when this run is a helper (REQ-019).
+    pub parent_run_id: Option<boma_domain::RunId>,
 }
 
 /// An event to append.

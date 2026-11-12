@@ -1116,6 +1116,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn req_019_delegate_helper_run_creates_a_child_run() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let parent = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: created.bot.id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the parent run is created");
+
+        let helper = boma_app::usecases::delegate_helper_run(
+            test.app(),
+            &context,
+            parent.run.id.as_str(),
+            "Research the week's commits.",
+        )
+        .await
+        .expect("the helper run is created");
+
+        assert_eq!(helper.trigger, boma_domain::RunTrigger::HelperResult);
+        assert_eq!(
+            helper
+                .parent_run_id
+                .as_ref()
+                .map(boma_domain::RunId::as_str),
+            Some(parent.run.id.as_str())
+        );
+        assert!(helper.is_helper());
+    }
+
+    #[tokio::test]
     async fn req_042_a_seeded_person_owns_the_space_they_land_in() {
         let test = TestApp::builder().build();
         let user_id = test

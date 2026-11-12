@@ -122,6 +122,7 @@ pub(crate) struct RunRow {
     pub(crate) model_provider: Option<String>,
     pub(crate) model_id: Option<String>,
     pub(crate) model_pinned: bool,
+    pub(crate) parent_run_id: Option<String>,
     pub(crate) created_at: String,
 }
 
@@ -294,6 +295,7 @@ pub(crate) fn run(row: RunRow) -> Result<Run, AppError> {
         model_provider: row.model_provider,
         model_id: row.model_id,
         model_pinned: row.model_pinned,
+        parent_run_id: row.parent_run_id.map(RunId::new).transpose()?,
     })
 }
 
