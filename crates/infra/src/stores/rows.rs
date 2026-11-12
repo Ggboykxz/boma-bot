@@ -8,9 +8,9 @@ use std::str::FromStr;
 
 use boma_app::AppError;
 use boma_domain::{
-    Block, Bot, BotId, Email, Event, EventType, InviteId, Message, MessageId, MessageRole,
-    OrganizationId, Run, RunId, RunStatus, RunTrigger, Session, SessionId, Space, SpaceId,
-    SpaceRole, Thread, ThreadId, User, UserId,
+    Block, Bot, BotId, Card, CardId, CardKind, CardStatus, Email, Event, EventType, ExternalEffect,
+    InviteId, Message, MessageId, MessageRole, OrganizationId, Run, RunId, RunStatus, RunTrigger,
+    Session, SessionId, Space, SpaceId, SpaceRole, Thread, ThreadId, User, UserId,
 };
 use serde_json::Value;
 use sqlx::types::Json;
@@ -136,6 +136,30 @@ pub(crate) struct InvitationRow {
     pub(crate) role: String,
     pub(crate) expires_at: String,
     pub(crate) status: String,
+}
+
+/// A row of `cards`.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct CardRow {
+    pub(crate) id: String,
+    pub(crate) space_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) run_id: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) status: String,
+    pub(crate) answer: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) answered_at: Option<String>,
+}
+
+/// A row of `external_effects`.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct EffectRow {
+    pub(crate) run_id: String,
+    pub(crate) effect_key: String,
+    pub(crate) kind: String,
+    pub(crate) payload: Json<Value>,
+    pub(crate) applied_at: Option<String>,
 }
 
 /// A row of the activity projection: a run and the beginning of the message that started it.
@@ -274,6 +298,53 @@ pub(crate) fn invitation(row: InvitationRow) -> Result<boma_app::ports::Invitati
         role: SpaceRole::parse(&row.role)?,
         expires_at: row.expires_at,
         pending: row.status == "pending",
+    })
+}
+
+/// Turns a stored row into the card it describes.
+pub(crate) fn card(row: CardRow) -> Result<Card, AppError> {
+    let kind = match row.kind.as_str() {
+        "question" => CardKind::Question,
+        "approval" => CardKind::Approval,
+        "purchase" => CardKind::Purchase,
+        "takeover" => CardKind::Takeover,
+        _ => {
+            return Err(AppError::Rule(boma_domain::DomainError::UnknownEventType(
+                row.kind,
+            )));
+        }
+    };
+    let status = match row.status.as_str() {
+        "pending" => CardStatus::Pending,
+        "answered" => CardStatus::Answered,
+        "declined" => CardStatus::Declined,
+        _ => {
+            return Err(AppError::Rule(boma_domain::DomainError::UnknownEventType(
+                row.status,
+            )));
+        }
+    };
+    Ok(Card {
+        id: CardId::new(row.id)?,
+        space_id: SpaceId::new(row.space_id)?,
+        thread_id: ThreadId::new(row.thread_id)?,
+        run_id: row.run_id.map(RunId::new).transpose()?,
+        kind,
+        status,
+        answer: row.answer,
+        created_at: row.created_at,
+        answered_at: row.answered_at,
+    })
+}
+
+/// Turns a stored row into the effect it describes.
+pub(crate) fn effect(row: EffectRow) -> Result<ExternalEffect, AppError> {
+    Ok(ExternalEffect {
+        run_id: RunId::new(row.run_id)?,
+        effect_key: row.effect_key,
+        kind: row.kind,
+        payload: row.payload.0,
+        applied_at: row.applied_at,
     })
 }
 

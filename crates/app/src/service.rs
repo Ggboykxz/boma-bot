@@ -10,9 +10,9 @@ use boma_domain::{Bot, Message, Run, Thread, User};
 use crate::{
     error::AppError,
     ports::{
-        AccountStore, BotStore, Clock, EventPublisher, EventStore, IdGenerator, InvitationStore,
-        MessageStore, PasswordHasher, RunStore, SessionStore, SpaceStore, ThreadStore,
-        TokenGenerator, UserStore,
+        AccountStore, BotStore, CardStore, Clock, EffectStore, EventPublisher, EventStore,
+        IdGenerator, InvitationStore, MessageStore, PasswordHasher, RunStore, SessionStore,
+        SpaceStore, ThreadStore, TokenGenerator, UserStore,
     },
 };
 
@@ -39,6 +39,10 @@ pub struct Stores {
     pub events: Arc<dyn EventStore>,
     /// Invitations.
     pub invitations: Arc<dyn InvitationStore>,
+    /// Approval and question cards.
+    pub cards: Arc<dyn CardStore>,
+    /// Side effects a run performs, exactly once per effect key.
+    pub effects: Arc<dyn EffectStore>,
 }
 
 impl Stores {
@@ -59,6 +63,8 @@ impl Stores {
         runs: Arc<dyn RunStore>,
         events: Arc<dyn EventStore>,
         invitations: Arc<dyn InvitationStore>,
+        cards: Arc<dyn CardStore>,
+        effects: Arc<dyn EffectStore>,
     ) -> Self {
         Self {
             accounts,
@@ -71,6 +77,8 @@ impl Stores {
             runs,
             events,
             invitations,
+            cards,
+            effects,
         }
     }
 }

@@ -181,6 +181,16 @@ pub struct CancelReply {
     pub status: String,
 }
 
+/// The reply of `threads.answer`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerReply {
+    /// Whether the answer was accepted.
+    pub ok: bool,
+    /// The run that resumes, when the card was waiting on one.
+    pub run_id: Option<String>,
+}
+
 /// The reply of `runs.list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

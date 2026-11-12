@@ -131,9 +131,9 @@
       "reason": null
     },
     "thread-answer": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-017",
-      "reason": "M2 - answering resumes a run that is waiting on an approval"
+      "reason": null
     },
     "thread-messages": {
       "status": "implemented",

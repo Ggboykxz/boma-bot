@@ -27,6 +27,7 @@ pub use events::BroadcastPublisher;
 pub use provider::ScriptedProvider;
 pub use stores::accounts::PostgresAccountStore;
 pub use stores::bots::PostgresBotStore;
+pub use stores::cards::{PostgresCardStore, PostgresEffectStore};
 pub use stores::events::PostgresEventStore;
 pub use stores::invitations::PostgresInvitationStore;
 pub use stores::messages::PostgresMessageStore;

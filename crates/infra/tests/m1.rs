@@ -19,9 +19,9 @@ use boma_domain::{
 };
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
-    PostgresBotStore, PostgresEventStore, PostgresInvitationStore, PostgresMessageStore,
-    PostgresRunStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
-    PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresBotStore, PostgresCardStore, PostgresEffectStore, PostgresEventStore,
+    PostgresInvitationStore, PostgresMessageStore, PostgresRunStore, PostgresSessionStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresUserStore, SystemClock, TokenGenerator,
 };
 
 mod common;
@@ -61,7 +61,9 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresMessageStore::new(pool.clone())),
             Arc::new(PostgresRunStore::new(pool.clone())),
             Arc::new(PostgresEventStore::new(pool.clone())),
-            Arc::new(PostgresInvitationStore::new(pool)),
+            Arc::new(PostgresInvitationStore::new(pool.clone())),
+            Arc::new(PostgresCardStore::new(pool.clone())),
+            Arc::new(PostgresEffectStore::new(pool)),
         ),
         boma_app::Services::new(
             publisher,
@@ -580,6 +582,100 @@ async fn req_014_an_expired_lease_is_reclaimed_by_another_worker() {
     assert_eq!(reclaimed.lease_owner.as_deref(), Some("worker-014-2"));
     assert_eq!(reclaimed.lease_fence, 2);
     cleanup(database, &organization_id, &email).await;
+}
+
+#[tokio::test]
+async fn req_017_answer_a_card_and_record_its_effect_once_in_postgres() {
+    let database = common::database().await;
+    let app = app(&database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "card").await;
+
+    let bot_id = BotId::new(ids().new_id("bot")).expect("an id is valid");
+    let thread_id = ThreadId::new(ids().new_id("thr")).expect("an id is valid");
+    let (bot, thread) = app
+        .stores
+        .bots
+        .create_with_thread(
+            NewBot {
+                id: bot_id.clone(),
+                space_id: space_id.clone(),
+                user_id: user_id.clone(),
+                name: "Analyst".to_owned(),
+                description: None,
+                color: None,
+                created_at: app.services.clock.now(),
+            },
+            NewThread {
+                id: thread_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot_id.clone(),
+                user_id: user_id.clone(),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+        .expect("the bot is created");
+
+    let run = app
+        .stores
+        .runs
+        .create(NewRun {
+            id: boma_domain::RunId::new(ids().new_id("run")).expect("an id is valid"),
+            space_id: space_id.clone(),
+            bot_id: bot.id.clone(),
+            thread_id: thread.id.clone(),
+            user_id: user_id.clone(),
+            trigger: RunTrigger::User,
+            client_nonce: Some("nonce-card-017".to_owned()),
+            source_message_id: None,
+            created_at: app.services.clock.now(),
+        })
+        .await
+        .expect("the run is created");
+
+    // A pending approval card, written like the product's migration would.
+    let card_id = ids().new_id("card");
+    sqlx::query(
+        "INSERT INTO cards (id, space_id, thread_id, run_id, kind, status, created_at)
+         VALUES ($1, $2, $3, $4, 'approval', 'pending', now())",
+    )
+    .bind(&card_id)
+    .bind(space_id.as_str())
+    .bind(thread_id.as_str())
+    .bind(run.id.as_str())
+    .execute(database.pool())
+    .await
+    .expect("the card is written");
+
+    let answered = app
+        .stores
+        .cards
+        .answer(
+            &context,
+            &boma_domain::CardId::new(card_id.clone()).expect("an id is valid"),
+            "approve",
+        )
+        .await
+        .expect("the card is answered");
+    assert_eq!(answered.status, boma_domain::CardStatus::Answered);
+    assert_eq!(answered.answer.as_deref(), Some("approve"));
+
+    // The same effect key once per run: the second record is refused.
+    let effect = NewEffect {
+        run_id: run.id.clone(),
+        effect_key: format!("approve:{card_id}"),
+        kind: "card_answer".to_owned(),
+        payload: serde_json::json!({ "card_id": card_id }),
+    };
+    app.stores
+        .effects
+        .record(&context, effect.clone())
+        .await
+        .expect("the effect is recorded once");
+    let second = app.stores.effects.record(&context, effect).await;
+    assert!(matches!(second, Err(boma_app::AppError::Conflict)));
+
+    cleanup(&database, &organization_id, &email).await;
 }
 
 #[tokio::test]

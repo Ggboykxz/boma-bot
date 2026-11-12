@@ -316,6 +316,8 @@ impl TestAppBuilder {
             Arc::new(database.runs(Arc::clone(&clock) as Arc<dyn Clock>)),
             Arc::new(database.events(Arc::clone(&publisher) as Arc<dyn EventPublisher>)),
             Arc::new(database.invitations()),
+            Arc::new(database.cards()),
+            Arc::new(database.effects()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -754,6 +756,65 @@ mod tests {
             .expect("the run exists");
         assert_eq!(run.status, RunStatus::Completed);
         assert_eq!(run.steering_consumed_seq, 2);
+    }
+
+    #[tokio::test]
+    async fn req_017_answering_a_card_records_the_effect_exactly_once() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let first = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: created.bot.id.to_string(),
+                text: "Do the purchase.".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        // A pending approval blocks the run; answering it authorizes the effect once.
+        let card = boma_domain::Card {
+            id: boma_domain::CardId::new("card_golden").expect("an id is accepted"),
+            space_id: space.id.clone(),
+            thread_id: created.thread.id.clone(),
+            run_id: Some(first.run.id.clone()),
+            kind: boma_domain::CardKind::Approval,
+            status: boma_domain::CardStatus::Pending,
+            answer: None,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            answered_at: None,
+        };
+        let database = test.database();
+        database.seed_card(space.id.clone(), card);
+
+        let outcome =
+            boma_app::usecases::answer_card(test.app(), &context, "card_golden", "approve")
+                .await
+                .expect("the card is answered");
+        assert!(outcome.effect_recorded, "the effect runs once on approval");
+
+        // A second answer to the same card is refused: the effect never executes twice.
+        let second =
+            boma_app::usecases::answer_card(test.app(), &context, "card_golden", "approve").await;
+        assert!(second.is_err(), "a closed card absorbs no second answer");
     }
 
     #[tokio::test]

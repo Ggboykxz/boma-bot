@@ -17,12 +17,20 @@
   during one waits for the next turn, as the spec requires. Important catch: `prompt_of` read the
   history *oldest-first* — the prompt is now the newest user text, and the steering test caught it.
   Migrations now carry `0003_steering.sql` (two columns).
+- **REQ-007 (pending cards, MUST)** is done (`29bc3cb`): the card block renders as a region with an
+  action button and an answer textbox, so a pending question stays answerable while the composer
+  keeps working. The pending-question-card UI golden replays.
+- **REQ-017 (approval gate, MUST)** is done: `threads.answer` answers a card once, records the
+  authorized effect under an idempotency key (`external_effects`, unique per run), and resumes the
+  run that was waiting. The second answer to the same card is refused. Proved at three levels (in
+  memory, RPC surface, real Postgres) plus the `thread-answer` golden replay. The domain gains
+  `Card`/`CardKind`/`CardStatus`/`ExternalEffect`; migration `0004_cards.sql` creates `cards` and
+  `external_effects` with RLS.
 
-Remaining in M2, in dependency order: REQ-003 steering, REQ-016/REQ-017 (per-run tool catalogue and
-the approval gate with exactly-once), REQ-015 model fallback, REQ-007 pending cards, REQ-008
-replies/reactions, REQ-019 delegation, REQ-009 read state (SHOULD).
+Remaining in M2, in dependency order: REQ-016 (per-run tool catalogue), REQ-015 model fallback,
+REQ-008 replies/reactions, REQ-019 delegation, REQ-009 read state (SHOULD).
 
-The current commit carries REQ-003 and REQ-006; M2 is not done yet.
+The current commit carries REQ-003, REQ-006, REQ-007 and REQ-017; M2 is not done yet.
 
 ## Done
 

@@ -29,16 +29,16 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard}
 use boma_app::{
     AppError,
     ports::{
-        Account, AccountStore, ActivityPage, BotStore, Clock, EventPublisher, EventStore,
-        Invitation, InvitationStore, MessageStore, NewAccount, NewBot, NewEvent, NewInvitation,
-        NewMessage, NewRun, NewSession, NewSpace, NewThread, RunActivity, RunStore, SessionStore,
-        SpaceStore, StoredMessage, ThreadStore, UserStore,
+        Account, AccountStore, ActivityPage, BotStore, CardStore, Clock, EffectStore,
+        EventPublisher, EventStore, Invitation, InvitationStore, MessageStore, NewAccount, NewBot,
+        NewEffect, NewEvent, NewInvitation, NewMessage, NewRun, NewSession, NewSpace, NewThread,
+        RunActivity, RunStore, SessionStore, SpaceStore, StoredMessage, ThreadStore, UserStore,
     },
 };
 use boma_domain::{
-    Block, Bot, BotId, Email, Event, Message, MessageId, MessagePage, OrganizationId, Run, RunId,
-    RunStatus, Session, SessionId, Space, SpaceId, SpaceRole, TenantContext, Thread, ThreadId,
-    User, UserId, cursor_from_seq,
+    Block, Bot, BotId, Card, CardId, CardStatus, Email, Event, ExternalEffect, Message, MessageId,
+    MessagePage, OrganizationId, Run, RunId, RunStatus, Session, SessionId, Space, SpaceId,
+    SpaceRole, TenantContext, Thread, ThreadId, User, UserId, cursor_from_seq,
 };
 use tokio::sync::broadcast;
 
@@ -138,6 +138,22 @@ struct RunRow {
     run: Run,
 }
 
+/// A card, with the tenant it belongs to.
+#[derive(Debug, Clone)]
+struct CardRow {
+    /// The card.
+    card: Card,
+    /// The tenant.
+    space_id: SpaceId,
+}
+
+/// An effect a run performs, keyed so it can never execute twice.
+#[derive(Debug, Clone)]
+struct EffectRow {
+    /// The effect.
+    effect: ExternalEffect,
+}
+
 /// An event, with the tenant it belongs to.
 #[derive(Debug, Clone)]
 struct EventRow {
@@ -192,6 +208,10 @@ struct State {
     sessions: Vec<SessionRow>,
     /// The invitations, with the hash of their token.
     invitations: Vec<InvitationRow>,
+    /// The cards, with the space they belong to.
+    cards: Vec<CardRow>,
+    /// The effects runs perform.
+    effects: Vec<EffectRow>,
 }
 
 impl State {
@@ -339,6 +359,18 @@ impl MemoryDatabase {
         MemoryInvitationStore::new(self)
     }
 
+    /// The store of cards.
+    #[must_use]
+    pub fn cards(&self) -> MemoryCardStore {
+        MemoryCardStore::new(self)
+    }
+
+    /// The store of effects.
+    #[must_use]
+    pub fn effects(&self) -> MemoryEffectStore {
+        MemoryEffectStore::new(self)
+    }
+
     /// Seeds a conversation with explicit sequences.
     ///
     /// The product allocates the sequences itself; a golden replay needs to decide them, because
@@ -390,6 +422,11 @@ impl MemoryDatabase {
             session,
             token_hash,
         });
+    }
+
+    /// Seeds a card with the tenant it belongs to.
+    pub fn seed_card(&self, space_id: SpaceId, card: Card) {
+        write(&self.state).cards.push(CardRow { card, space_id });
     }
 
     /// The organization the spaces of a person belong to.
@@ -1600,6 +1637,18 @@ impl Default for MemoryInvitationStore {
     }
 }
 
+impl Default for MemoryCardStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+impl Default for MemoryEffectStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
 #[async_trait::async_trait]
 impl InvitationStore for MemoryInvitationStore {
     async fn create(&self, invitation: NewInvitation) -> Result<Invitation, AppError> {
@@ -1637,6 +1686,104 @@ impl InvitationStore for MemoryInvitationStore {
         // The newest invitation wins, like the newest row of the table.
         matching.sort_by(|left, right| right.created_at.cmp(&left.created_at));
         Ok(matching.first().map(|row| row.invitation.clone()))
+    }
+}
+
+/// The store of cards (REQ-007, REQ-017).
+#[derive(Debug, Clone)]
+pub struct MemoryCardStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryCardStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CardStore for MemoryCardStore {
+    async fn find(&self, context: &TenantContext, id: &CardId) -> Result<Option<Card>, AppError> {
+        let state = read(&self.state);
+        let Some(row) = state.cards.iter().find(|row| row.card.id == *id) else {
+            return Ok(None);
+        };
+        if !visible(context, &row.space_id) {
+            return Ok(None);
+        }
+        Ok(Some(row.card.clone()))
+    }
+
+    async fn answer(
+        &self,
+        context: &TenantContext,
+        id: &CardId,
+        answer: &str,
+    ) -> Result<Card, AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state.cards.iter_mut().find(|row| row.card.id == *id) else {
+            return Err(AppError::NotFound);
+        };
+        if !visible(context, &row.space_id) {
+            return Err(AppError::NotFound);
+        }
+        if row.card.status != CardStatus::Pending {
+            return Err(AppError::Conflict);
+        }
+        row.card.status = CardStatus::Answered;
+        row.card.answer = Some(answer.to_owned());
+        row.card.answered_at = Some("2026-01-01T00:00:00Z".to_owned());
+        Ok(row.card.clone())
+    }
+}
+
+/// The store of effects, exactly once per effect key (REQ-017).
+#[derive(Debug, Clone)]
+pub struct MemoryEffectStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryEffectStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EffectStore for MemoryEffectStore {
+    async fn record(
+        &self,
+        context: &TenantContext,
+        effect: NewEffect,
+    ) -> Result<ExternalEffect, AppError> {
+        let mut state = write(&self.state);
+        if state
+            .effects
+            .iter()
+            .any(|row| row.effect.effect_key == effect.effect_key)
+        {
+            return Err(AppError::Conflict);
+        }
+        let effect = ExternalEffect {
+            run_id: effect.run_id,
+            effect_key: effect.effect_key.clone(),
+            kind: effect.kind,
+            payload: effect.payload,
+            applied_at: Some("2026-01-01T00:00:00Z".to_owned()),
+        };
+        state.effects.push(EffectRow {
+            effect: effect.clone(),
+        });
+        let _ = context;
+        Ok(effect)
     }
 }
 

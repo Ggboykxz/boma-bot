@@ -346,6 +346,75 @@ async fn req_042_creating_a_space_makes_the_caller_its_owner() {
 }
 
 #[tokio::test]
+async fn req_017_answering_a_card_resumes_the_run_and_is_refused_twice() {
+    let test_app = TestApp::builder().build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot_id, thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    let send = post(
+        state(&test_app),
+        "/rpc/threads/send",
+        Some(&caller),
+        serde_json::json!({"botId": bot_id, "text": "Do the purchase."}),
+    )
+    .await;
+    let run_id = json(send).await["runId"]
+        .as_str()
+        .expect("a run id")
+        .to_owned();
+
+    let card = boma_domain::Card {
+        id: boma_domain::CardId::new("card_golden").expect("an id is accepted"),
+        space_id: space_id.clone(),
+        thread_id: thread_id.clone(),
+        run_id: boma_domain::RunId::new(run_id.clone()).ok(),
+        kind: boma_domain::CardKind::Approval,
+        status: boma_domain::CardStatus::Pending,
+        answer: None,
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+        answered_at: None,
+    };
+    test_app.database().seed_card(space_id.clone(), card);
+
+    let response = post(
+        state(&test_app),
+        "/rpc/threads/answer",
+        Some(&caller),
+        serde_json::json!({"cardId": "card_golden", "answer": "approve"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["ok"], serde_json::json!(true));
+    assert_eq!(body["runId"], serde_json::json!(run_id));
+
+    // A second answer to the same card is refused (REQ-017).
+    let second = post(
+        state(&test_app),
+        "/rpc/threads/answer",
+        Some(&caller),
+        serde_json::json!({"cardId": "card_golden", "answer": "approve"}),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn req_006_a_cancel_stops_the_run_and_is_idempotent() {
     let world = world().await;
     let send = post(

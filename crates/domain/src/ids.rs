@@ -4,13 +4,12 @@
 //! guessable", so nothing in the product may rely on their shape. The newtypes exist so a
 //! bot id cannot be passed where a thread id is expected.
 
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
 use crate::error::DomainError;
 
 /// Declares an opaque identifier type.
+#[macro_export]
 macro_rules! opaque_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -42,8 +41,8 @@ macro_rules! opaque_id {
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(&self.0)
             }
         }

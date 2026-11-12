@@ -18,8 +18,8 @@
 //!   (REQ-006).
 
 use boma_domain::{
-    Bot, Email, EventType, Message, MessagePage, Run, RunStatus, RunTrigger, Space, SpaceRole,
-    TenantContext, Thread, User, parse_cursor, validate_message_text,
+    Bot, CardId, CardStatus, Email, EventType, Message, MessagePage, Run, RunStatus, RunTrigger,
+    Space, SpaceRole, TenantContext, Thread, User, parse_cursor, validate_message_text,
 };
 
 pub use crate::accounts::{SignIn, SignUp};
@@ -27,7 +27,7 @@ pub use crate::accounts::{SignIn, SignUp};
 use crate::{
     accounts::Accounts,
     error::AppError,
-    ports::{NewBot, NewMessage, NewRun, NewThread},
+    ports::{AnswerCardOutcome, NewBot, NewEffect, NewMessage, NewRun, NewThread},
     service::{Actor, App, SendOutcome},
 };
 
@@ -666,4 +666,81 @@ pub async fn write_reply(
         )
         .await?;
     Ok(stored.message)
+}
+
+/// Answers a card and, when the answer approves it, records and performs its effect exactly
+/// once (REQ-017).
+///
+/// Answering an already-answered card is idempotent: the recorded effect is never executed a
+/// second time, and the answer itself is refused once the card is closed.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the card does not exist in the tenant, and
+/// [`AppError::Conflict`] when it was already answered.
+pub async fn answer_card(
+    app: &App,
+    context: &TenantContext,
+    card_id: &str,
+    answer: &str,
+) -> Result<AnswerCardOutcome, AppError> {
+    let card_id = CardId::new(card_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let card = app
+        .stores
+        .cards
+        .find(context, &card_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if card.status != CardStatus::Pending {
+        // The card is closed: no answer lands twice (REQ-017).
+        return Err(AppError::Conflict);
+    }
+
+    let card = app.stores.cards.answer(context, &card_id, answer).await?;
+
+    let mut effect_recorded = false;
+    if answer == "approve"
+        && let Some(run_id) = &card.run_id
+    {
+        // One effect key per card answer: a retried answer never executes twice.
+        let effect_key = format!("approve:{}", card_id.as_str());
+        match app
+            .stores
+            .effects
+            .record(
+                context,
+                NewEffect {
+                    run_id: run_id.clone(),
+                    effect_key,
+                    kind: "card_answer".to_owned(),
+                    payload: serde_json::json!({
+                        "card_id": card_id.as_str(),
+                        "answer": answer,
+                    }),
+                },
+            )
+            .await
+        {
+            Ok(_) => effect_recorded = true,
+            Err(AppError::Conflict) => {
+                // The effect was already recorded: the answer is a replay.
+            }
+            Err(error) => return Err(error),
+        }
+        // The run that was waiting on the card resumes (REQ-017).
+        set_run_status(
+            app,
+            context,
+            run_id.as_str(),
+            RunStatus::Running,
+            None,
+            None,
+        )
+        .await?;
+    }
+
+    Ok(AnswerCardOutcome {
+        card,
+        effect_recorded,
+    })
 }

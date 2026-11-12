@@ -87,6 +87,8 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryRunStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryEventStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryInvitationStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryCardStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryEffectStore::default()),
             ),
             boma_app::Services::new(
                 std::sync::Arc::new(boma_testkit::MemoryEventPublisher::default()),

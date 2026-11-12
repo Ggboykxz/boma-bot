@@ -23,8 +23,8 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        BotReply, CancelReply, InvitationReply, MessagesReply, RunView, RunsReply, SendReply,
-        SpaceReply,
+        AnswerReply, BotReply, CancelReply, InvitationReply, MessagesReply, RunView, RunsReply,
+        SendReply, SpaceReply,
     },
 };
 
@@ -49,6 +49,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::THREADS, "send"),
         (namespaces::THREADS, "messages"),
         (namespaces::THREADS, "subscribe"),
+        (namespaces::THREADS, "answer"),
         (namespaces::BOTS, "create"),
         (namespaces::BOTS, "get"),
         (namespaces::SPACES, "create"),
@@ -86,6 +87,9 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::THREADS, "subscribe") => crate::realtime::subscribe(state, auth, body).await,
+        (namespaces::THREADS, "answer") => threads_answer(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "create") => bots_create(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
@@ -307,6 +311,36 @@ struct SpaceInviteRequest {
 /// The role an invitation grants when the caller does not say.
 fn default_role() -> SpaceRole {
     SpaceRole::Member
+}
+
+/// `threads.answer` — answer a card and resume the run it blocked (REQ-017).
+async fn threads_answer(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AnswerReply, ApiError> {
+    let request: ThreadAnswerRequest = parse(&body)?;
+    let outcome = usecases::answer_card(
+        state.app(),
+        &auth.actor.context,
+        &request.card_id,
+        &request.answer,
+    )
+    .await?;
+    Ok(AnswerReply {
+        ok: true,
+        run_id: outcome.card.run_id.map(|run| run.as_str().to_owned()),
+    })
+}
+
+/// The body of `threads.answer`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThreadAnswerRequest {
+    /// The card to answer.
+    card_id: String,
+    /// The answer a member gives.
+    answer: String,
 }
 
 /// `runs.list` — the activity projection, newest first.

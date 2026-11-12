@@ -25,9 +25,9 @@ use boma_app::{
     ports::{NewAccount, NewBot, NewOrganization, NewSession, NewSpace, NewThread, NewUser},
 };
 use boma_domain::{
-    Block, Bot, BotId, Email, Event, EventType, InviteId, Message, MessageId, MessageRole,
-    OrganizationId, Run, RunId, RunStatus, RunTrigger, Session, SessionId, SpaceId, SpaceRole,
-    Thread, ThreadId, UserId,
+    Block, Bot, BotId, Card, CardId, CardKind, CardStatus, Email, Event, EventType, InviteId,
+    Message, MessageId, MessageRole, OrganizationId, Run, RunId, RunStatus, RunTrigger, Session,
+    SessionId, SpaceId, SpaceRole, Thread, ThreadId, UserId,
 };
 use boma_testkit::TestApp;
 
@@ -109,6 +109,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "space-invite"
             | "thread-messages"
             | "thread-subscribe"
+            | "thread-answer"
             | "run-list"
             | "cross-tenant-not-found"
     );
@@ -186,6 +187,11 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         "thread-subscribe" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
             seed_events(&test_app, &space_id, &bot, &thread);
+        }
+        "thread-answer" => {
+            let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_history(&test_app, &space_id, &bot, &thread, &user_id);
+            seed_card(&test_app, &space_id, &thread);
         }
         "cross-tenant-not-found" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
@@ -317,6 +323,26 @@ fn seed_events(test_app: &TestApp, space_id: &SpaceId, _bot: &Bot, _thread: &Thr
             kind: EventType::Heartbeat,
             payload: serde_json::json!({}),
             created_at: "2026-01-01T00:00:15Z".to_owned(),
+        },
+    );
+}
+
+/// Seeds the pending approval card the thread-answer fixture answers (REQ-017).
+fn seed_card(test_app: &TestApp, space_id: &SpaceId, thread: &Thread) {
+    // The run the card blocks is exactly the seeded run the history carries.
+    let run_id = RunId::new(RUN_ID).expect("the seed id is valid");
+    test_app.database().seed_card(
+        space_id.clone(),
+        Card {
+            id: CardId::new("card_golden").expect("the seed id is valid"),
+            space_id: space_id.clone(),
+            thread_id: thread.id.clone(),
+            run_id: Some(run_id),
+            kind: CardKind::Approval,
+            status: CardStatus::Pending,
+            answer: None,
+            created_at: SEED_INSTANT.to_owned(),
+            answered_at: None,
         },
     );
 }

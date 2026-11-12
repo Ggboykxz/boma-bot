@@ -33,7 +33,7 @@ Status values:
 | REQ-014 | M1 | `crates/infra/tests/m1.rs::req_014_an_expired_lease_is_reclaimed_by_another_worker` | `crates/infra/src/stores/runs.rs::claim_next_queued` |
 | REQ-015 | M2 | — | — |
 | REQ-016 | M2 | — | — |
-| REQ-017 | M2 | — | — |
+| REQ-017 | M2 | `crates/testkit/src/build.rs::req_017_answering_a_card_records_the_effect_exactly_once`, `crates/api/tests/rpc_surface.rs::req_017_answering_a_card_resumes_the_run_and_is_refused_twice`, `crates/infra/tests/m1.rs::req_017_answer_a_card_and_record_its_effect_once_in_postgres`, golden `thread-answer` | `crates/app/src/usecases.rs::answer_card`, `crates/api/src/rpc.rs::threads_answer`, `crates/infra/src/stores/cards.rs`, `migrations/0004_cards.sql` |
 | REQ-018 | M8 | — | — |
 | REQ-019 | M2 | — | — |
 | REQ-020 | M1 | `crates/app/src/worker.rs::req_020_the_prompt_is_the_last_thing_the_person_wrote` | `crates/app/src/worker.rs`, `crates/api/src/realtime.rs` |

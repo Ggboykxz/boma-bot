@@ -14,8 +14,8 @@
 
 use async_trait::async_trait;
 use boma_domain::{
-    Bot, Email, Event, Message, MessagePage, Run, RunStatus, Session, Space, SpaceRole, Thread,
-    User, UserId,
+    Bot, Card, CardId, Email, Event, ExternalEffect, Message, MessagePage, Run, RunId, RunStatus,
+    Session, Space, SpaceRole, TenantContext, Thread, User, UserId,
 };
 
 use crate::error::AppError;
@@ -656,6 +656,46 @@ pub trait EventPublisher: Send + Sync {
     ) -> tokio::sync::broadcast::Receiver<Event>;
 }
 
+/// Stores and reads approval and question cards (REQ-007, REQ-017).
+#[async_trait]
+pub trait CardStore: Send + Sync {
+    /// Finds a card inside a tenant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find(&self, context: &TenantContext, id: &CardId) -> Result<Option<Card>, AppError>;
+
+    /// Marks a card as answered with `answer`, refusing a card that was already answered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::NotFound`] when the card does not exist in the tenant, and
+    /// [`AppError::Conflict`] when it was already answered.
+    async fn answer(
+        &self,
+        context: &TenantContext,
+        id: &CardId,
+        answer: &str,
+    ) -> Result<Card, AppError>;
+}
+
+/// Stores the side effects a run performs, exactly once per effect key (REQ-017).
+#[async_trait]
+pub trait EffectStore: Send + Sync {
+    /// Records an effect, once per effect key within a run.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the effect key already exists for the run, and an
+    /// error when the database cannot answer.
+    async fn record(
+        &self,
+        context: &TenantContext,
+        effect: NewEffect,
+    ) -> Result<ExternalEffect, AppError>;
+}
+
 /// What a model provider is asked to answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRequest {
@@ -732,4 +772,27 @@ pub trait Clock: Send + Sync {
 
     /// The current time shifted by a number of seconds, as RFC 3339 in UTC.
     fn now_plus_seconds(&self, seconds: i64) -> String;
+}
+
+/// An effect a run performs, to be recorded exactly once per effect key (REQ-017).
+#[derive(Debug, Clone)]
+pub struct NewEffect {
+    /// The run the effect belongs to.
+    pub run_id: RunId,
+    /// The idempotency key: the same key never executes twice.
+    pub effect_key: String,
+    /// What the effect does.
+    pub kind: String,
+    /// Its payload.
+    pub payload: serde_json::Value,
+}
+
+/// The outcome of answering a card (REQ-017).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnswerCardOutcome {
+    /// The card as it is now.
+    pub card: Card,
+    /// Whether the effect was recorded; `false` when it was already recorded and the answer was
+    /// a replay.
+    pub effect_recorded: bool,
 }

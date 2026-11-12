@@ -5,6 +5,7 @@
 
 pub mod accounts;
 pub mod bots;
+pub mod cards;
 pub mod events;
 pub mod invitations;
 pub mod messages;
