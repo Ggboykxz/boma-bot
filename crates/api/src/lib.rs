@@ -16,6 +16,7 @@ pub mod openapi;
 pub mod realtime;
 pub mod router;
 pub mod rpc;
+pub mod screen;
 pub mod state;
 pub mod wire;
 

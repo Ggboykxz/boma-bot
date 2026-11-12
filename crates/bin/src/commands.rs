@@ -10,8 +10,9 @@ use boma_infra::{
     PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresEffectStore,
     PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
     PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
-    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSessionStore, PostgresSpaceStore,
+    PostgresThreadStore, PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock,
+    TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -90,7 +91,8 @@ fn build_app(database: &Postgres, computer: Option<Arc<dyn ComputerRuntime>>) ->
             Arc::new(PostgresRosterStore::new(pool.clone())),
             Arc::new(PostgresMemoryStore::new(pool.clone())),
             Arc::new(PostgresRoutineStore::new(pool.clone())),
-            Arc::new(PostgresComputerStore::new(pool)),
+            Arc::new(PostgresComputerStore::new(pool.clone())),
+            Arc::new(PostgresScreenCapabilityStore::new(pool)),
         ),
         {
             let services = Services::new(

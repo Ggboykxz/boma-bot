@@ -4,7 +4,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderName, HeaderValue, Request, StatusCode, header},
-    routing::get,
+    routing::{get, post},
 };
 use tower_http::{
     request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
@@ -13,7 +13,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{authroutes, error::ApiError, health, rpc, state::AppState};
+use crate::{authroutes, error::ApiError, health, rpc, screen, state::AppState};
 
 /// Builds the HTTP surface.
 ///
@@ -42,6 +42,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/auth/sign-out",
             axum::routing::post(authroutes::sign_out),
+        )
+        .route(
+            "/api/internal/screen-target",
+            post(screen::screen_target).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .merge(rpc::router())
         .fallback(not_found)

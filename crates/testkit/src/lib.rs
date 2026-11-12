@@ -40,8 +40,9 @@ pub use memory::{
     MemoryAccountStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryDatabase,
     MemoryEffectStore, MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore,
     MemoryMemoryStore, MemoryMessageStore, MemoryReactionStore, MemoryReadStateStore,
-    MemoryRosterStore, MemoryRoutineStore, MemoryRunStore, MemorySessionStore, MemorySpaceStore,
-    MemoryThreadStore, MemoryToolStore, MemoryUserStore, Organization,
+    MemoryRosterStore, MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore,
+    MemorySessionStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore, MemoryUserStore,
+    Organization,
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedIds,

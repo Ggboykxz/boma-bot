@@ -1583,6 +1583,141 @@ pub async fn sweep_idle_computers(app: &App) -> Result<u64, AppError> {
     Ok(released)
 }
 
+/// A screen capability freshly minted for a computer (REQ-030).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenCapabilityIssued {
+    /// The opaque bearer token; only its hash is stored.
+    pub token: String,
+    /// The generation the capability names.
+    pub screen_generation: u64,
+    /// The computer this capability opens.
+    pub computer_id: boma_domain::ComputerId,
+}
+
+/// Mints a capability that opens the bot's screen (REQ-030).
+///
+/// The computer must be running: a stopped screen opens nothing. The token is returned once and
+/// never lands on disk — not in logs, not in a table plain.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the computer is not running, and [`AppError::Unavailable`] when the
+/// deployment has no computer backend or the capability cannot be stored.
+pub async fn issue_screen_capability(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<ScreenCapabilityIssued, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let Some(computer) = app.stores.computers.find(context, &bot_id).await? else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the computer is not running".to_owned(),
+        )));
+    };
+    if computer.status != boma_domain::ComputerStatus::Running {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the computer is not running".to_owned(),
+        )));
+    }
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    let token = app.services.tokens.generate()?;
+    let token_hash = app.services.tokens.hash(&token)?;
+    app.stores
+        .screen_capabilities
+        .issue(
+            context,
+            crate::ports::NewScreenCapability {
+                computer_id: computer.id.clone(),
+                space_id,
+                screen_generation: computer.screen_generation,
+                token_hash,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(ScreenCapabilityIssued {
+        token,
+        screen_generation: computer.screen_generation,
+        computer_id: computer.id,
+    })
+}
+
+/// Resolves a bearer screen capability (REQ-030).
+///
+/// The answer is `None` for anything that does not check out: unknown token, a computer that is
+/// not running, or a screen generation that moved. The caller answers with one uniform 403.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when the stores cannot answer.
+pub async fn resolve_screen_capability(
+    app: &App,
+    token: &str,
+) -> Result<Option<crate::ports::ScreenCapability>, AppError> {
+    let hash = app.services.tokens.hash(token)?;
+    let Some(capability) = app.stores.screen_capabilities.find_by_hash(&hash).await? else {
+        return Ok(None);
+    };
+    let Some(computer) = app
+        .stores
+        .computers
+        .find_by_id(
+            &TenantContext::System {
+                reason: boma_domain::SystemReason::Authentication,
+                user_id: None,
+            },
+            &capability.computer_id,
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    if computer.status != boma_domain::ComputerStatus::Running
+        || computer.screen_generation != capability.screen_generation
+    {
+        return Ok(None);
+    }
+    Ok(Some(capability))
+}
+
+/// Fetches the frame of the computer the capability opens (REQ-030).
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when the deployment has no computer backend or the frame
+/// command fails, [`AppError::Rule`] when the capability does not point at a running computer.
+pub async fn screen_frame(
+    app: &App,
+    capability: &crate::ports::ScreenCapability,
+) -> Result<Vec<u8>, AppError> {
+    let runtime = app
+        .services
+        .computer
+        .as_deref()
+        .filter(|runtime| runtime.provider() != "none")
+        .ok_or(AppError::Unavailable)?;
+    let context = TenantContext::System {
+        reason: boma_domain::SystemReason::Authentication,
+        user_id: None,
+    };
+    let computer = app
+        .stores
+        .computers
+        .find_by_id(&context, &capability.computer_id)
+        .await?
+        .ok_or(AppError::Unavailable)?;
+    let Some(external_id) = computer.external_id else {
+        return Err(AppError::Unavailable);
+    };
+    runtime.screenshot(&external_id).await
+}
+
 /// The activity projection: the runs of a bot, newest first (REQ-011).
 ///
 /// # Errors

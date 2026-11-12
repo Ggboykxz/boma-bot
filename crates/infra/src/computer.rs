@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use bollard::models::{ContainerCreateBody, HostConfig, VolumeCreateRequest};
+use bollard::models::{ContainerCreateBody, ExecConfig, HostConfig, VolumeCreateRequest};
 use bollard::{API_DEFAULT_VERSION, Docker};
 
 use boma_app::{
@@ -188,6 +188,66 @@ impl ComputerRuntime for DockerComputerRuntime {
         }
     }
 
+    async fn screenshot(&self, external_id: &str) -> Result<Vec<u8>, AppError> {
+        let Some(frame_command) = self.frame_command.as_deref() else {
+            tracing::warn!("no frame command is configured for this image");
+            return Err(AppError::Unavailable);
+        };
+        // The frame command prints the frame bytes on stdout; the image is trusted with its own
+        // rendering, bytes are delivered verbatim.
+        let exec = self
+            .docker
+            .create_exec(
+                external_id,
+                ExecConfig {
+                    cmd: Some(vec![
+                        "sh".to_owned(),
+                        "-c".to_owned(),
+                        frame_command.to_owned(),
+                    ]),
+                    attach_stdout: Some(true),
+                    attach_stdin: Some(false),
+                    attach_stderr: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the frame command could not be prepared");
+                AppError::Unavailable
+            })?;
+        let output = self
+            .docker
+            .start_exec(
+                &exec.id,
+                Some(bollard::exec::StartExecOptions {
+                    detach: false,
+                    tty: false,
+                    output_capacity: None,
+                }),
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the frame command could not run");
+                AppError::Unavailable
+            })?;
+        let bollard::exec::StartExecResults::Attached { mut output, .. } = output else {
+            tracing::warn!(%external_id, "the frame command detached before producing a frame");
+            return Err(AppError::Unavailable);
+        };
+        let mut bytes = Vec::new();
+        while let Some(item) = futures_util::StreamExt::next(&mut output).await {
+            let message = item.map_err(|error| {
+                tracing::warn!(%error, %external_id, "the frame stream died");
+                AppError::Unavailable
+            })?;
+            if let bollard::container::LogOutput::StdOut { message } = message {
+                bytes.extend_from_slice(&message);
+            }
+        }
+        Ok(bytes)
+    }
+
     async fn stop(&self, external_id: &str) -> Result<(), AppError> {
         match self
             .docker
@@ -250,5 +310,10 @@ impl ComputerRuntime for NoneComputerRuntime {
 
     async fn stop(&self, _external_id: &str) -> Result<(), AppError> {
         Ok(())
+    }
+
+    async fn screenshot(&self, _external_id: &str) -> Result<Vec<u8>, AppError> {
+        // A deployment without computers answers honestly, not with fake pixels.
+        Err(AppError::Unavailable)
     }
 }

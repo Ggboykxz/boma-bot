@@ -18,6 +18,7 @@ pub mod roster;
 pub mod routines;
 pub mod rows;
 pub mod runs;
+pub mod screen;
 pub mod sessions;
 pub mod spaces;
 pub mod threads;

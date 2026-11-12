@@ -40,6 +40,7 @@ pub use stores::read_states::PostgresReadStateStore;
 pub use stores::roster::PostgresRosterStore;
 pub use stores::routines::PostgresRoutineStore;
 pub use stores::runs::PostgresRunStore;
+pub use stores::screen::PostgresScreenCapabilityStore;
 pub use stores::sessions::PostgresSessionStore;
 pub use stores::spaces::PostgresSpaceStore;
 pub use stores::threads::PostgresThreadStore;

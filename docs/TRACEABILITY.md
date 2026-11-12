@@ -46,7 +46,7 @@ Status values:
 | REQ-027 | M4 | `crates/bin/src/computer.rs::req_027_*`, `crates/api/tests/rpc_surface.rs::req_027_a_deployment_without_a_computer_backend_answers_computers_unavailable`, `crates/api/tests/rpc_surface.rs::req_027_a_bot_with_no_computer_answers_stopped_never_an_error` | `crates/bin/src/computer.rs` (fail-closed selection), `crates/bin/src/config.rs` (SANDBOX_PROVIDER/NOVITA_API_KEY/DOCKER_HOST/limits), `crates/bin/src/commands.rs` (startup ping), `crates/infra/src/computer.rs` (bollard client), `crates/app/src/ports.rs::ComputerRuntime`, `crates/api/src/error.rs::ComputersUnavailable` |
 | REQ-028 | M4 | — | — |
 | REQ-029 | M4 | — | — |
-| REQ-030 | M4 | — | — |
+| REQ-030 | M4 | `crates/api/tests/screen.rs::req_030_a_valid_capability_streams_the_frame_and_a_stale_one_is_refused`, `crates/api/tests/screen.rs::req_030_the_bearer_scheme_is_the_only_capability_channel` | `crates/domain/src/computer.rs` (generation), `crates/app/src/usecases.rs` (`issue_screen_capability`, `resolve_screen_capability`, `screen_frame`), `crates/app/src/ports.rs` (ScreenCapabilityStore, ComputerRuntime::screenshot), `crates/infra/src/stores/screen.rs`, `crates/infra/src/computer.rs` (Docker exec frame command), `crates/api/src/screen.rs` (`POST /api/internal/screen-target`), `crates/api/src/rpc.rs` (`computer.openScreen`, additive to the contract), `migrations/0018_screen_capabilities.sql` |
 | REQ-031 | M4 | — | — |
 | REQ-032 | M5 | — | — |
 | REQ-033 | M5 | — | — |

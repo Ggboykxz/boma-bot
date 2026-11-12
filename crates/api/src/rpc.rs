@@ -23,11 +23,12 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AnswerReply, BotReply, BotsListReply, CancelReply, ComputerStatusReply, InvitationReply,
-        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
-        MemoryWriteReply, MessagesReply, ReactReply, RosterBotView, RoutineRemoveReply,
-        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
-        RunsReply, SendReply, SnoozeReply, SpaceReply, ThreadHeadReply,
+        AnswerReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
+        ComputerStatusReply, InvitationReply, MemoryDocumentReply, MemoryDocumentsReply,
+        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply,
+        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
+        RoutinesReply, RunRetryReply, RunView, RunsReply, SendReply, SnoozeReply, SpaceReply,
+        ThreadHeadReply,
     },
 };
 
@@ -85,6 +86,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::COMPUTER, "status"),
         (namespaces::COMPUTER, "start"),
         (namespaces::COMPUTER, "stop"),
+        (namespaces::COMPUTER, "openScreen"),
     ]
 }
 
@@ -197,6 +199,9 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::COMPUTER, "stop") => computer_stop(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::COMPUTER, "openScreen") => computer_open_screen(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -849,6 +854,40 @@ async fn computer_stop(
     }
     let computer = usecases::stop_computer(app, &auth.actor.context, &request.bot_id).await?;
     Ok(ComputerStatusReply::for_computer(&computer))
+}
+
+/// `computer.openScreen` — mint a capability that opens the bot's screen (REQ-030).
+///
+/// The capability is returned once and the server stores only its hash. The computer must be
+/// running: without a screen there is nothing to open.
+async fn computer_open_screen(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ComputerOpenScreenReply, ApiError> {
+    let request = computer_request(&body)?;
+    let app = state.app();
+    if app
+        .services
+        .computer
+        .as_deref()
+        .is_none_or(|runtime| runtime.provider() == "none")
+    {
+        return Err(ApiError::computers_unavailable());
+    }
+    let issued = usecases::issue_screen_capability(app, &auth.actor.context, &request.bot_id)
+        .await
+        .map_err(|error| match error {
+            boma_app::AppError::Rule(_) => ApiError::new(
+                crate::error::ErrorCode::Conflict,
+                "The computer is not running.",
+            ),
+            other => crate::error::ApiError::from(other),
+        })?;
+    Ok(ComputerOpenScreenReply {
+        capability: issued.token,
+        screen_generation: issued.screen_generation,
+    })
 }
 
 /// The body of `routines.runNow` (REQ-025).

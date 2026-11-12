@@ -88,6 +88,12 @@ impl ApiError {
         Self::new(ErrorCode::Unauthorized, "Sign in to continue.")
     }
 
+    /// The caller is authenticated but may not do this.
+    #[must_use]
+    pub const fn forbidden() -> Self {
+        Self::new(ErrorCode::Forbidden, "No access.")
+    }
+
     /// Credentials that do not match an account.
     ///
     /// The wording never says whether the address exists (REQ-040).

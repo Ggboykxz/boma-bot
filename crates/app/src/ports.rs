@@ -1182,6 +1182,17 @@ pub trait ComputerRuntime: Send + Sync {
     ///
     /// Returns [`AppError::Unavailable`] when the provider cannot be reached.
     async fn stop(&self, external_id: &str) -> Result<(), AppError>;
+
+    /// Captures the computer's current frame (REQ-030).
+    ///
+    /// The bytes come from the configured frame command run inside the container. A deployment
+    /// without a frame command answers [`AppError::Unavailable`] rather than fake pixels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] when the provider cannot be reached or no frame command
+    /// is configured, and [`AppError::Rule`] when the command produced no usable frame.
+    async fn screenshot(&self, external_id: &str) -> Result<Vec<u8>, AppError>;
 }
 
 /// A computer row as a store writes it (REQ-026).
@@ -1262,6 +1273,56 @@ pub trait ComputerStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn running_idle(&self, as_of: &str) -> Result<Vec<boma_domain::Computer>, AppError>;
+}
+
+/// A screen capability row, as the stores hold it (REQ-030).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenCapability {
+    /// The computer this capability opens.
+    pub computer_id: boma_domain::ComputerId,
+    /// The tenant the computer belongs to.
+    pub space_id: boma_domain::SpaceId,
+    /// The screen generation this capability was minted against.
+    pub screen_generation: u64,
+}
+
+/// The screen capability minted against a computer, ready to store (REQ-030).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewScreenCapability {
+    /// The computer this capability opens.
+    pub computer_id: boma_domain::ComputerId,
+    /// The tenant the computer belongs to.
+    pub space_id: boma_domain::SpaceId,
+    /// The generation of the screen at minting time.
+    pub screen_generation: u64,
+    /// The hash of the bearer token; the token itself is never stored.
+    pub token_hash: Vec<u8>,
+    /// When the capability was minted.
+    pub created_at: String,
+}
+
+/// Screen capabilities: sealed bearer tokens that authorise the screen stream (REQ-030).
+#[async_trait]
+pub trait ScreenCapabilityStore: Send + Sync {
+    /// Stores a freshly minted capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn issue(
+        &self,
+        context: &boma_domain::TenantContext,
+        capability: NewScreenCapability,
+    ) -> Result<(), AppError>;
+
+    /// Finds a capability by hash, alone, in a system context.
+    ///
+    /// The bearer token *is* the authentication here; there is no tenant session yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_by_hash(&self, token_hash: &[u8]) -> Result<Option<ScreenCapability>, AppError>;
 }
 
 /// The tools a run may use, as the space and the bot enabled them (REQ-016).

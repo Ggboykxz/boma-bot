@@ -327,6 +327,18 @@ pub struct RoutineWriteReply {
     pub timezone: Option<String>,
 }
 
+/// The reply of `computer.openScreen` (REQ-030).
+///
+/// The token is returned once, here, and the server stores only its hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerOpenScreenReply {
+    /// The opaque bearer token for `/api/internal/screen-target`.
+    pub capability: String,
+    /// The generation the capability names.
+    pub screen_generation: u64,
+}
+
 /// The reply of `computer.status` (REQ-026, REQ-027).
 ///
 /// `status` is one of `queued | running | interrupted | completed | failed | stopped`, or

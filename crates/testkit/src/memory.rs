@@ -198,6 +198,19 @@ struct RoutineRow {
     routine: boma_app::ports::Routine,
 }
 
+/// A screen capability row, with its tenant (REQ-030).
+#[derive(Debug, Clone)]
+struct ScreenCapabilityRow {
+    /// The capability.
+    computer_id: boma_domain::ComputerId,
+    /// The tenant it opens for.
+    space_id: SpaceId,
+    /// The hash of the bearer token.
+    token_hash: Vec<u8>,
+    /// The generation the capability was minted against.
+    screen_generation: u64,
+}
+
 /// A computer, with its tenant (REQ-026).
 #[derive(Debug, Clone)]
 struct ComputerRow {
@@ -324,6 +337,8 @@ struct State {
     read_states: Vec<ReadStateRow>,
     /// The snoozes of each person, per conversation.
     snoozes: Vec<SnoozeRow>,
+    /// The screen capabilities minted against computers.
+    screen_capabilities: Vec<ScreenCapabilityRow>,
     /// The memory documents people wrote.
     memory_documents: Vec<MemoryDocumentMemRow>,
     /// The computers of bots.
@@ -535,6 +550,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn computers(&self) -> MemoryComputerStore {
         MemoryComputerStore::new(self)
+    }
+
+    /// The store of screen capabilities.
+    #[must_use]
+    pub fn screen_capabilities(&self) -> MemoryScreenCapabilityStore {
+        MemoryScreenCapabilityStore::new(self)
     }
 
     /// Seeds a conversation with explicit sequences.
@@ -3791,4 +3812,63 @@ fn parse_rfc3339(instant: &str) -> Option<time::OffsetDateTime> {
     use time::format_description::well_known::Rfc3339;
 
     time::OffsetDateTime::parse(instant, &Rfc3339).ok()
+}
+
+/// The screen capabilities of the deployment, in memory.
+#[derive(Debug, Clone)]
+pub struct MemoryScreenCapabilityStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryScreenCapabilityStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryScreenCapabilityStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ScreenCapabilityStore for MemoryScreenCapabilityStore {
+    async fn issue(
+        &self,
+        context: &TenantContext,
+        capability: boma_app::ports::NewScreenCapability,
+    ) -> Result<(), boma_app::AppError> {
+        if !visible(context, &capability.space_id) {
+            return Err(boma_app::AppError::NotFound);
+        }
+        let mut state = write(&self.state);
+        state.screen_capabilities.push(ScreenCapabilityRow {
+            computer_id: capability.computer_id,
+            space_id: capability.space_id,
+            token_hash: capability.token_hash,
+            screen_generation: capability.screen_generation,
+        });
+        Ok(())
+    }
+
+    async fn find_by_hash(
+        &self,
+        token_hash: &[u8],
+    ) -> Result<Option<boma_app::ports::ScreenCapability>, boma_app::AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .screen_capabilities
+            .iter()
+            .find(|row| row.token_hash == token_hash)
+            .map(|row| boma_app::ports::ScreenCapability {
+                computer_id: row.computer_id.clone(),
+                space_id: row.space_id.clone(),
+                screen_generation: row.screen_generation,
+            }))
+    }
 }

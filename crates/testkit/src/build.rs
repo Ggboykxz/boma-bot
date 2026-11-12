@@ -360,6 +360,7 @@ impl TestAppBuilder {
             Arc::new(database.memory()),
             Arc::new(database.routines()),
             Arc::new(database.computers()),
+            Arc::new(database.screen_capabilities()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,

@@ -12,8 +12,8 @@ use crate::{
     ports::{
         AccountStore, BotStore, CardStore, Clock, ComputerStore, EffectStore, EventPublisher,
         EventStore, IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher,
-        ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore, SessionStore,
-        SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
+        ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore, ScreenCapabilityStore,
+        SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -58,6 +58,8 @@ pub struct Stores {
     pub routines: Arc<dyn RoutineStore>,
     /// The computers of bots (REQ-026).
     pub computers: Arc<dyn ComputerStore>,
+    /// The screen capabilities of bots' computers (REQ-030).
+    pub screen_capabilities: Arc<dyn ScreenCapabilityStore>,
 }
 
 impl Stores {
@@ -87,6 +89,7 @@ impl Stores {
         memory: Arc<dyn MemoryStore>,
         routines: Arc<dyn RoutineStore>,
         computers: Arc<dyn ComputerStore>,
+        screen_capabilities: Arc<dyn ScreenCapabilityStore>,
     ) -> Self {
         Self {
             accounts,
@@ -108,6 +111,7 @@ impl Stores {
             memory,
             routines,
             computers,
+            screen_capabilities,
         }
     }
 }

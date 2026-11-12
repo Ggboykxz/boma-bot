@@ -11,7 +11,7 @@
 
 use utoipa::{OpenApi, openapi::OpenApi as OpenApiDocument};
 
-use crate::{authcap, error, health};
+use crate::{authcap, error, health, screen};
 
 /// The document, assembled from the annotated handlers.
 #[derive(OpenApi)]
@@ -27,7 +27,8 @@ use crate::{authcap, error, health};
         health::liveness,
         health::readiness,
         health::internal_health,
-        health::auth_capabilities
+        health::auth_capabilities,
+        screen::screen_target
     ),
     components(schemas(
         health::Liveness,
@@ -35,11 +36,13 @@ use crate::{authcap, error, health};
         health::InternalHealth,
         authcap::AuthCapabilities,
         authcap::SsoProvider,
+        screen::ScreenTargetRequest,
         error::ErrorBody,
         error::ErrorCode
     )),
     tags(
         (name = "ops", description = "Liveness, readiness and worker health."),
+        (name = "ops", description = "The sealed screen stream."),
         (name = "auth", description = "Which sign-in methods the deployment offers.")
     )
 )]
