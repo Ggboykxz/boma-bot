@@ -579,7 +579,7 @@ async fn req_014_an_expired_lease_is_reclaimed_by_another_worker() {
     assert_eq!(reclaimed.id, run.id);
     assert_eq!(reclaimed.lease_owner.as_deref(), Some("worker-014-2"));
     assert_eq!(reclaimed.lease_fence, 2);
-    cleanup(&database, &organization_id, &email).await;
+    cleanup(database, &organization_id, &email).await;
 }
 
 #[tokio::test]

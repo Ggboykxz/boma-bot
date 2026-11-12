@@ -346,6 +346,48 @@ async fn req_042_creating_a_space_makes_the_caller_its_owner() {
 }
 
 #[tokio::test]
+async fn req_006_a_cancel_stops_the_run_and_is_idempotent() {
+    let world = world().await;
+    let send = post(
+        state(&world.app),
+        "/rpc/threads/send",
+        Some(&world.caller),
+        serde_json::json!({"botId": world.bot_id, "text": "Summarise the last three commits."}),
+    )
+    .await;
+    let run_id = json(send).await["runId"]
+        .as_str()
+        .expect("a run id")
+        .to_owned();
+
+    for _ in 0..2 {
+        let response = post(
+            state(&world.app),
+            "/rpc/runs/cancel",
+            Some(&world.caller),
+            serde_json::json!({"runId": run_id}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json(response).await;
+        assert_eq!(body["id"], serde_json::json!(run_id));
+        assert_eq!(body["status"], serde_json::json!("cancelled"));
+    }
+
+    // A run the caller cannot see is refused with the same stable envelope.
+    let response = post(
+        state(&world.app),
+        "/rpc/runs/cancel",
+        Some(&world.caller),
+        serde_json::json!({"runId": "run_does_not_exist"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json(response).await;
+    assert_eq!(body["code"], serde_json::json!("NOT_FOUND"));
+}
+
+#[tokio::test]
 async fn req_004_creating_a_bot_creates_its_thread() {
     let world = world().await;
     let response = post(

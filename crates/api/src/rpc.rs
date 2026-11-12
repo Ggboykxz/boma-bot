@@ -22,7 +22,10 @@ use crate::{
     auth::AuthContext,
     error::ApiError,
     state::AppState,
-    wire::{BotReply, InvitationReply, MessagesReply, RunView, RunsReply, SendReply, SpaceReply},
+    wire::{
+        BotReply, CancelReply, InvitationReply, MessagesReply, RunView, RunsReply, SendReply,
+        SpaceReply,
+    },
 };
 
 /// The namespaces this milestone serves.
@@ -51,6 +54,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::SPACES, "create"),
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
+        (namespaces::RUNS, "cancel"),
     ]
 }
 
@@ -95,6 +99,9 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::RUNS, "list") => runs_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::RUNS, "cancel") => runs_cancel(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -322,6 +329,28 @@ async fn runs_list(state: AppState, auth: AuthContext, body: Bytes) -> Result<Ru
             .collect(),
         next_cursor: page.next_cursor,
     })
+}
+
+/// `runs.cancel` — stop a run, wherever it is (REQ-006).
+async fn runs_cancel(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<CancelReply, ApiError> {
+    let request: RunsCancelRequest = parse(&body)?;
+    let run = usecases::cancel_run(state.app(), &auth.actor.context, &request.run_id).await?;
+    Ok(CancelReply {
+        id: run.id.as_str().to_owned(),
+        status: run.status.as_str().to_owned(),
+    })
+}
+
+/// The body of `runs.cancel`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunsCancelRequest {
+    /// The run the caller wants stopped.
+    run_id: String,
 }
 
 /// The body of `runs.list`.

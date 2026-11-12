@@ -171,6 +171,16 @@ pub struct InvitationReply {
     pub status: String,
 }
 
+/// The reply of `runs.cancel`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelReply {
+    /// The run the caller stopped.
+    pub id: String,
+    /// Where it is now: `cancelled`.
+    pub status: String,
+}
+
 /// The reply of `runs.list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

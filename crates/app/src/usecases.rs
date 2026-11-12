@@ -13,11 +13,13 @@
 //! * [`send_message`] writes one message and one run, and replays the same answer for the same
 //!   client nonce;
 //! * [`page_messages`] returns the newest messages first, with a cursor;
-//! * [`list_runs`] projects runs into the activity list.
+//! * [`list_runs`] projects runs into the activity list;
+//! * [`cancel_run`] stops a run: once it reaches `cancelled`, nothing lands on it again
+//!   (REQ-006).
 
 use boma_domain::{
-    Bot, Email, Message, MessagePage, Run, RunStatus, RunTrigger, Space, SpaceRole, TenantContext,
-    Thread, User, parse_cursor, validate_message_text,
+    Bot, Email, EventType, Message, MessagePage, Run, RunStatus, RunTrigger, Space, SpaceRole,
+    TenantContext, Thread, User, parse_cursor, validate_message_text,
 };
 
 pub use crate::accounts::{SignIn, SignUp};
@@ -512,6 +514,57 @@ pub async fn claim_run(app: &App, owner: &str) -> Result<Option<ClaimedRun>, App
         .await?
         .ok_or(AppError::NotFound)?;
     Ok(Some(ClaimedRun { run, bot, thread }))
+}
+
+/// Stops a run: nothing further happens to it (REQ-006).
+///
+/// Cancelling a run that already reached a terminal state is a no-op that returns the run as it
+/// is, which is what makes a retried stop safe to render. The member who stops the run sees the
+/// `cancelled` status; the stream announces it.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the run does not exist in the caller's tenant, and
+/// [`AppError::Unavailable`] when a store cannot answer.
+pub async fn cancel_run(app: &App, context: &TenantContext, run_id: &str) -> Result<Run, AppError> {
+    let run_id = boma_domain::RunId::new(run_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let run = app
+        .stores
+        .runs
+        .find(context, &run_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if run.status.is_terminal() {
+        return Ok(run);
+    }
+    let now = app.services.clock.now();
+    app.stores
+        .runs
+        .set_status(context, &run_id, RunStatus::Cancelled, &now, None, None)
+        .await?;
+    let run = app
+        .stores
+        .runs
+        .find(context, &run_id)
+        .await?
+        .ok_or(AppError::Unavailable)?;
+    app.stores
+        .events
+        .append(
+            context,
+            crate::ports::NewEvent {
+                space_id: run.space_id.clone(),
+                thread_id: run.thread_id.clone(),
+                kind: EventType::Run,
+                payload: serde_json::json!({
+                    "runId": run.id.as_str(),
+                    "status": run.status.as_str(),
+                }),
+                created_at: now,
+            },
+        )
+        .await?;
+    Ok(run)
 }
 
 /// Moves a run to a new status, refusing a move the state machine forbids.

@@ -486,6 +486,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn req_006_a_stopped_run_absorbs_nothing_else() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.bot.id.to_string(),
+                text: "plan my week".to_owned(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        assert_eq!(outcome.run.status, RunStatus::Queued);
+
+        // The person stops the work before the worker ever sees it (REQ-006).
+        let stopped = boma_app::usecases::cancel_run(test.app(), &context, outcome.run.id.as_str())
+            .await
+            .expect("the run is stopped");
+        assert_eq!(stopped.status, RunStatus::Cancelled);
+
+        // Stopping again is a no-op that shows the same state.
+        let again = boma_app::usecases::cancel_run(test.app(), &context, outcome.run.id.as_str())
+            .await
+            .expect("the stop is idempotent");
+        assert_eq!(again.status, RunStatus::Cancelled);
+
+        // Nothing lands on the run afterwards: a terminal row refuses every write.
+        let refused = test
+            .app()
+            .stores
+            .runs
+            .set_status(
+                &context,
+                &outcome.run.id,
+                RunStatus::Running,
+                &test.app().services.clock.now(),
+                None,
+                None,
+            )
+            .await;
+        assert!(refused.is_err(), "a cancelled run absorbs nothing");
+
+        // The worker finds nothing left to claim.
+        let worker = boma_app::worker::Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            std::sync::Arc::new(crate::ScriptedProvider::default()),
+            "worker-1".to_owned(),
+        );
+        assert!(!worker.step().await.expect("the worker answers"));
+    }
+
+    #[tokio::test]
     async fn req_042_a_seeded_person_owns_the_space_they_land_in() {
         let test = TestApp::builder().build();
         let user_id = test

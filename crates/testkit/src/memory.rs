@@ -1259,6 +1259,11 @@ impl RunStore for MemoryRunStore {
         if !visible(context, &row.run.space_id) {
             return Err(AppError::NotFound);
         }
+        if row.run.status.is_terminal() {
+            // A cancelled or finished run absorbs nothing else: once the chat sees a terminal
+            // state, no further write may land on the row (REQ-006).
+            return Err(AppError::Conflict);
+        }
         if let Some(fence) = fence
             && row.run.lease_fence != fence
         {

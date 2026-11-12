@@ -87,16 +87,22 @@ impl Worker {
 
         match self.provider.complete(request).await {
             Ok(chunks) => {
-                self.write_answer(&context, &claimed, &chunks).await?;
-                usecases::set_run_status(
-                    &self.app,
-                    &context,
-                    run.id.as_str(),
-                    RunStatus::Completed,
-                    Some(run.lease_fence),
-                    None,
-                )
-                .await?;
+                // The provider answered; the person may have cancelled while it was thinking.
+                // A finished run absorbs nothing else (REQ-006).
+                let answered = self.write_answer(&context, &claimed, &chunks).await?;
+                if answered {
+                    usecases::set_run_status(
+                        &self.app,
+                        &context,
+                        run.id.as_str(),
+                        RunStatus::Completed,
+                        Some(run.lease_fence),
+                        None,
+                    )
+                    .await?;
+                } else {
+                    tracing::info!(run = %claimed.run.id, "the run was cancelled; the reply is not written and the run stays cancelled");
+                }
             }
             Err(error) => {
                 tracing::warn!(run = %run.id, %error, "a run failed");
@@ -108,14 +114,25 @@ impl Worker {
     }
 
     /// Writes the answer into the thread, chunk by chunk.
+    ///
+    /// Returns `false` when the run was cancelled while the model was answering: the caller then
+    /// stops there instead of marking the run completed (REQ-006).
     async fn write_answer(
         &self,
         context: &TenantContext,
         claimed: &usecases::ClaimedRun,
         chunks: &[String],
-    ) -> Result<(), AppError> {
+    ) -> Result<bool, AppError> {
+        // Even an empty answer is a decision about a live run: a cancellation wins.
+        if !self.still_live(context, &claimed.run).await? {
+            return Ok(false);
+        }
         let mut text = String::new();
         for chunk in chunks {
+            if !self.still_live(context, &claimed.run).await? {
+                tracing::info!(run = %claimed.run.id, "the run was cancelled mid-stream; the reply is not written");
+                return Ok(false);
+            }
             text.push_str(chunk);
             self.app
                 .stores
@@ -145,7 +162,22 @@ impl Worker {
             &text,
         )
         .await?;
-        Ok(())
+        Ok(true)
+    }
+
+    /// Whether the run has not reached a terminal state yet.
+    async fn still_live(
+        &self,
+        context: &TenantContext,
+        run: &boma_domain::Run,
+    ) -> Result<bool, AppError> {
+        Ok(self
+            .app
+            .stores
+            .runs
+            .find(context, &run.id)
+            .await?
+            .is_some_and(|run| !run.status.is_terminal()))
     }
 
     /// Records a failure on the run and stops it.

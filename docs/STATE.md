@@ -2,17 +2,19 @@
 
 ## Current milestone
 
-**M1 — walking skeleton implemented and committed.** Sign-up → space → bot → send → run → streamed
-reply with a scripted provider; RLS and the tenant context proved against a real Postgres; the 13
-M1 API goldens replay byte for byte; the two M1 UI goldens (`REQ-001-send-message`,
-`REQ-012-run-statuses`) pass in Playwright. The thread and activity screens render with the new
-BoardUI shell (`/app/<botId>`, `/app/activity`).
+**M2 — in progress.** Slices land one commit at a time; tests written before the code.
 
-Next command: `/implement M2` — runs and tools milestone (steering REQ-003, cards, recovery of
-orphaned runs, the approvals gate), followed by closing the remaining UI goldens.
+- **REQ-006 (stop work, MUST)** is done and committed-as-`feat(app,api,infra,testkit): …`: a `runs.cancel`
+  procedure stops a run wherever it is, the worker stops producing into it (pre-check, per-chunk
+  check, and the per-write terminal guard), a terminal run absorbs no further write in either
+  adapter (with the fence), the stop is idempotent, and the live stream announces `cancelled`. The
+  helper-run half of REQ-006 (stop the helper, not the parent) lands with REQ-019 delegation.
 
-**opencode must be restarted** for the BoardUI agent skill (`.claude/skills/boardui/`) and the always-on
-rules to load.
+Remaining in M2, in dependency order: REQ-003 steering, REQ-016/REQ-017 (per-run tool catalogue and
+the approval gate with exactly-once), REQ-015 model fallback, REQ-007 pending cards, REQ-008
+replies/reactions, REQ-019 delegation, REQ-009 read state (SHOULD).
+
+The current commit carries REQ-006 only; M2 is not done yet.
 
 ## Done
 
