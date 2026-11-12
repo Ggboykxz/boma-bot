@@ -312,9 +312,8 @@ mod tests {
             ("DOCKER_HOST", "unix:///boma-no-such-docker.sock"),
         ])
         .expect("the selection parses");
-        let error = match config.provision().await {
-            Ok(_) => panic!("the daemon must answer"),
-            Err(error) => error,
+        let Err(error) = config.provision().await else {
+            panic!("the daemon must answer");
         };
         assert!(matches!(error, boma_app::AppError::Unavailable));
     }
