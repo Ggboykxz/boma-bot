@@ -42,6 +42,19 @@ Slices delivered:
   next weekday wake lands Friday 07:00 UTC; `routine-once` from the default instant lands
   00:05. Reply shape omits `timezone` for `@once` (a one-shot has no timezone semantics worth
   serialising).
+
+## Environment notes
+
+- Docker, for M4 (Computers), runs **rootless** on the developer box: `dockerd-rootless`
+  (docker 29.9.2 via nixpkgs, `fuse-overlayfs` storage driver — native overlayfs with
+  `userxattr` is rejected by the sandbox kernel). XDG_RUNTIME_DIR=/tmp/opencode/xdg,
+  socket `unix:///tmp/opencode/docker.sock`, data-root `/tmp/opencode/docker-data`.
+  Verified: images pull through slirp4netns and containers run (hello-world, alpine).
+  The daemon is not under systemd; it does not survive a reboot and needs the env vars above.
+  No cgroups in rootless mode (expected without a systemd user session).
+- The sandbox disk (`/home`) is nearly full; keep builds in `/tmp/opencode` and clean
+  regenerable caches there. Deleting `node_modules` is safe: `npm ci` restores it.
+
 ## Done
 
 - **REQ-006 (stop work, MUST)** is done (`e453df1`): `runs.cancel` stops a run wherever it is, the
