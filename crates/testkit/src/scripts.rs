@@ -504,6 +504,38 @@ impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
         Ok(String::new())
     }
 
+    async fn observe(&self, _external_id: &str) -> Result<Vec<u8>, boma_app::AppError> {
+        boma_app::ports::ComputerRuntime::screenshot(self, _external_id).await
+    }
+
+    async fn navigate(&self, _external_id: &str, _url: &str) -> Result<(), boma_app::AppError> {
+        Ok(())
+    }
+
+    async fn evaluate(
+        &self,
+        _external_id: &str,
+        _expression: &str,
+    ) -> Result<serde_json::Value, boma_app::AppError> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn click(&self, _external_id: &str, _x: f64, _y: f64) -> Result<(), boma_app::AppError> {
+        Ok(())
+    }
+
+    async fn type_text(&self, _external_id: &str, _text: &str) -> Result<(), boma_app::AppError> {
+        Ok(())
+    }
+
+    async fn scroll(&self, _external_id: &str, _delta_y: f64) -> Result<(), boma_app::AppError> {
+        Ok(())
+    }
+
+    async fn dom_snapshot(&self, _external_id: &str) -> Result<String, boma_app::AppError> {
+        Ok("<html><body></body></html>".to_owned())
+    }
+
     async fn screenshot(&self, _external_id: &str) -> Result<Vec<u8>, boma_app::AppError> {
         // A canned one-by-one PNG: enough for the capability plumbing to be exercised byte for
         // byte; pixels are the browser image's job, not the memory port's.

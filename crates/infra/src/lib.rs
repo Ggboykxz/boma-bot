@@ -12,6 +12,7 @@
 
 #![deny(missing_docs)]
 
+pub mod cdp;
 pub mod computer;
 pub mod config;
 pub mod crypto;
@@ -21,6 +22,7 @@ pub mod provider;
 pub mod stores;
 pub mod tenant;
 
+pub use cdp::{Cdp, CdpError};
 pub use computer::{DockerComputerRuntime, NoneComputerRuntime};
 pub use config::{ConfigError, DatabaseSettings};
 pub use crypto::{Argon2idHasher, IdGenerator, SystemClock, TokenGenerator};

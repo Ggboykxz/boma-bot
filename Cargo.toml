@@ -50,6 +50,7 @@ subtle = "2.6.1"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 tokio-stream = "0.1.19"
+tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "stream", "handshake"] }
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "signal", "net", "time", "io-util", "sync"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["trace", "request-id", "limit", "cors", "set-header", "timeout"] }

@@ -10,13 +10,22 @@ are released (`BOMA_COMPUTER_IDLE_MINUTES`, default 10), and the provider confor
 (`boma-infra::computer_conformance`, six tests covering boot/reuse/shell/confinement/takeover/
 capability sealing/private isolation; the suite is the contract any provider answers to). Full
 gate suite green at push (`fmt`, `clippy -D warnings`, `nextest` 221/221, `deny`, `machete`, trace
-budget 21/40, secret scan).
+budget 21/40, secret scan). The REQ-028 push takes the suite to 224/224 (two configuration tests
+for the browser computer and the real-Chromium end-to-end test); the same gates are green locally,
+coverage runs in CI.
 
-**REQ-028 observe-and-act is partially delivered** — what runs against the alpine shell computer
-is proved (screenshot, shell, read/write file, takeover gate); DOM/click/type/scroll are **not**,
-because the image carries no browser. Unblocking that needs an explicit decision: a Chromium image
-plus a websocket CDP client (~large, image decision is a product call), or a scope change
-(shell/files only, no browser computer). This is not silently dropped; it is recorded.
+**REQ-028 observe-and-act is done against a real browser.** The supervisor now talks CDP over the
+websocket of the computer's headless Chromium: observe (PNG through `Page.captureScreenshot`),
+navigate, evaluate, click, type, scroll and DOM snapshot, all behind the same takeover and
+running-only gates as the shell tools. The proof is one end-to-end test against
+`zenika/alpine-chrome` (`crates/infra/tests/chromium.rs`: the frame carries the PNG magic bytes,
+the DOM contains the page's button, a typed value reads back, a click increments the page's own
+counter, a scroll moves `window.scrollY`). A deployment opts in with `BOMA_COMPUTER_IMAGE`,
+`BOMA_COMPUTER_CMD` (whitespace-separated argv, e.g. `--headless --no-sandbox
+--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 about:blank`) and
+`BOMA_COMPUTER_CDP_PORT=9222`; the container port is published on a random host port and read
+back by inspecting the container. The screen stream (REQ-030) falls back to CDP when the image
+carries no frame command. The shell and file tools keep working on the alpine image unchanged.
 
 - **REQ-027 (provider-agnostic computers, fail-closed, MUST)** is done: `SANDBOX_PROVIDER`
   selects the backend at startup — absent means `none` (valid), `docker` selects the local
@@ -46,15 +55,18 @@ plus a websocket CDP client (~large, image decision is a product call), or a sco
   the holder may release; a different member cannot take or shed the hold; `computer.takeover` /
   `computer.release` RPC procedures, `ComputerTakeoverReply` wire shape
   (`status`, `provider`, `takeoverByUser?`, `takeoverAt?`).
-- **REQ-028 (observe and act on the computer, MUST)** is *partially* done, honestly: the tool
-  surface that runs against a shell-image computer exists — `computer_shell` (arbitrary `sh -c`,
-  output capped at 64 KiB), `computer_read_file`, `computer_write_file`
-  (base64-pipe write), all refused while a takeover hold is in effect, with path confinement to
-  `/home/` (no `..`, no shell meta-characters) — proved against a real rootless Docker daemon.
-  DOM / click / type / scroll / open-apps have **not** landed: the alpine image carries no
-  browser, so a laptop-local fake is the only thing they could run against, and that would be
-  theatre, not a proof. They need a Chromium image (CDP over websocket) or an explicit scope
-  change; recorded as blocked on that choice.
+- **REQ-028 (observe and act on the computer, MUST)** is done. The shell half runs against the
+  alpine image — `computer_shell` (arbitrary `sh -c`, output capped at 64 KiB),
+  `computer_read_file`, `computer_write_file` (base64-pipe write), path confinement to `/home/`
+  (no `..`, no shell meta-characters) — and the browser half runs against a Chromium image:
+  `computer_observe` (PNG), `computer_navigate`, `computer_evaluate`, `computer_click`,
+  `computer_type`, `computer_scroll`, `computer_dom_snapshot`, each opening a fresh CDP session
+  whose whole setup is bounded (5 s readiness budget, 10 s per call) so a half-open published
+  port cannot hang a caller. All of them go through `computer_caller` (takeover refusal,
+  running-only). The CDP client is `crates/infra/src/cdp.rs`; the supervisor publishes the CDP
+  port and reads the host port back from `inspect_container`. Chromium 124 exposes no
+  `Input.dispatchWheelEvent`, so scrolling uses `Input.synthesizeScrollGesture`. Proved by
+  `crates/infra/tests/chromium.rs` against a real rootless daemon and a real Chromium.
 
 Honest gaps carried in M4:
 
@@ -504,16 +516,17 @@ Any other externally visible difference would be a DEVIATION needing owner appro
 
 ## Next
 
-1. Restart opencode, so the BoardUI skill and the always-on rules load.
-2. `/implement M2`: runs and tools milestone — steering (REQ-003), cards, orphaned-run recovery
-   hardening, approvals gate; then the five remaining UI goldens as their screens land.
-3. Owner reviews `docs/PLAN.md` §2 (stack table) and vetoes any row; answers DEC-01…DEC-03 if they
-   have runtime knowledge. DEC-14 (the licence) is still open.
-4. Configure a remote and let CI run for real: the workflow has never executed on GitHub. The local
-   dev Postgres lives on port 5433 with a superuser `boma`; CI/Makefile default to 5432.
-5. Re-run the coverage gate with the full debug build when the disk allows the from-scratch
-   instrumented rebuild (it was run with `CARGO_PROFILE_*_DEBUG=0`; the machine's `/tmp` is 91 %
-   full across sessions and repeatedly forced cache eviction).
+1. **M5 — integrations** per `docs/PLAN.md`: the connector catalogue and per-space installs
+   (REQ-032), remote MCP plus opt-in stdio (REQ-033), plugin submissions with review (REQ-034),
+   skills (REQ-035) and write-only secrets (REQ-046).
+2. The agent loop still makes no tool calls (the scripted provider answers text only; BYOK is
+   deferred to M8), so the computer tools are proved at the use-case and provider boundaries, not
+   by an agent run, and the observe/act use cases are not yet exposed on the RPC surface.
+3. Coverage (80 % lines) is a CI job and runs on every push; this machine's `/tmp` cannot hold a
+   fresh instrumented rebuild across sessions, so the number is read from CI output.
+4. Owner reviews `docs/PLAN.md` §2 (stack table) and vetoes any row; answers DEC-01…DEC-03 if they
+   have runtime knowledge. DEC-14 (the licence) is resolved: MIT.
+5. Restart opencode after a BoardUI kit change, so the skill and the always-on rules reload.
 
 ## Decisions needed
 

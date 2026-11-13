@@ -69,6 +69,14 @@ pub struct ComputerConfig {
     /// The command run inside the container to emit a frame; `None` means frames are refused,
     /// never faked.
     pub frame_command: Option<String>,
+    /// The command the container boots with; `None` keeps it alive (`sleep infinity`).
+    ///
+    /// A browser computer sets this so its Chromium starts with `--remote-debugging-port`.
+    pub command: Option<String>,
+    /// The CDP port the computer's browser listens on inside the container, when it runs one.
+    ///
+    /// `None` means the computer has no browser and observe-and-act answers `Unavailable`.
+    pub cdp_port: Option<u16>,
     /// How long a computer may sit idle before it is released.
     pub idle_minutes: u64,
     /// RAM cap for one computer, in megabytes.
@@ -87,11 +95,18 @@ impl ComputerConfig {
         match self.provider {
             ComputerProvider::None => Ok(std::sync::Arc::new(NoneComputerRuntime)),
             ComputerProvider::Docker => {
-                let runtime = DockerComputerRuntime::new(
+                let mut runtime = DockerComputerRuntime::new(
                     &self.docker_host,
                     self.image.clone(),
                     self.frame_command.clone(),
                 )?;
+                if let Some(command) = &self.command {
+                    runtime = runtime
+                        .with_command(command.split_whitespace().map(str::to_owned).collect());
+                }
+                if let Some(port) = self.cdp_port {
+                    runtime = runtime.with_published_cdp_port(port);
+                }
                 // A cold daemon can take a moment to answer the first ping. The retry is bounded:
                 // a daemon that never comes up still fails closed, it just stops depending on luck.
                 let mut last = None;
@@ -115,11 +130,14 @@ impl fmt::Display for ComputerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "provider={} docker_host=[{}] image={} frame_command={} idle={}m memory={}MB cpu={}",
+            "provider={} docker_host=[{}] image={} frame_command={} command={} cdp_port={} idle={}m memory={}MB cpu={}",
             self.provider.name(),
             self.docker_host,
             self.image,
             self.frame_command.as_deref().unwrap_or("none"),
+            self.command.as_deref().unwrap_or("default"),
+            self.cdp_port
+                .map_or_else(|| "none".to_owned(), |port| port.to_string()),
             self.idle_minutes,
             self.memory_limit_mb,
             self.cpu_limit,
@@ -176,6 +194,19 @@ where
 
     let image = optional(&env, "BOMA_COMPUTER_IMAGE").unwrap_or_else(|| "alpine:3.21".to_owned());
     let frame_command = optional(&env, "BOMA_COMPUTER_FRAME_CMD");
+    // The command is a whitespace-separated argv; the flags a browser image needs carry no spaces.
+    let command = optional(&env, "BOMA_COMPUTER_CMD");
+    let cdp_port =
+        optional(&env, "BOMA_COMPUTER_CDP_PORT")
+            .map(|value| {
+                value.parse::<u16>().ok().filter(|port| *port > 0).ok_or(
+                    ComputerConfigError::Invalid {
+                        name: "BOMA_COMPUTER_CDP_PORT",
+                        value: value.clone(),
+                    },
+                )
+            })
+            .transpose()?;
 
     let idle_minutes = optional_parsed(&env, "BOMA_COMPUTER_IDLE_MINUTES", 10_u64)?;
     if !(1..=1_440).contains(&idle_minutes) {
@@ -206,6 +237,8 @@ where
         docker_host,
         image,
         frame_command,
+        command,
+        cdp_port,
         idle_minutes,
         memory_limit_mb,
         cpu_limit,
@@ -314,6 +347,43 @@ mod tests {
         ] {
             let error = from_pairs([(name, value)]).expect_err("the limit is refused");
             assert!(matches!(error, ComputerConfigError::Invalid { name: n, .. } if n == name));
+        }
+    }
+
+    #[test]
+    fn req_028_a_browser_computer_configures_its_command_and_cdp_port() {
+        let config = from_pairs([
+            ("SANDBOX_PROVIDER", "docker"),
+            ("BOMA_COMPUTER_IMAGE", "zenika/alpine-chrome:latest"),
+            (
+                "BOMA_COMPUTER_CMD",
+                "--no-sandbox --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 about:blank",
+            ),
+            ("BOMA_COMPUTER_CDP_PORT", "9222"),
+        ])
+        .expect("the browser selection parses");
+        assert_eq!(config.image, "zenika/alpine-chrome:latest");
+        assert_eq!(
+            config.command.as_deref(),
+            Some(
+                "--no-sandbox --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 about:blank"
+            )
+        );
+        assert_eq!(config.cdp_port, Some(9222));
+    }
+
+    #[test]
+    fn req_028_a_cdp_port_outside_the_range_is_refused() {
+        for value in ["0", "65536", "nine"] {
+            let error =
+                from_pairs([("BOMA_COMPUTER_CDP_PORT", value)]).expect_err("the port is refused");
+            assert!(matches!(
+                error,
+                ComputerConfigError::Invalid {
+                    name: "BOMA_COMPUTER_CDP_PORT",
+                    ..
+                }
+            ));
         }
     }
 

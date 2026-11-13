@@ -52,6 +52,8 @@ maintenance, licence, simplicity).
 | `subtle` | 2.6.1 | BSD-3-Clause | constant-time comparison of the password and token hashes |
 | `time` | 0.3.55 | MIT OR Apache-2.0 | instants the clock and the stores move (RFC 3339 rendering) |
 | `tokio-stream` | 0.1.19 | MIT | streaming SSE frames and the golden replay harness |
+| `bollard` | 0.21.1 | Apache-2.0 | Docker API client for the computer supervisor (REQ-026): create/start/stop/inspect/exec, no shelling out to the CLI |
+| `tokio-tungstenite` | 0.27.0 | MIT | CDP websocket for observe-and-act (REQ-028): a plain-text JSON-RPC session to the computer's Chromium, one fresh connection per tool call, no TLS stack pulled in (`connect` + `stream` + `handshake` only) |
 
 Deliberately **not** added yet, so no unused dependency rots in the tree: `secrecy`,
 `aes-gcm`, `proptest`, `wiremock`, `testcontainers`, `criterion`, `reqwest`. Each arrives with the

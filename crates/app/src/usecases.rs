@@ -1489,6 +1489,228 @@ pub async fn ensure_computer(
     })
 }
 
+/// The outcome of one observation: the frame and the generation it belongs to (REQ-028).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerObservation {
+    /// The PNG bytes of the frame.
+    pub png: Vec<u8>,
+    /// The screen generation the frame belongs to.
+    pub screen_generation: u64,
+}
+
+/// The outcome of a DOM snapshot: the html and the generation it belongs to (REQ-028).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerDomSnapshot {
+    /// The outer HTML of the document's root.
+    pub html: String,
+    /// The screen generation the snapshot was taken in.
+    pub screen_generation: u64,
+}
+
+/// The outcome of an evaluation: the value, if the expression produced one (REQ-028).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComputerEvaluation {
+    /// The value of `expression`, or null when the expression produced nothing.
+    pub value: serde_json::Value,
+    /// The screen generation the evaluation ran in.
+    pub screen_generation: u64,
+}
+
+/// Takes a screenshot of the bot's computer (REQ-028).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the computer is not running or a hold is in effect, and
+/// [`AppError::Unavailable`] when the deployment has no computer backend.
+pub async fn computer_observe(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<ComputerObservation, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    let computer = resolve_bot_computer(app, context, bot_id).await?;
+    let external_id = computer.external_id.clone().ok_or(AppError::Unavailable)?;
+    let runtime = computers_or_unavailable(app)?;
+    let png = runtime.observe(&external_id).await?;
+    Ok(ComputerObservation {
+        png,
+        screen_generation: computer.screen_generation,
+    })
+}
+
+/// Navigates the bot's computer to `url` (REQ-028).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the computer is not running or a hold is in effect.
+pub async fn computer_navigate(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    url: &str,
+) -> Result<boma_domain::Computer, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    if url.is_empty() || url.len() > 4096 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the url is not usable".to_owned(),
+        )));
+    }
+    let computer = resolve_bot_computer(app, context, bot_id).await?;
+    let external_id = computer.external_id.clone().ok_or(AppError::Unavailable)?;
+    let runtime = computers_or_unavailable(app)?;
+    runtime.navigate(&external_id, url).await?;
+    computer_status(app, context, bot_id)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Evaluates a JavaScript expression in the bot's computer (REQ-028).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the expression raises or a hold is in effect.
+pub async fn computer_evaluate(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    expression: &str,
+) -> Result<ComputerEvaluation, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    if expression.is_empty() || expression.len() > 64 * 1024 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the expression is not usable".to_owned(),
+        )));
+    }
+    let computer = resolve_bot_computer(app, context, bot_id).await?;
+    let external_id = computer.external_id.clone().ok_or(AppError::Unavailable)?;
+    let runtime = computers_or_unavailable(app)?;
+    let value = runtime.evaluate(&external_id, expression).await?;
+    Ok(ComputerEvaluation {
+        value,
+        screen_generation: computer.screen_generation,
+    })
+}
+
+/// Clicks at a viewport point in the bot's computer (REQ-028).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the computer is not running or a hold is in effect.
+pub async fn computer_click(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    x: f64,
+    y: f64,
+) -> Result<boma_domain::Computer, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the point is not usable".to_owned(),
+        )));
+    }
+    let computer = resolve_bot_computer(app, context, bot_id).await?;
+    let external_id = computer.external_id.clone().ok_or(AppError::Unavailable)?;
+    let runtime = computers_or_unavailable(app)?;
+    runtime.click(&external_id, x, y).await?;
+    computer_status(app, context, bot_id)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Types text into the focused element of the bot's computer (REQ-028).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the computer is not running or a hold is in effect.
+pub async fn computer_type(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    text: &str,
+) -> Result<boma_domain::Computer, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    if text.len() > 64 * 1024 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the text is too large".to_owned(),
+        )));
+    }
+    let computer = resolve_bot_computer(app, context, bot_id).await?;
+    let external_id = computer.external_id.clone().ok_or(AppError::Unavailable)?;
+    let runtime = computers_or_unavailable(app)?;
+    runtime.type_text(&external_id, text).await?;
+    computer_status(app, context, bot_id)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Scrolls the bot's computer by `delta_y` pixels (REQ-028).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the computer is not running or a hold is in effect.
+pub async fn computer_scroll(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    delta_y: f64,
+) -> Result<boma_domain::Computer, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    if !delta_y.is_finite() || delta_y == 0.0 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the scroll delta is not usable".to_owned(),
+        )));
+    }
+    let computer = resolve_bot_computer(app, context, bot_id).await?;
+    let external_id = computer.external_id.clone().ok_or(AppError::Unavailable)?;
+    let runtime = computers_or_unavailable(app)?;
+    runtime.scroll(&external_id, delta_y).await?;
+    computer_status(app, context, bot_id)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Snapshots the bot's computer DOM (REQ-028).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::Rule`] when the computer is not running or a hold is in effect.
+pub async fn computer_dom_snapshot(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<ComputerDomSnapshot, AppError> {
+    computer_caller(app, context, bot_id).await?;
+    let computer = resolve_bot_computer(app, context, bot_id).await?;
+    let external_id = computer.external_id.clone().ok_or(AppError::Unavailable)?;
+    let runtime = computers_or_unavailable(app)?;
+    let html = runtime.dom_snapshot(&external_id).await?;
+    Ok(ComputerDomSnapshot {
+        html,
+        screen_generation: computer.screen_generation,
+    })
+}
+
+/// Resolves the computer a bot addresses, for the observe-family tools: its own, or the
+/// shared team computer (REQ-028/031).
+async fn resolve_bot_computer(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<boma_domain::Computer, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    resolve_computer(app, context, &bot_id)
+        .await?
+        .ok_or(AppError::Unavailable)
+}
+
 /// Finds the computer a bot addresses: its own, or the space's team computer (REQ-031).
 async fn resolve_computer(
     app: &App,

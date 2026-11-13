@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use bollard::models::{ContainerCreateBody, ExecConfig, HostConfig, VolumeCreateRequest};
 use bollard::{API_DEFAULT_VERSION, Docker};
 
+use crate::{Cdp, CdpError};
 use boma_app::{
     AppError,
     ports::{ComputerHandle, ComputerRuntime, ComputerSpec},
@@ -18,6 +19,8 @@ pub struct DockerComputerRuntime {
     docker: Docker,
     image: String,
     frame_command: Option<String>,
+    command: Vec<String>,
+    cdp_port: Option<u16>,
 }
 
 impl DockerComputerRuntime {
@@ -41,6 +44,8 @@ impl DockerComputerRuntime {
             docker,
             image: image.into(),
             frame_command,
+            command: vec!["sleep".to_owned(), "infinity".to_owned()],
+            cdp_port: None,
         })
     }
 
@@ -55,6 +60,22 @@ impl DockerComputerRuntime {
     pub fn frame_command(&self) -> Option<&str> {
         self.frame_command.as_deref()
     }
+
+    /// Overrides the command new computers boot with.
+    #[must_use]
+    pub fn with_command(mut self, command: Vec<String>) -> Self {
+        if !command.is_empty() {
+            self.command = command;
+        }
+        self
+    }
+
+    /// Publishes the CDP port `port` of new computers on a random host port, proxied to 127.0.0.1.
+    #[must_use]
+    pub fn with_published_cdp_port(mut self, port: u16) -> Self {
+        self.cdp_port = Some(port);
+        self
+    }
 }
 
 #[async_trait::async_trait]
@@ -65,6 +86,99 @@ impl ComputerRuntime for DockerComputerRuntime {
 
     fn frame_command(&self) -> Option<&str> {
         self.frame_command.as_deref()
+    }
+
+    async fn observe(&self, external_id: &str) -> Result<Vec<u8>, AppError> {
+        self.cdp(external_id)
+            .await?
+            .screenshot()
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the CDP screenshot failed");
+                AppError::Unavailable
+            })
+    }
+
+    async fn navigate(&self, external_id: &str, url: &str) -> Result<(), AppError> {
+        self.cdp(external_id)
+            .await?
+            .navigate(url)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the CDP navigation failed");
+                AppError::Unavailable
+            })
+    }
+
+    async fn evaluate(
+        &self,
+        external_id: &str,
+        expression: &str,
+    ) -> Result<serde_json::Value, AppError> {
+        self.cdp(external_id)
+            .await?
+            .evaluate(expression)
+            .await
+            .map_err(|error| {
+                if let CdpError::Exception(_) = &error {
+                    tracing::debug!(%external_id, %error, "the evaluated expression raised");
+                    AppError::Rule(boma_domain::DomainError::InvalidName(
+                        "the expression raised".to_owned(),
+                    ))
+                } else {
+                    tracing::warn!(%external_id, %error, "the CDP evaluation failed");
+                    AppError::Unavailable
+                }
+            })
+    }
+
+    async fn click(&self, external_id: &str, x: f64, y: f64) -> Result<(), AppError> {
+        self.cdp(external_id)
+            .await?
+            .click(x, y)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the CDP click failed");
+                AppError::Unavailable
+            })
+    }
+
+    async fn type_text(&self, external_id: &str, text: &str) -> Result<(), AppError> {
+        self.cdp(external_id)
+            .await?
+            .type_text(text)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the CDP typing failed");
+                AppError::Unavailable
+            })
+    }
+
+    async fn scroll(&self, external_id: &str, delta_y: f64) -> Result<(), AppError> {
+        self.cdp(external_id)
+            .await?
+            .scroll(0.0, delta_y)
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the CDP scroll failed");
+                AppError::Unavailable
+            })
+    }
+
+    async fn dom_snapshot(&self, external_id: &str) -> Result<String, AppError> {
+        let html = self
+            .cdp(external_id)
+            .await?
+            .evaluate("document.documentElement.outerHTML")
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the CDP DOM snapshot failed");
+                AppError::Unavailable
+            })?;
+        html.as_str().map(str::to_owned).ok_or_else(|| {
+            tracing::warn!(%external_id, "the DOM snapshot returned no HTML");
+            AppError::Unavailable
+        })
     }
 
     async fn ping(&self) -> Result<(), AppError> {
@@ -122,14 +236,26 @@ impl ComputerRuntime for DockerComputerRuntime {
             AppError::Unavailable
         })?;
 
+        let port_bindings = self.cdp_port.map(|port| {
+            let mut bindings = HashMap::new();
+            bindings.insert(
+                format!("{port}/tcp"),
+                Some(vec![bollard::models::PortBinding {
+                    host_ip: Some("127.0.0.1".to_owned()),
+                    host_port: Some("0".to_owned()),
+                }]),
+            );
+            bindings
+        });
         let body = ContainerCreateBody {
             image: Some(self.image.clone()),
-            cmd: Some(vec!["sleep".to_owned(), "infinity".to_owned()]),
+            cmd: Some(self.command.clone()),
             labels: Some(HashMap::from([(
                 "boma.computer".to_owned(),
                 spec.computer_id.clone(),
             )])),
             host_config: Some(HostConfig {
+                port_bindings,
                 memory: Some(i64::try_from(spec.memory_limit_mb).unwrap_or(i64::MAX) * 1024 * 1024),
                 // cpu_limit is bounded to [0.25, 4], so this value is exact in f64 and i64.
                 #[allow(clippy::cast_possible_truncation)]
@@ -251,6 +377,10 @@ impl ComputerRuntime for DockerComputerRuntime {
     }
 
     async fn screenshot(&self, external_id: &str) -> Result<Vec<u8>, AppError> {
+        // A browser computer carries no frame command: its CDP endpoint captures the same frame.
+        if self.frame_command.is_none() && self.cdp_port.is_some() {
+            return self.observe(external_id).await;
+        }
         let Some(frame_command) = self.frame_command.as_deref() else {
             tracing::warn!("no frame command is configured for this image");
             return Err(AppError::Unavailable);
@@ -336,6 +466,41 @@ impl ComputerRuntime for DockerComputerRuntime {
 }
 
 impl DockerComputerRuntime {
+    /// Opens a CDP session to the computer, resolving the published host port.
+    async fn cdp(&self, external_id: &str) -> Result<Cdp, AppError> {
+        let Some(cdp_port) = self.cdp_port else {
+            return Err(AppError::Unavailable);
+        };
+        let inspection = self
+            .docker
+            .inspect_container(
+                external_id,
+                None::<bollard::query_parameters::InspectContainerOptions>,
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, %external_id, "the computer inspection failed");
+                AppError::Unavailable
+            })?;
+        let key = format!("{cdp_port}/tcp");
+        let host_port = inspection
+            .network_settings
+            .and_then(|settings| settings.ports)
+            .and_then(|ports| ports.get(&key).cloned())
+            .flatten()
+            .and_then(|bindings| bindings.into_iter().next())
+            .and_then(|binding| binding.host_port)
+            .and_then(|port| port.parse::<u16>().ok())
+            .ok_or_else(|| {
+                tracing::warn!(%external_id, %cdp_port, "no CDP port is published for the computer");
+                AppError::Unavailable
+            })?;
+        Cdp::connect(host_port).await.map_err(|error| {
+            tracing::warn!(%error, %external_id, "the CDP websocket did not open");
+            AppError::Unavailable
+        })
+    }
+
     /// Starts an existing computer for `spec`'s memory mapping.
     async fn start(&self, external_id: &str, _spec: &ComputerSpec) -> Result<(), AppError> {
         self.docker
@@ -389,6 +554,38 @@ impl ComputerRuntime for NoneComputerRuntime {
         _command: &str,
         _output_cap: usize,
     ) -> Result<String, AppError> {
+        Err(AppError::Unavailable)
+    }
+
+    async fn observe(&self, _external_id: &str) -> Result<Vec<u8>, AppError> {
+        Err(AppError::Unavailable)
+    }
+
+    async fn navigate(&self, _external_id: &str, _url: &str) -> Result<(), AppError> {
+        Err(AppError::Unavailable)
+    }
+
+    async fn evaluate(
+        &self,
+        _external_id: &str,
+        _expression: &str,
+    ) -> Result<serde_json::Value, AppError> {
+        Err(AppError::Unavailable)
+    }
+
+    async fn click(&self, _external_id: &str, _x: f64, _y: f64) -> Result<(), AppError> {
+        Err(AppError::Unavailable)
+    }
+
+    async fn type_text(&self, _external_id: &str, _text: &str) -> Result<(), AppError> {
+        Err(AppError::Unavailable)
+    }
+
+    async fn scroll(&self, _external_id: &str, _delta_y: f64) -> Result<(), AppError> {
+        Err(AppError::Unavailable)
+    }
+
+    async fn dom_snapshot(&self, _external_id: &str) -> Result<String, AppError> {
         Err(AppError::Unavailable)
     }
 }

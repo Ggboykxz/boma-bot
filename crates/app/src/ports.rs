@@ -1213,6 +1213,61 @@ pub trait ComputerRuntime: Send + Sync {
     ///
     /// `None` means the runtime cannot produce frames; the deployment reports so honestly.
     fn frame_command(&self) -> Option<&str>;
+
+    /// Captures the page as a PNG through the browser's CDP endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] when the computer has no CDP endpoint, it is unreachable,
+    /// or the browser refuses the capture.
+    async fn observe(&self, external_id: &str) -> Result<Vec<u8>, AppError>;
+
+    /// Navigates the computer's page to `url`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] for the same reasons as [`ComputerRuntime::observe`].
+    async fn navigate(&self, external_id: &str, url: &str) -> Result<(), AppError>;
+
+    /// Evaluates a JavaScript expression and returns its value, when there is one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] for the same reasons as [`ComputerRuntime::observe`],
+    /// and [`AppError::Rule`] when the expression raises inside the page.
+    async fn evaluate(
+        &self,
+        external_id: &str,
+        expression: &str,
+    ) -> Result<serde_json::Value, AppError>;
+
+    /// Clicks at a viewport point.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] for the same reasons as [`ComputerRuntime::observe`].
+    async fn click(&self, external_id: &str, x: f64, y: f64) -> Result<(), AppError>;
+
+    /// Types the text into the focused element, character by character.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] for the same reasons as [`ComputerRuntime::observe`].
+    async fn type_text(&self, external_id: &str, text: &str) -> Result<(), AppError>;
+
+    /// Scrolls the page by `delta_y` pixels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] for the same reasons as [`ComputerRuntime::observe`].
+    async fn scroll(&self, external_id: &str, delta_y: f64) -> Result<(), AppError>;
+
+    /// Returns the page's serialized DOM.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] for the same reasons as [`ComputerRuntime::observe`].
+    async fn dom_snapshot(&self, external_id: &str) -> Result<String, AppError>;
 }
 
 /// A computer row as a store writes it (REQ-026).
