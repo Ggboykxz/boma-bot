@@ -20,7 +20,10 @@ use std::sync::{Mutex, MutexGuard};
 
 use boma_app::{
     AppError,
-    ports::{Clock, IdGenerator, ModelProvider, PasswordHasher, ProviderRequest, TokenGenerator},
+    ports::{
+        Clock, IdGenerator, ModelProvider, PasswordHasher, ProviderRequest, ProviderTurn,
+        TokenGenerator,
+    },
 };
 use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq;
@@ -327,7 +330,7 @@ struct Gate {
     /// Raised when the provider is called; released by the test once it steered.
     asked: std::sync::Arc<tokio::sync::Notify>,
     /// The one message that lets the answer through.
-    release: tokio::sync::oneshot::Receiver<Vec<String>>,
+    release: tokio::sync::oneshot::Receiver<ProviderTurn>,
 }
 
 /// The model provider a test drives: the answers it hands out, in order.
@@ -342,10 +345,11 @@ struct Gate {
 /// script one fails where it should.
 #[derive(Debug, Default)]
 pub struct ScriptedProvider {
-    /// The answers that are left, each one the chunks it streams.
-    answers: Mutex<VecDeque<Vec<String>>>,
-    /// The answer handed out when the script is exhausted.
-    fallback: Mutex<Option<Vec<String>>>,
+    /// The turns that are left, each one either chunks to stream (REQ-020) or tool calls to run
+    /// (REQ-016, REQ-019).
+    answers: Mutex<VecDeque<ProviderTurn>>,
+    /// The turn handed out when the script is exhausted.
+    fallback: Mutex<Option<ProviderTurn>>,
     /// The requests the provider received.
     requests: Mutex<Vec<ProviderRequest>>,
     /// A gate holding the first answer back. `None` outside tests that need the pause.
@@ -358,6 +362,12 @@ impl ScriptedProvider {
     /// Each answer is the list of chunks the model would have streamed: one answer is one turn.
     #[must_use]
     pub fn new(answers: Vec<Vec<String>>) -> Self {
+        Self::new_turn(answers.into_iter().map(ProviderTurn::Chunks).collect())
+    }
+
+    /// Builds the provider with the turns it hands out, in order.
+    #[must_use]
+    pub fn new_turn(answers: Vec<ProviderTurn>) -> Self {
         Self {
             answers: Mutex::new(answers.into()),
             fallback: Mutex::new(None),
@@ -376,7 +386,7 @@ impl ScriptedProvider {
     ) -> (
         Self,
         std::sync::Arc<tokio::sync::Notify>,
-        tokio::sync::oneshot::Sender<Vec<String>>,
+        tokio::sync::oneshot::Sender<ProviderTurn>,
     ) {
         let (release, receiver) = tokio::sync::oneshot::channel();
         let asked = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -390,7 +400,7 @@ impl ScriptedProvider {
     /// Builds the provider with the answer it hands out when its script is exhausted.
     #[must_use]
     pub fn with_fallback(mut self, chunks: Vec<String>) -> Self {
-        self.fallback = Mutex::new(Some(chunks));
+        self.fallback = Mutex::new(Some(ProviderTurn::Chunks(chunks)));
         self
     }
 
@@ -552,7 +562,7 @@ impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
 
 #[async_trait::async_trait]
 impl ModelProvider for ScriptedProvider {
-    async fn complete(&self, request: ProviderRequest) -> Result<Vec<String>, AppError> {
+    async fn complete(&self, request: ProviderRequest) -> Result<ProviderTurn, AppError> {
         lock(&self.requests).push(request);
         let gate = lock(&self.gate).take();
         if let Some(gate) = gate {
@@ -667,6 +677,7 @@ mod tests {
             prompt: prompt.to_owned(),
             history: Vec::new(),
             tools: Vec::new(),
+            memory: Vec::new(),
         }
     }
 
@@ -680,12 +691,18 @@ mod tests {
             .complete(request("hello"))
             .await
             .expect("the provider answers");
-        assert_eq!(first, vec!["Hello".to_owned(), " there".to_owned()]);
+        assert_eq!(
+            first,
+            boma_app::ports::ProviderTurn::Chunks(vec!["Hello".to_owned(), " there".to_owned()])
+        );
         let second = provider
             .complete(request("bye"))
             .await
             .expect("the provider answers");
-        assert_eq!(second, vec!["Bye".to_owned()]);
+        assert_eq!(
+            second,
+            boma_app::ports::ProviderTurn::Chunks(vec!["Bye".to_owned()])
+        );
 
         // The script is exhausted: the provider says it cannot answer.
         let empty = provider.complete(request("again")).await;
@@ -695,5 +712,39 @@ mod tests {
         let requests = provider.requests();
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[0].prompt, "hello");
+    }
+
+    #[tokio::test]
+    async fn req_020_the_scripted_provider_hands_out_a_tool_call_then_the_answer_as_a_turn() {
+        use boma_app::ports::{ProviderTurn, ToolCallRequest};
+
+        let provider = ScriptedProvider::new_turn(vec![
+            ProviderTurn::ToolCalls(vec![ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "delegate.helper".to_owned(),
+                arguments: serde_json::json!({ "prompt": "Research commits." }),
+            }]),
+            ProviderTurn::Chunks(vec!["Considering Friday.".to_owned()]),
+        ]);
+        let first = provider
+            .complete(request("plan my week"))
+            .await
+            .expect("the provider asks for a tool");
+        assert_eq!(
+            first,
+            ProviderTurn::ToolCalls(vec![ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "delegate.helper".to_owned(),
+                arguments: serde_json::json!({ "prompt": "Research commits." }),
+            }])
+        );
+        let second = provider
+            .complete(request("plan my week"))
+            .await
+            .expect("the provider streams the answer after the tool result");
+        assert_eq!(
+            second,
+            ProviderTurn::Chunks(vec!["Considering Friday.".to_owned()])
+        );
     }
 }

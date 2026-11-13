@@ -5,7 +5,7 @@
 //! is streamed in chunks and that the run completes. The chunks are the words of the answer, so
 //! joining them gives the sentence back.
 
-use boma_app::{AppError, ports::ModelProvider, ports::ProviderRequest};
+use boma_app::{AppError, ports::ModelProvider, ports::ProviderRequest, ports::ProviderTurn};
 
 /// The answer the provider gives when it is built without one.
 const DEFAULT_ANSWER: &str = "Boma Bot is ready to answer.";
@@ -46,8 +46,8 @@ impl Default for ScriptedProvider {
 
 #[async_trait::async_trait]
 impl ModelProvider for ScriptedProvider {
-    async fn complete(&self, _request: ProviderRequest) -> Result<Vec<String>, AppError> {
-        Ok(chunks(&self.answer))
+    async fn complete(&self, _request: ProviderRequest) -> Result<ProviderTurn, AppError> {
+        Ok(ProviderTurn::Chunks(chunks(&self.answer)))
     }
 }
 

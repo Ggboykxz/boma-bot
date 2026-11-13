@@ -1442,6 +1442,51 @@ pub trait EffectStore: Send + Sync {
     ) -> Result<ExternalEffect, AppError>;
 }
 
+/// A memory document carried into a provider turn (REQ-022).
+///
+/// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the
+/// scripted and the BYOK providers prove the same contract against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryContext {
+    /// The document's path, relative and POSIX-like.
+    pub path: String,
+    /// The content at its newest revision.
+    pub content: String,
+    /// The scope the document lives in: `bot` or `shared`.
+    pub scope: boma_domain::MemoryScope,
+}
+
+/// One tool this run may call, as the tool gate names it (REQ-016).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCallRequest {
+    /// The provider's correlation id for this call.
+    pub id: String,
+    /// The tool's key as it appears in the catalogue.
+    pub name: String,
+    /// The arguments the provider produced, validated by the dispatcher (REQ-016).
+    pub arguments: serde_json::Value,
+}
+
+/// The outcome of one tool call, handed back to the provider as a tool message (REQ-017).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCallResult {
+    /// The provider's correlation id from `ToolCallRequest::id`.
+    pub id: String,
+    /// Whether the tool executed without a refusal.
+    pub ok: bool,
+    /// What the model reads as the result.
+    pub body: serde_json::Value,
+}
+
+/// What one `complete` call hands back: either streamed chunks (the answer), or tool calls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderTurn {
+    /// The assistant's text, in the order it is to be streamed (REQ-020).
+    Chunks(Vec<String>),
+    /// The assistant wants one or more tools run before it answers (REQ-016, REQ-019).
+    ToolCalls(Vec<ToolCallRequest>),
+}
+
 /// What a model provider is asked to answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRequest {
@@ -1455,21 +1500,23 @@ pub struct ProviderRequest {
     pub history: Vec<Message>,
     /// The tools this run may use, already filtered (REQ-016).
     pub tools: Vec<ToolSpec>,
+    /// Scoped memory available to this turn (REQ-022).
+    pub memory: Vec<MemoryContext>,
 }
 
-/// Produces the answer of a bot.
+/// Produces the next turn of the assistant's answer.
 ///
-/// The provider returns the chunks it would have streamed, in order. The worker publishes each
-/// chunk as a `message-update` event before the run completes, so a client sees the answer grow
-/// (REQ-020).
+/// The provider returns either the ordered chunks to stream (REQ-020), or the tool calls it wants
+/// run before it can answer (REQ-016). The worker publishes each chunk as a `message-update`
+/// event before the turn completes, so a client sees the answer grow (REQ-020).
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
-    /// Answers a prompt.
+    /// Produces the next turn.
     ///
     /// # Errors
     ///
     /// Returns an error when the provider cannot answer.
-    async fn complete(&self, request: ProviderRequest) -> Result<Vec<String>, AppError>;
+    async fn complete(&self, request: ProviderRequest) -> Result<ProviderTurn, AppError>;
 }
 
 /// Hashes and checks passwords.

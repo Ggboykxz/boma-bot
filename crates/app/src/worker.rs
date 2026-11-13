@@ -11,7 +11,7 @@ use boma_domain::{RunStatus, TenantContext};
 
 use crate::{
     App, AppError, Failure,
-    ports::{ModelProvider, ProviderRequest},
+    ports::{ModelProvider, ProviderRequest, ProviderTurn},
     usecases,
 };
 
@@ -188,10 +188,12 @@ impl Worker {
             prompt,
             history,
             tools,
+            // REQ-022: the context arrives with the worker slice that assembles scoped memory.
+            memory: Vec::new(),
         };
 
         match self.provider.complete(request).await {
-            Ok(chunks) => {
+            Ok(ProviderTurn::Chunks(chunks)) => {
                 let mut text = String::new();
                 for chunk in &chunks {
                     if !self.still_live(context, &claimed.run).await? {
@@ -221,6 +223,18 @@ impl Worker {
                     text,
                     latest_seq: latest,
                 })
+            }
+            // The tool loop lands in Task 2/4/5. Until then a tool call is refused legibly:
+            // the run fails with a reason the person can read, never with a silent drop.
+            Ok(ProviderTurn::ToolCalls(calls)) => {
+                let names: Vec<&str> = calls.iter().map(|call| call.name.as_str()).collect();
+                let error = AppError::Rule(boma_domain::DomainError::InvalidName(format!(
+                    "the model asked for tools this build cannot dispatch yet: {}",
+                    names.join(", ")
+                )));
+                tracing::warn!(run = %run.id, %error, "a run asked for a tool call before the loop exists");
+                self.fail_run(context, &run, error).await?;
+                Ok(PassOutcome::Failed)
             }
             Err(error) => {
                 let retryable = error.is_retryable();

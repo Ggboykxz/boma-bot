@@ -786,7 +786,9 @@ mod tests {
         .expect("the steering message is sent");
         assert_eq!(second.run.id, first.run.id, "one working run (REQ-003)");
         release
-            .send(vec!["Considering Friday.".to_owned()])
+            .send(boma_app::ports::ProviderTurn::Chunks(vec![
+                "Considering Friday.".to_owned(),
+            ]))
             .expect("the gate opens");
         assert!(
             step.await
