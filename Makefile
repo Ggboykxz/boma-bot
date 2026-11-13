@@ -7,7 +7,7 @@ WEB := apps/web
 COVERAGE_MIN ?= 80
 # The traceability ratchet: how many requirements may still be uncovered. It only goes down.
 # M0 = 50 (8 covered), M1 tightens to 40, and so on; docs/STATE.md records the value.
-TRACE_MAX_MISSING ?= 19
+TRACE_MAX_MISSING ?= 17
 # The integration tests in crates/infra/tests/ talk to a real Postgres, as AGENTS.md asks. The
 # database must be up before `make test` (`docker compose up -d db`); the test fails loudly when
 # the variable is missing rather than skipping itself.

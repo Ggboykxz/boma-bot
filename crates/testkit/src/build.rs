@@ -254,7 +254,7 @@ fn name_of(email: &Email) -> String {
 ///
 /// Every script is optional: an application built without one still works, with deterministic
 /// fallbacks.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TestAppBuilder {
     /// The identifiers the application mints, in order.
     ids: Vec<String>,
@@ -270,6 +270,9 @@ pub struct TestAppBuilder {
     computer_answers: Vec<crate::ComputerAnswer>,
     /// The computer runtime to use instead of a fresh scripted one.
     runtime: Option<Arc<crate::ScriptedComputerRuntime>>,
+    /// The MCP transport to use instead of a fresh scripted one. Not `Debug`: a
+    /// transport's internals are the server's business.
+    mcp_transport: Option<Arc<dyn boma_app::ports::McpTransport>>,
 }
 
 impl Default for TestAppBuilder {
@@ -282,6 +285,7 @@ impl Default for TestAppBuilder {
             computers: true,
             computer_answers: Vec::new(),
             runtime: None,
+            mcp_transport: None,
         }
     }
 }
@@ -321,6 +325,13 @@ impl TestAppBuilder {
     pub fn computers_runtime(mut self, runtime: Arc<crate::ScriptedComputerRuntime>) -> Self {
         self.computers = true;
         self.runtime = Some(runtime);
+        self
+    }
+
+    /// Builds the application with this MCP transport instead of a fresh scripted one.
+    #[must_use]
+    pub fn mcp_transport(mut self, transport: Arc<dyn boma_app::ports::McpTransport>) -> Self {
+        self.mcp_transport = Some(transport);
         self
     }
 
@@ -370,6 +381,8 @@ impl TestAppBuilder {
             Arc::new(database.secrets()),
             Arc::new(database.plugin_submissions()),
             Arc::new(database.skills()),
+            Arc::new(database.mcp_servers()),
+            Arc::new(database.audit()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -391,6 +404,9 @@ impl TestAppBuilder {
                 ],
                 default: "anthropic/claude-sonnet".to_owned(),
             },
+            self.mcp_transport
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::ScriptedMcpTransport::new())),
         );
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
@@ -3772,5 +3788,398 @@ mod skills_tests {
             .expect("the list answers")
             .into_iter()
             .find(|skill| skill.name == name)
+    }
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    // REQ-033 — MCP servers: registry, discovery, per-space private allow-list (D-05).
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+    use crate::ScriptedMcpTransport;
+
+    async fn seeded() -> (
+        TestApp,
+        boma_domain::UserId,
+        boma_domain::TenantContext,
+        boma_app::usecases::BotCreated,
+    ) {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        (test, user_id, context, created)
+    }
+
+    #[tokio::test]
+    async fn req_033_a_member_registers_a_remote_server_and_manages_it() {
+        let (test, _user_id, context, _created) = seeded().await;
+
+        let summary = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "company-files",
+            boma_domain::McpTransport::Http,
+            Some("https://mcp.example.com/mcp".to_owned()),
+            None,
+            Some(secrecy::SecretString::from("token-1".to_owned())),
+            false,
+            None,
+        )
+        .await
+        .expect("the server is registered");
+        assert_eq!(summary.transport, "http");
+        assert_eq!(summary.auth_state, "none");
+        assert!(!summary.allow_private);
+        let server_id = summary.id.clone();
+
+        let servers = boma_app::usecases::mcp_servers_list(test.app(), &context)
+            .await
+            .expect("the list answers");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "company-files");
+        assert!(
+            !format!("{servers:?}").contains("token-1"),
+            "no credential leaks into the list"
+        );
+
+        // The bearer is sealed like every secret: revealed only for the wire call.
+        let revealed = test
+            .app()
+            .stores
+            .mcp_servers
+            .reveal_bearer(&context, &server_id)
+            .await
+            .expect("the reveal answers")
+            .expect("the token is there");
+        assert_eq!(secrecy::ExposeSecret::expose_secret(&revealed), "token-1");
+
+        let removed = boma_app::usecases::mcp_server_remove(test.app(), &context, &server_id)
+            .await
+            .expect("the remove answers");
+        assert!(removed);
+        let listed = boma_app::usecases::mcp_servers_list(test.app(), &context)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed.len(), 0);
+        // Removing twice is a success.
+        assert!(
+            !boma_app::usecases::mcp_server_remove(test.app(), &context, &server_id)
+                .await
+                .expect("the remove answers")
+        );
+    }
+
+    #[tokio::test]
+    async fn req_033_a_stdio_server_is_refused_by_default() {
+        let (test, _user_id, context, _created) = seeded().await;
+
+        let outcome = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "local-things",
+            boma_domain::McpTransport::Stdio,
+            None,
+            Some("/usr/bin/python3 -m mcp_server".to_owned()),
+            None,
+            false,
+            None,
+        )
+        .await;
+        let Err(error) = outcome else {
+            panic!("a stdio server must be refused by default");
+        };
+        assert!(error.to_string().contains("local command servers"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn req_033_a_private_endpoint_needs_the_allow_list_and_writes_an_audit_event() {
+        let (test, _user_id, context, _created) = seeded().await;
+
+        // Refused without it: the URL resolves nowhere, but the refusal comes from the shape check.
+        let refused = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "lan-server",
+            boma_domain::McpTransport::Http,
+            Some("http://192.168.1.10:8080/mcp".to_owned()),
+            None,
+            None,
+            false,
+            None,
+        )
+        .await;
+        assert!(
+            refused.is_err(),
+            "plain HTTP without the allow-list is refused"
+        );
+
+        // Allowed with it, and every probe audits.
+        let summary = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "lan-server",
+            boma_domain::McpTransport::Http,
+            Some("http://192.168.1.10:8080/mcp".to_owned()),
+            None,
+            None,
+            true,
+            None,
+        )
+        .await
+        .expect("the allow-list releases the shape");
+        assert!(summary.allow_private);
+
+        let transport = Arc::new(ScriptedMcpTransport::new());
+        // Re-wire the transport for this test's app? No: probe uses the app's own transport, which is scripted-empty here.
+        let _ = transport;
+        let probed = boma_app::usecases::mcp_server_probe(test.app(), &context, &summary.id).await;
+        assert!(
+            probed.is_ok(),
+            "the probe answers with the scripted transport"
+        );
+
+        let events = test.database().audit().events();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "mcp.private_call" && event.target == "lan-server"),
+            "every probe of a private endpoint writes an audit event: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_033_a_probe_discovers_tools_and_they_join_the_catalogue() {
+        let test = TestApp::builder()
+            .mcp_transport(Arc::new(ScriptedMcpTransport::with_tools_and_results(
+                vec![
+                    boma_app::ports::McpTool {
+                        name: "list-issues".to_owned(),
+                        description: "Lists the open issues.".to_owned(),
+                        input_schema: serde_json::json!({ "type": "object" }),
+                    },
+                    boma_app::ports::McpTool {
+                        name: "../unsafe".to_owned(),
+                        description: "Must not appear anywhere.".to_owned(),
+                        input_schema: serde_json::json!({ "type": "object" }),
+                    },
+                ],
+                vec![serde_json::json!({ "issues": ["A", "B"] })],
+            )))
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        let summary = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "example",
+            boma_domain::McpTransport::Http,
+            Some("https://mcp.example.com/mcp".to_owned()),
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect("the server is registered");
+
+        let probed = boma_app::usecases::mcp_server_probe(test.app(), &context, &summary.id)
+            .await
+            .expect("the probe discovers the tools");
+        assert_eq!(
+            probed.tool_count,
+            Some(1),
+            "the unsafe tool was skipped: {probed:?}"
+        );
+        assert_eq!(probed.auth_state, "connected");
+
+        let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
+            .await
+            .expect("the catalogue answers");
+        let keys: Vec<&str> = catalogue.iter().map(|tool| tool.key.as_str()).collect();
+        assert!(keys.contains(&"mcp.example.list-issues"), "{keys:?}");
+        assert!(!keys.iter().any(|key| key.contains("unsafe")), "{keys:?}");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // mirrors the approval-flow tests: the scenario is the documentation
+    async fn req_033_an_approved_mcp_call_runs_exactly_like_an_approved_write() {
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder()
+            .mcp_transport(Arc::new(ScriptedMcpTransport::with_tools_and_results(
+                vec![boma_app::ports::McpTool {
+                    name: "list-issues".to_owned(),
+                    description: "Lists the open issues.".to_owned(),
+                    input_schema: serde_json::json!({ "type": "object" }),
+                }],
+                vec![serde_json::json!({ "issues": ["A"] })],
+            )))
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        let summary = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "example",
+            boma_domain::McpTransport::Http,
+            Some("https://mcp.example.com/mcp".to_owned()),
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect("the server is registered");
+        boma_app::usecases::mcp_server_probe(test.app(), &context, &summary.id)
+            .await
+            .expect("the probe discovers the tools");
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "What are the open issues?".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let provider = Arc::new(crate::ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "mcp.example.list-issues".to_owned(),
+                arguments: serde_json::json!({ "state": "open" }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["One issue: A.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // Write-class: the call parked on an approval card; the server was not called yet.
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+        let parked = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &outcome.run.id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(parked.status, boma_domain::RunStatus::WaitingInput);
+
+        boma_app::usecases::answer_card(test.app(), &context, card_id.as_str(), "approve")
+            .await
+            .expect("the card is answered");
+
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &outcome.run.id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(run.status, boma_domain::RunStatus::Queued);
+
+        // The resumed run calls the server exactly once.
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers");
+        let tool_text = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Tool)
+            .map(|message| {
+                message
+                    .blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        boma_domain::Block::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(tool_text.contains("list-issues"), "{tool_text}");
+        assert!(tool_text.contains("\"A\""), "{tool_text}");
     }
 }

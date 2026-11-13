@@ -12,12 +12,16 @@
 
 #![deny(missing_docs)]
 
+mod space_keys;
+
 pub mod cdp;
 pub mod computer;
 pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod events;
+pub mod mcp_http;
+pub mod net_safety;
 pub mod openai;
 pub mod provider;
 pub mod secret_box;
@@ -30,15 +34,18 @@ pub use config::{ConfigError, DatabaseSettings};
 pub use crypto::{Argon2idHasher, IdGenerator, SystemClock, TokenGenerator};
 pub use db::Postgres;
 pub use events::BroadcastPublisher;
+pub use mcp_http::HttpMcpTransport;
 pub use openai::{OpenAiCompatibleAdapter, OpenAiConfig};
 pub use provider::ScriptedProvider;
 pub use secret_box::{SecretBox, SecretBoxError};
 pub use stores::accounts::PostgresAccountStore;
+pub use stores::audit::PostgresAuditStore;
 pub use stores::bots::PostgresBotStore;
 pub use stores::cards::{PostgresCardStore, PostgresEffectStore};
 pub use stores::computer::PostgresComputerStore;
 pub use stores::events::PostgresEventStore;
 pub use stores::invitations::PostgresInvitationStore;
+pub use stores::mcp::PostgresMcpServerStore;
 pub use stores::memory::PostgresMemoryStore;
 pub use stores::messages::PostgresMessageStore;
 pub use stores::pending_tool_calls::PostgresPendingToolCallStore;

@@ -26,9 +26,35 @@ as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay
 Every milestone ships test-first at the API/use-case level, then PG/functional proof, then docs +
 STATE; gates re-run at each push (fmt, clippy -D warnings, cargo test workspace).
 
-**M5 — in flight. Three slices committed: REQ-046 (secrets, `835d8e7`), REQ-034 slice 1
-(plugin submissions, `bc03d1e`), REQ-035 (skills).**
+**M5 — in flight. Four slices committed: REQ-046 (secrets, `835d8e7`), REQ-034 slice 1
+(plugin submissions, `bc03d1e`), REQ-035 (skills, `d56f248`), REQ-033 (MCP servers, in this
+revision).**
 
+4. **REQ-033 (MCP servers, MUST) — honestly PARTIAL.** Done: `mcp.servers.list|add|remove|probe`
+   RPC (namespace `mcp`, procedure `servers.*` per the spec's dotted naming); the registration of
+   a **remote HTTP MCP server with a bearer token** (sealed under the space's DEK, ADR-020
+   machinery, never listed, `reveal_bearer` the only read path); discovery via
+   `initialize` → `tools/list` over plain `application/json` JSON-RPC (HTTP POST per call, 30 s,
+   1 MiB cap, no redirects); probed tools persisted (`mcp_server_tools`) and merged into the run
+   catalogue as `mcp.<server>.<tool>`, **Write-class**, so every call rides the approval gate
+   exactly once (REQ-017) and lands as a `role=tool` message; the private-endpoint allow-list is
+   per server per space (D-05), every probe and every approved call writes `audit_events`
+   (`mcp.private_call`); the SSRF guard is one function with five refusal reasons
+   (`crates/infra/src/net_safety.rs`), and the metadata endpoints are never reachable. stdio
+   servers are **refused by default** with the explanation (HTTP 400, static message), which is
+   the spec's acceptance criterion for default-disabled stdio; enabling the spawn is a config
+   change landing with the first allow-listed deployment. **NOT done, named as the gap:** the
+   OAuth leg (`mcp.oauth.start|complete`) — the bearer-token path works, but a registered-client
+   OAuth flow, SSE response framing and the stdio spawn are not implemented; REQ-033's
+   "with OAuth where needed" criterion is unmet until they are. ADR-021 records the posture.
+   **308 tests green** (docker-gated suites excluded — this box's rootless daemon exhausted its
+   kernel session-keyring quota; CI is the evidence path for those).
+
+**Environment — cargo target relocated.** `/var` is a 16 GiB tmpfs that hit 100 % on
+2026-11-13T14:10 (a linker bus error took the test suite down); the cache was
+`/var/opencode-target` (16 GiB, regenerable). Work continues with
+`CARGO_TARGET_DIR=/tmp/opencode-target` (updated in `/tmp/opencode/enter-env.sh`); the owner
+should review deleting `/var/opencode-target` to reclaim the space — it rebuilds itself.
 **CI incident on `bc03d1e` (owner: "the workflows must work on every push") — both failures were
 mine, and both are fixed in the skills revision.** Run 43436566757 was red on: (1) the `rust` job's
 clippy step — the plugin-submission tests carried an unused import and a manual `String::new` at
@@ -42,6 +68,11 @@ with every other `.env` parser in the binary and with `.env.example`), with a un
 `docker compose logs app` when it fails, so the next failure is legible. Rule recorded by the
 owner: **CI must be green on every push, verified, not assumed** — every push from here watches the
 run to conclusion and reports it.
+
+**CI on `d56f248` — green, verified, not assumed.** Run 43439074293: `rust` (fmt, clippy, nextest,
+coverage, deny, trace), `web` (build, typecheck, lint, Playwright + axe) and `compose` (image
+build + migrate + serve + health probe) all succeed. The `bc03d1e` failure and its two root causes
+are described above; this entry will keep the same discipline on every push from here.
 
 3. **REQ-035 (skills, SHOULD)** — built-in (`interrogate`, our words), taught and plugin skills:
    migration `0028_skills.sql` (RLS), `SkillStore` port + PG + in-memory adapters, wire RPC

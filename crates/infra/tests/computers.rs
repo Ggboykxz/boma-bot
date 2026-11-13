@@ -41,6 +41,7 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             ],
             default: "anthropic/claude-sonnet".to_owned(),
         },
+        Arc::new(boma_testkit::ScriptedMcpTransport::new()),
     )
     .with_computers(runtime);
     App::new(
@@ -66,6 +67,11 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             )),
             Arc::new(boma_infra::PostgresPluginSubmissionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresSkillStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMcpServerStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresAuditStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

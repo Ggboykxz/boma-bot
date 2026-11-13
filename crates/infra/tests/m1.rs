@@ -76,6 +76,11 @@ fn app(database: &Postgres) -> App {
             )),
             Arc::new(boma_infra::PostgresPluginSubmissionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresSkillStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMcpServerStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresAuditStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -97,6 +102,7 @@ fn app(database: &Postgres) -> App {
                 ],
                 default: "anthropic/claude-sonnet".to_owned(),
             },
+            Arc::new(boma_testkit::ScriptedMcpTransport::new()),
         ),
     )
 }
@@ -1801,4 +1807,125 @@ async fn req_035_a_taught_skill_round_trips_through_postgres_and_other_spaces_ca
         .expect("the rows are removed");
     common::cleanup(&pool, "skil").await;
     common::cleanup(&pool, "sko").await;
+}
+
+/// REQ-033: a server, its probed tools and its audit events survive a round trip to Postgres.
+///
+/// Cross-space isolation is proven by the record-level policies and the RLS probe suite; this
+/// test pins the round trip and the seal.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the scenario is the documentation
+async fn req_033_a_server_and_its_tools_round_trip_through_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "mcpa").await;
+    let app = app(&fresh.database);
+    let context = fixture.context.clone();
+
+    let summary = boma_app::usecases::mcp_server_add(
+        &app,
+        &context,
+        "company-files",
+        boma_domain::McpTransport::Http,
+        Some("https://mcp.example.com/mcp".to_owned()),
+        None,
+        Some(secrecy::SecretString::from("pg-token".to_owned())),
+        false,
+        None,
+    )
+    .await
+    .expect("the server is registered");
+
+    let list = boma_app::usecases::mcp_servers_list(&app, &context)
+        .await
+        .expect("the list answers");
+    assert_eq!(list.len(), 1);
+    assert!(
+        !format!("{list:?}").contains("pg-token"),
+        "the bearer never appears in a list"
+    );
+
+    // The bearer is sealed like every secret: the row carries no plaintext.
+    let stored: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT bearer_token FROM mcp_servers WHERE id = $1")
+            .bind(&summary.id)
+            .fetch_one(&pool)
+            .await
+            .expect("the row exists");
+    let bytes = stored.expect("a sealed bearer is stored");
+    assert!(
+        !bytes
+            .windows(b"pg-token".len())
+            .any(|window| window == b"pg-token"),
+        "the stored bytes are not the plaintext"
+    );
+
+    // Probed tools land in the catalogue, atomically.
+    let tools = vec![
+        boma_app::ports::McpTool {
+            name: "list-issues".to_owned(),
+            description: "Lists the open issues.".to_owned(),
+            input_schema: serde_json::json!({ "type": "object" }),
+        },
+        boma_app::ports::McpTool {
+            name: "get-issue".to_owned(),
+            description: "Reads one issue.".to_owned(),
+            input_schema: serde_json::json!({ "type": "object" }),
+        },
+    ];
+    app.stores
+        .mcp_servers
+        .replace_tools(&context, &summary.id, &tools)
+        .await
+        .expect("the tools are stored");
+    app.stores
+        .mcp_servers
+        .set_auth_state(&context, &summary.id, "connected", Some(2))
+        .await
+        .expect("the probe is recorded");
+    let catalogue = app
+        .stores
+        .mcp_servers
+        .catalogue_tools(&context)
+        .await
+        .expect("the catalogue answers");
+    assert_eq!(catalogue.len(), 2);
+    assert_eq!(catalogue[0].0, "company-files");
+    // The audit event lands in its own table, and only the space's tenant reads it.
+    app.stores
+        .audit
+        .append(boma_app::ports::NewAuditEvent {
+            id: "aud_mcp_pg_round_trip".to_owned(),
+            space_id: fixture.space_id.clone(),
+            actor_user_id: Some(fixture.user_id.clone()),
+            kind: boma_domain::AuditKind::McpPrivateCall,
+            target: "company-files".to_owned(),
+            metadata: serde_json::json!({ "tool": "list-issues" }),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        })
+        .await
+        .expect("the audit event lands");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE id = $1")
+        .bind("aud_mcp_pg_round_trip")
+        .fetch_one(&pool)
+        .await
+        .expect("the row exists");
+    assert_eq!(count, 1);
+
+    boma_app::usecases::mcp_server_remove(&app, &context, &summary.id)
+        .await
+        .expect("the remove answers");
+    let tools =
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM mcp_server_tools WHERE server_id = $1")
+            .bind(&summary.id)
+            .fetch_one(&pool)
+            .await
+            .expect("the rows are gone");
+    assert_eq!(tools, 0, "removing the server removes its tools");
+    sqlx::query("DELETE FROM audit_events WHERE id = $1")
+        .bind("aud_mcp_pg_round_trip")
+        .execute(&pool)
+        .await
+        .expect("the audit row is removed");
+    common::cleanup(&pool, "mcpa").await;
 }

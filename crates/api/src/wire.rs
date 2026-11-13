@@ -703,6 +703,59 @@ pub struct SecretsReply {
     pub secrets: Vec<SecretView>,
 }
 
+/// One MCP server, as the member sees it (REQ-033). Credentials never appear here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerView {
+    /// The server's id.
+    pub id: String,
+    /// The member's display name.
+    pub name: String,
+    /// `http` or `stdio`.
+    pub transport: String,
+    /// The HTTPS URL, when it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The command, when it is a stdio server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// `none`, `oauth_pending`, `connected` or `error`.
+    pub auth_state: String,
+    /// The member's explicit allowance for a private endpoint (defect D-05).
+    pub allow_private: bool,
+    /// Whether an OAuth client is configured.
+    pub oauth_configured: bool,
+    /// The number of tools the last probe discovered, when any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_count: Option<i32>,
+    /// When the server was registered.
+    pub created_at: String,
+}
+
+/// The reply of `mcp.servers.list` (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServersListReply {
+    /// The servers of the space, name ascending.
+    pub servers: Vec<McpServerView>,
+}
+
+/// The reply of `mcp.servers.add` and `mcp.servers.probe` (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerReply {
+    /// The server.
+    pub server: McpServerView,
+}
+
+/// The reply of `mcp.servers.remove` (REQ-033). Removing a missing server is a success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServersRemoveReply {
+    /// Whether anything was there.
+    pub removed: bool,
+}
+
 /// One skill in a list (REQ-035). Built-ins carry no timestamps; taught and plugin skills do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

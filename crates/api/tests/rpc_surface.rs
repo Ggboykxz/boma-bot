@@ -1886,3 +1886,78 @@ async fn req_035_getting_an_unknown_skill_is_a_not_found() {
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn req_033_a_member_registers_lists_and_removes_an_mcp_server() {
+    let world = world().await;
+    let state = state(&world.app);
+
+    let response = post(
+        state.clone(),
+        "/rpc/mcp/servers.add",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "company-files",
+            "transport": "http",
+            "url": "https://mcp.example.com/mcp",
+            "bearerToken": "token-1",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["server"]["name"], serde_json::json!("company-files"));
+    assert_eq!(body["server"]["authState"], serde_json::json!("none"));
+    assert!(
+        !body.to_string().contains("token-1"),
+        "the bearer never appears in a reply"
+    );
+    let server_id = body["server"]["id"].as_str().expect("an id").to_owned();
+
+    let response = post(
+        state.clone(),
+        "/rpc/mcp/servers.list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["servers"].as_array().expect("a list").len(), 1);
+
+    let response = post(
+        state,
+        "/rpc/mcp/servers.remove",
+        Some(&world.caller),
+        serde_json::json!({ "serverId": server_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(true));
+}
+
+#[tokio::test]
+async fn req_033_a_stdio_registration_is_refused_over_rpc_with_the_reason() {
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/mcp/servers.add",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "local-things",
+            "transport": "stdio",
+            "command": "/usr/bin/python3 -m mcp_server",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json(response).await;
+    assert_eq!(
+        body["error"],
+        serde_json::json!(
+            "Local command servers are disabled in this deployment. An HTTPS server is the supported path."
+        ),
+        "{body}"
+    );
+}

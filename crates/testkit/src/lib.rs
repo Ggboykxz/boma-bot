@@ -37,17 +37,18 @@ pub mod scripts;
 
 pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
-    MemoryAccountStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryDatabase,
-    MemoryEffectStore, MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore,
-    MemoryMemoryStore, MemoryMessageStore, MemoryPendingToolCallStore, MemoryPluginSubmissionStore,
-    MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
-    MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,
-    MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore,
-    MemoryUserStore, Organization, RecordedSubmission,
+    MemoryAccountStore, MemoryAuditStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore,
+    MemoryDatabase, MemoryEffectStore, MemoryEventPublisher, MemoryEventStore,
+    MemoryInvitationStore, MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore,
+    MemoryPendingToolCallStore, MemoryPluginSubmissionStore, MemoryRateLimitStore,
+    MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore, MemoryRoutineStore,
+    MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore, MemorySessionStore,
+    MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore, MemoryUserStore,
+    Organization, RecordedSubmission,
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedIds,
-    ScriptedProvider, ScriptedTokens,
+    ScriptedMcpTransport, ScriptedProvider, ScriptedTokens,
 };
 
 /// The application crate, re-exported so that a test needs only one dependency.

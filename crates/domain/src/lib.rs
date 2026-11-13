@@ -10,12 +10,14 @@
 #![deny(missing_docs)]
 
 pub mod account;
+pub mod audit;
 pub mod bot;
 pub mod card;
 pub mod computer;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod mcp;
 pub mod memory;
 pub mod message;
 pub mod model;
@@ -27,6 +29,7 @@ pub mod tenancy;
 pub mod thread;
 
 pub use account::{Email, Session, Space, SpaceRole, User, validate_password};
+pub use audit::AuditKind;
 pub use bot::Bot;
 pub use card::{
     Card, CardId, CardKind, CardStatus, ExternalEffect, PendingToolCallStatus, ToolEffect,
@@ -42,6 +45,9 @@ pub use event::{Event, EventType};
 pub use ids::{
     BotId, EventId, InviteId, MessageId, OrganizationId, RoutineId, RunId, SessionId, SpaceId,
     ThreadId, UserId,
+};
+pub use mcp::{
+    McpTransport, sanitize_mcp_tool_name, validate_mcp_server_name, validate_mcp_server_url,
 };
 pub use memory::{MemoryDocument, MemoryScope, validate_memory_path};
 pub use message::{

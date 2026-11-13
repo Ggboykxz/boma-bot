@@ -7,13 +7,14 @@ use boma_api::{AppState, router};
 use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
-    PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresEffectStore,
-    PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresPendingToolCallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
-    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
-    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
-    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresAuditStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
+    PostgresEffectStore, PostgresEventStore, PostgresInvitationStore, PostgresMcpServerStore,
+    PostgresMemoryStore, PostgresMessageStore, PostgresPendingToolCallStore,
+    PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
+    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
+    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSkillStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore,
+    ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -83,6 +84,9 @@ fn build_app(
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
+    let mcp_transport = Arc::new(
+        boma_infra::HttpMcpTransport::new().context("the MCP transport could not be built")?,
+    );
     Ok(App::new(
         Stores::new(
             Arc::new(PostgresAccountStore::new(pool.clone())),
@@ -103,6 +107,8 @@ fn build_app(
             Arc::new(PostgresSecretStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresPluginSubmissionStore::new(pool.clone())),
             Arc::new(PostgresSkillStore::new(pool.clone())),
+            Arc::new(PostgresMcpServerStore::new(pool.clone(), secrets_vault()?)),
+            Arc::new(PostgresAuditStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -125,6 +131,7 @@ fn build_app(
                     ],
                     default: "anthropic/claude-sonnet".to_owned(),
                 },
+                mcp_transport,
             );
             match computer {
                 Some(runtime) => services.with_computers(runtime),

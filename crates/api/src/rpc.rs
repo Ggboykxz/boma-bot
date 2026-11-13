@@ -25,12 +25,13 @@ use crate::{
     wire::{
         AnswerReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
         ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
-        ComputerTakeoverReply, InvitationReply, MemoryDocumentReply, MemoryDocumentsReply,
-        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply,
-        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
-        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
-        SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply,
-        SpaceReply, TeachSkillReply, ThreadHeadReply,
+        ComputerTakeoverReply, InvitationReply, McpServerReply, McpServerView, McpServersListReply,
+        McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply,
+        MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply, RosterBotView,
+        RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply,
+        RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply, SecretView,
+        SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
+        TeachSkillReply, ThreadHeadReply,
     },
 };
 
@@ -54,6 +55,8 @@ pub mod namespaces {
     pub const BOT_SECRETS: &str = "botSecrets";
     /// Skills: named instruction bundles a bot loads (REQ-035).
     pub const SKILLS: &str = "skills";
+    /// MCP servers: the integration registry of the space (REQ-033).
+    pub const MCP: &str = "mcp";
 }
 
 /// Every procedure this deployment serves.
@@ -103,6 +106,10 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::SKILLS, "list"),
         (namespaces::SKILLS, "get"),
         (namespaces::SKILLS, "teach"),
+        (namespaces::MCP, "servers.list"),
+        (namespaces::MCP, "servers.add"),
+        (namespaces::MCP, "servers.remove"),
+        (namespaces::MCP, "servers.probe"),
     ]
 }
 
@@ -248,6 +255,18 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::SKILLS, "teach") => skills_teach(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MCP, "servers.list") => mcp_servers_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MCP, "servers.add") => mcp_servers_add(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MCP, "servers.remove") => mcp_servers_remove(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MCP, "servers.probe") => mcp_servers_probe(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -1505,4 +1524,139 @@ async fn skills_teach(
     )
     .await?;
     Ok(TeachSkillReply { name: request.name })
+}
+
+/// The body of `mcp.servers.list` (REQ-033): nothing, `{}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpServersListRequest {}
+
+fn mcp_view(summary: boma_app::ports::McpServerSummary) -> McpServerView {
+    McpServerView {
+        id: summary.id,
+        name: summary.name,
+        transport: summary.transport,
+        url: summary.url,
+        command: summary.command,
+        auth_state: summary.auth_state,
+        allow_private: summary.allow_private,
+        oauth_configured: summary.oauth_configured,
+        tool_count: summary.tool_count,
+        created_at: summary.created_at,
+    }
+}
+
+/// `mcp.servers.list` — the servers of the space, name ascending.
+async fn mcp_servers_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<McpServersListReply, ApiError> {
+    let _: McpServersListRequest = parse(&body)?;
+    let servers = usecases::mcp_servers_list(state.app(), &auth.actor.context).await?;
+    Ok(McpServersListReply {
+        servers: servers.into_iter().map(mcp_view).collect(),
+    })
+}
+
+/// The OAuth endpoints a member registers for a server (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpOAuthConfigInput {
+    /// The authorization endpoint the member's browser opens.
+    authorization_url: String,
+    /// The token endpoint the exchange calls.
+    token_url: String,
+    /// The client id the member registered at the server.
+    client_id: String,
+    /// The client secret, when the server issues confidential ones.
+    client_secret: Option<String>,
+}
+
+/// The body of `mcp.servers.add` (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpServersAddRequest {
+    /// The member's display name for the server.
+    name: String,
+    /// `http` or `stdio`. Local command servers are refused in this build.
+    transport: String,
+    /// The HTTPS URL, for `http`.
+    url: Option<String>,
+    /// The command, for `stdio`. Always refused by this build.
+    command: Option<String>,
+    /// The bearer token, sealed per space at rest.
+    bearer_token: Option<String>,
+    /// The member's explicit allowance for a private endpoint (defect D-05).
+    #[serde(default)]
+    allow_private: bool,
+    /// The OAuth endpoints, when the server uses a registered client.
+    oauth: Option<McpOAuthConfigInput>,
+}
+
+/// `mcp.servers.add` — register a server; a stdio or otherwise refused registration fails with why.
+async fn mcp_servers_add(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<McpServerReply, ApiError> {
+    let request: McpServersAddRequest = parse(&body)?;
+    let transport = request
+        .transport
+        .parse::<boma_domain::McpTransport>()
+        .map_err(|error| ApiError::from(boma_app::AppError::from(error)))?;
+    let summary = usecases::mcp_server_add(
+        state.app(),
+        &auth.actor.context,
+        &request.name,
+        transport,
+        request.url,
+        request.command,
+        request.bearer_token.map(secrecy::SecretString::from),
+        request.allow_private,
+        request.oauth.map(|oauth| boma_app::ports::McpOAuthConfig {
+            authorization_url: oauth.authorization_url,
+            token_url: oauth.token_url,
+            client_id: oauth.client_id,
+            client_secret: oauth.client_secret.map(secrecy::SecretString::from),
+        }),
+    )
+    .await?;
+    Ok(McpServerReply {
+        server: mcp_view(summary),
+    })
+}
+
+/// The body of `mcp.servers.remove` and `mcp.servers.probe` (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpServersServerRequest {
+    /// The server's id.
+    server_id: String,
+}
+
+/// `mcp.servers.remove` — remove a server; removing a missing one is a success.
+async fn mcp_servers_remove(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<McpServersRemoveReply, ApiError> {
+    let request: McpServersServerRequest = parse(&body)?;
+    let removed =
+        usecases::mcp_server_remove(state.app(), &auth.actor.context, &request.server_id).await?;
+    Ok(McpServersRemoveReply { removed })
+}
+
+/// `mcp.servers.probe` — initialize and discover the server's tools.
+async fn mcp_servers_probe(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<McpServerReply, ApiError> {
+    let request: McpServersServerRequest = parse(&body)?;
+    let summary =
+        usecases::mcp_server_probe(state.app(), &auth.actor.context, &request.server_id).await?;
+    Ok(McpServerReply {
+        server: mcp_view(summary),
+    })
 }

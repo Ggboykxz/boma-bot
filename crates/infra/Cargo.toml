@@ -38,8 +38,10 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 secrecy = "0.10.3"
 aes-gcm = "0.11.1"
 getrandom = "0.4.3"
+url = "2.5.8"
 
 [dev-dependencies]
+boma-testkit = { workspace = true }
 futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 wiremock = "0.6.5"

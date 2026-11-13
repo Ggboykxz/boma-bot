@@ -10,11 +10,12 @@ use boma_domain::{Bot, Message, Run, Thread, User};
 use crate::{
     error::AppError,
     ports::{
-        AccountStore, BotStore, CardStore, Clock, ComputerStore, EffectStore, EventPublisher,
-        EventStore, IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher,
-        PendingToolCallStore, PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore,
-        RosterStore, RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore,
-        SkillStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
+        AccountStore, AuditStore, BotStore, CardStore, Clock, ComputerStore, EffectStore,
+        EventPublisher, EventStore, IdGenerator, InvitationStore, McpServerStore, MemoryStore,
+        MessageStore, PasswordHasher, PendingToolCallStore, PluginSubmissionStore, RateLimitStore,
+        ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore, ScreenCapabilityStore,
+        SecretStore, SessionStore, SkillStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore,
+        UserStore,
     },
 };
 
@@ -53,6 +54,10 @@ pub struct Stores {
     pub plugin_submissions: Arc<dyn PluginSubmissionStore>,
     /// Taught and plugin skills of the space (REQ-035).
     pub skills: Arc<dyn SkillStore>,
+    /// The MCP servers a space connects to (REQ-033).
+    pub mcp_servers: Arc<dyn McpServerStore>,
+    /// The audit trail of the escape hatches (defect D-05).
+    pub audit: Arc<dyn AuditStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
     /// The per-run tool catalogue.
@@ -99,6 +104,8 @@ impl Stores {
         secrets: Arc<dyn SecretStore>,
         plugin_submissions: Arc<dyn PluginSubmissionStore>,
         skills: Arc<dyn SkillStore>,
+        mcp_servers: Arc<dyn McpServerStore>,
+        audit: Arc<dyn AuditStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -124,6 +131,8 @@ impl Stores {
             secrets,
             plugin_submissions,
             skills,
+            mcp_servers,
+            audit,
             effects,
             tools,
             reactions,
@@ -154,6 +163,9 @@ pub struct Services {
     pub models: boma_domain::model::DeploymentModels,
     /// The computer backend, when this deployment is configured with one (REQ-027).
     pub computer: Option<Arc<dyn crate::ports::ComputerRuntime>>,
+    /// The transport that calls MCP servers (REQ-033); a test doubles it, a deployment wires
+    /// the HTTP JSON-RPC client.
+    pub mcp_transport: Arc<dyn crate::ports::McpTransport>,
 }
 
 impl Services {
@@ -166,6 +178,7 @@ impl Services {
         ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
         models: boma_domain::model::DeploymentModels,
+        mcp_transport: Arc<dyn crate::ports::McpTransport>,
     ) -> Self {
         Self {
             publisher,
@@ -175,6 +188,7 @@ impl Services {
             clock,
             models,
             computer: None,
+            mcp_transport,
         }
     }
 
@@ -262,6 +276,7 @@ impl From<AppError> for Failure {
             AppError::Conflict => "conflict",
             AppError::ScreenTaken => "screen_taken",
             AppError::InvalidCredentials => "invalid_credentials",
+            AppError::StdioDisabled => "stdio_disabled",
             AppError::Unavailable => "dependency_unavailable",
             AppError::NotFound => "not_found",
         };

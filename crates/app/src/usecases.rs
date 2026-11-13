@@ -461,7 +461,197 @@ pub async fn teach_skill(
         .await
 }
 
-/// The names and one-line descriptions of every skill this context may load (REQ-035).
+/// Lists the MCP servers of the space (REQ-033).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn mcp_servers_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::McpServerSummary>, AppError> {
+    app.stores.mcp_servers.list(context).await
+}
+
+/// Registers an MCP server (REQ-033).
+///
+/// A stdio server is refused by default: local command execution is a boundary, and the
+/// allow-list wire-up (`MCP_STDIO_ALLOWED_COMMANDS`) is not enabled in this build — the error
+/// says so. An HTTP server is validated here for shape only; the outbound guard enforces the
+/// network rules on every call, including the probe.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the name or the URL is refused, [`AppError::Conflict`] when
+/// the name is taken, and an error when a store cannot answer.
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_server_add(
+    app: &App,
+    context: &TenantContext,
+    name: &str,
+    transport: boma_domain::McpTransport,
+    url: Option<String>,
+    _command: Option<String>,
+    bearer: Option<secrecy::SecretString>,
+    allow_private: bool,
+    oauth: Option<crate::ports::McpOAuthConfig>,
+) -> Result<crate::ports::McpServerSummary, AppError> {
+    boma_domain::validate_mcp_server_name(name)?;
+    if transport == boma_domain::McpTransport::Stdio {
+        Err(AppError::StdioDisabled)
+    } else {
+        let Some(url) = url else {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "an HTTP MCP server needs a `url`".to_owned(),
+            )));
+        };
+        boma_domain::validate_mcp_server_url(&url, allow_private)?;
+        let server = crate::ports::NewMcpServer {
+            id: app.services.ids.new_id("mcp"),
+            name: name.to_owned(),
+            transport,
+            url: Some(url),
+            command: None,
+            bearer,
+            allow_private,
+            oauth,
+            created_at: app.services.clock.now(),
+        };
+        let summary = app.stores.mcp_servers.create(context, server).await?;
+        if allow_private {
+            audit_private_use(
+                app,
+                context,
+                &summary.name,
+                "register",
+                serde_json::json!({ "url": summary.url }),
+            )
+            .await?;
+        }
+        Ok(summary)
+    }
+}
+
+/// Removes an MCP server (REQ-033). Removing a missing server is a success.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn mcp_server_remove(
+    app: &App,
+    context: &TenantContext,
+    server_id: &str,
+) -> Result<bool, AppError> {
+    app.stores.mcp_servers.remove(context, server_id).await
+}
+
+/// Probes an MCP server (REQ-033): initialize, discover its tools, record both.
+///
+/// A server with the member's private allow-list is probed with the guard's exception; every
+/// such probe writes an audit event (defect D-05).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the server does not exist, and an error when the probe
+/// is refused or the store cannot answer.
+pub async fn mcp_server_probe(
+    app: &App,
+    context: &TenantContext,
+    server_id: &str,
+) -> Result<crate::ports::McpServerSummary, AppError> {
+    let record = app
+        .stores
+        .mcp_servers
+        .get(context, server_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if record.allow_private {
+        audit_private_use(
+            app,
+            context,
+            &record.name,
+            "probe",
+            serde_json::json!({ "transport": record.transport }),
+        )
+        .await?;
+    }
+    let bearer = app
+        .stores
+        .mcp_servers
+        .reveal_bearer(context, server_id)
+        .await?;
+    let outcome = app
+        .services
+        .mcp_transport
+        .list_tools(&record, bearer.as_ref())
+        .await
+        .map(|tools| {
+            // Defence in depth: whatever the transport hands back is sanitised again, so one
+            // unsafe tool name never poisons a whole cart of the registry.
+            tools
+                .into_iter()
+                .filter(|tool| boma_domain::sanitize_mcp_tool_name(&tool.name).is_ok())
+                .collect::<Vec<_>>()
+        });
+    match outcome {
+        Ok(tools) => {
+            let count = i32::try_from(tools.len()).unwrap_or(i32::MAX);
+            app.stores
+                .mcp_servers
+                .replace_tools(context, server_id, &tools)
+                .await?;
+            app.stores
+                .mcp_servers
+                .set_auth_state(context, server_id, "connected", Some(count))
+                .await?;
+        }
+        Err(error) => {
+            app.stores
+                .mcp_servers
+                .set_auth_state(context, server_id, "error", None)
+                .await?;
+            return Err(error);
+        }
+    }
+    let list = app.stores.mcp_servers.list(context).await?;
+    list.into_iter()
+        .find(|summary| summary.id == server_id)
+        .ok_or(AppError::NotFound)
+}
+
+/// Writes one audit event for a call into a private MCP endpoint (defect D-05).
+async fn audit_private_use(
+    app: &App,
+    context: &TenantContext,
+    server_name: &str,
+    action: &str,
+    metadata: serde_json::Value,
+) -> Result<(), AppError> {
+    let TenantContext::Member { space_id, user_id } = context else {
+        return Ok(());
+    };
+    let mut metadata = metadata;
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert(
+            "action".to_owned(),
+            serde_json::Value::String(action.to_owned()),
+        );
+    }
+    app.stores
+        .audit
+        .append(crate::ports::NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: space_id.clone(),
+            actor_user_id: Some(user_id.clone()),
+            kind: boma_domain::AuditKind::McpPrivateCall,
+            target: server_name.to_owned(),
+            metadata,
+            created_at: app.services.clock.now(),
+        })
+        .await
+}
+
+/// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors
 ///
@@ -3109,6 +3299,105 @@ async fn apply_pending_tool_calls(
     Ok(child_created)
 }
 
+/// Calls an MCP server on approval (REQ-033): the member approved, the call happens once.
+///
+/// The server is resolved by name from the space's registry; a private endpoint writes its
+/// audit event (defect D-05) before the call leaves. The tool key is `mcp.<server>.<tool>`.
+async fn approved_mcp_call(
+    app: &App,
+    context: &TenantContext,
+    call: &crate::ports::PendingToolCall,
+) -> (serde_json::Value, bool) {
+    let rest = call.name.strip_prefix("mcp.").unwrap_or_default();
+    let mut parts = rest.splitn(2, '.');
+    let (Some(server_name), Some(tool)) = (parts.next(), parts.next()) else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool key is not mcp.<server>.<tool>" } }),
+            false,
+        );
+    };
+    let tool = match boma_domain::sanitize_mcp_tool_name(tool) {
+        Ok(tool) if !tool.is_empty() => tool,
+        _ => {
+            return (
+                serde_json::json!({ "ok": false, "body": { "error": "the tool name is refused" } }),
+                false,
+            );
+        }
+    };
+    let server = match app.stores.mcp_servers.list(context).await {
+        Ok(servers) => servers
+            .into_iter()
+            .find(|summary| summary.name == server_name),
+        Err(error) => {
+            return (
+                serde_json::json!({ "ok": false, "body": { "error": format!("the server list failed: {error}") } }),
+                false,
+            );
+        }
+    };
+    let Some(server) = server else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": format!("the space has no MCP server named `{server_name}`") } }),
+            false,
+        );
+    };
+    if server.allow_private {
+        let _ = audit_private_use(
+            app,
+            context,
+            &server.name,
+            "call",
+            serde_json::json!({ "tool": tool }),
+        )
+        .await;
+    }
+    let record = match app.stores.mcp_servers.get(context, &server.id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return (
+                serde_json::json!({ "ok": false, "body": { "error": "the server vanished from the registry" } }),
+                false,
+            );
+        }
+        Err(error) => {
+            return (
+                serde_json::json!({ "ok": false, "body": { "error": format!("the server could not be read: {error}") } }),
+                false,
+            );
+        }
+    };
+    let bearer = match app
+        .stores
+        .mcp_servers
+        .reveal_bearer(context, &record.id)
+        .await
+    {
+        Ok(bearer) => bearer,
+        Err(error) => {
+            return (
+                serde_json::json!({ "ok": false, "body": { "error": format!("the server's credential could not be opened: {error}") } }),
+                false,
+            );
+        }
+    };
+    match app
+        .services
+        .mcp_transport
+        .call_tool(&record, bearer.as_ref(), &tool, &call.arguments)
+        .await
+    {
+        Ok(result) => (
+            serde_json::json!({ "ok": true, "body": { "result": result } }),
+            false,
+        ),
+        Err(error) => (
+            serde_json::json!({ "ok": false, "body": { "error": format!("the server refused the call: {error}") } }),
+            false,
+        ),
+    }
+}
+
 /// Teaches a skill on approval (REQ-035): the member approved, the write happens once.
 async fn approved_skill_teach(
     app: &App,
@@ -3207,6 +3496,7 @@ async fn execute_approved_tool(
             (body, false)
         }
         "skill.teach" => approved_skill_teach(app, context, call).await,
+        key if key.starts_with("mcp.") => approved_mcp_call(app, context, call).await,
         "delegate.helper" => {
             let Some(prompt) = string("prompt") else {
                 return (
@@ -3631,7 +3921,47 @@ pub async fn tool_catalogue(
         .ok_or(AppError::NotFound)?;
     let mut tools = builtin_tools();
     tools.extend(app.stores.tools.catalogue_for(context, &bot.id).await?);
+    // The MCP catalogue is member-scoped: a worker may act for the run's member, never across
+    // spaces. A system context with no user attached cannot build one.
+    let mcp_context = if let TenantContext::System {
+        user_id: Some(user_id),
+        ..
+    } = context
+    {
+        TenantContext::Member {
+            space_id: bot.space_id.clone(),
+            user_id: user_id.clone(),
+        }
+    } else {
+        context.clone()
+    };
+    tools.extend(mcp_catalogue_tools(app, &mcp_context).await?);
     Ok(tools)
+}
+
+/// The MCP tools a run may see (REQ-033): every connected server of the space, Write-class.
+///
+/// An MCP tool can do anything its server does, so every call goes through the approval gate
+/// (REQ-017), exactly like a connector write. The key is `mcp.<server>.<tool>`; the server name
+/// is lowercase-kebab and the tool name is sanitised at probe time, so the key grammar holds.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+async fn mcp_catalogue_tools(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<ToolSpec>, AppError> {
+    let tools = app.stores.mcp_servers.catalogue_tools(context).await?;
+    Ok(tools
+        .into_iter()
+        .map(|(server, tool)| ToolSpec {
+            key: format!("mcp.{server}.{}", tool.name),
+            description: format!("{server}: {}", tool.description),
+            kind: boma_domain::ToolKind::Mcp,
+            effect: boma_domain::ToolEffect::Write,
+        })
+        .collect())
 }
 
 /// Dispatches one tool call against the catalogue of this run (REQ-016, REQ-017).

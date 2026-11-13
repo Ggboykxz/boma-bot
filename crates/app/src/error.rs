@@ -14,6 +14,9 @@ pub enum AppError {
     /// The request conflicts with what already exists: the address is taken, the name is used.
     #[error("conflict")]
     Conflict,
+    /// A local command server was registered while stdio is disabled (the default).
+    #[error("local command servers are disabled in this deployment")]
+    StdioDisabled,
     /// Another member holds the screen of a computer (REQ-029).
     ///
     /// A distinct variant, not [`AppError::Conflict`], because the answer the client needs names the
@@ -50,6 +53,7 @@ impl AppError {
                 | Self::Conflict
                 | Self::ScreenTaken
                 | Self::InvalidCredentials
+                | Self::StdioDisabled
                 | Self::NotFound
         )
     }

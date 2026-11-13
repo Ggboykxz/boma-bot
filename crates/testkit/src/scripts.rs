@@ -757,3 +757,88 @@ mod tests {
         );
     }
 }
+
+/// What the scripted MCP transport hands out, in order, and what it saw.
+///
+/// The tool list is fixed per script; call results are popped in order. Tests use it to drive
+/// the MCP catalogue and the approval-gated dispatch without a network.
+#[derive(Debug, Default)]
+pub struct ScriptedMcpTransport {
+    tools: std::sync::Mutex<Vec<boma_app::ports::McpTool>>,
+    results: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl ScriptedMcpTransport {
+    /// A transport that discovers no tools and answers calls with an empty object.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Programs the tools the next `list_tools` answers with.
+    #[must_use]
+    pub fn with_tools(tools: Vec<boma_app::ports::McpTool>) -> Self {
+        Self {
+            tools: std::sync::Mutex::new(tools),
+            results: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Queues one answer per `call_tool`.
+    #[must_use]
+    pub fn with_results(results: Vec<serde_json::Value>) -> Self {
+        Self {
+            tools: std::sync::Mutex::new(Vec::new()),
+            results: std::sync::Mutex::new(results.into()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Programs both at once.
+    #[must_use]
+    pub fn with_tools_and_results(
+        tools: Vec<boma_app::ports::McpTool>,
+        results: Vec<serde_json::Value>,
+    ) -> Self {
+        Self {
+            tools: std::sync::Mutex::new(tools),
+            results: std::sync::Mutex::new(results.into()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The calls the transport received, in order.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn calls(&self) -> Vec<(String, serde_json::Value)> {
+        lock(&self.calls).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::McpTransport for ScriptedMcpTransport {
+    async fn list_tools(
+        &self,
+        _server: &boma_app::ports::McpServerRecord,
+        _bearer: Option<&secrecy::SecretString>,
+    ) -> Result<Vec<boma_app::ports::McpTool>, boma_app::AppError> {
+        Ok(lock(&self.tools).clone())
+    }
+
+    async fn call_tool(
+        &self,
+        _server: &boma_app::ports::McpServerRecord,
+        _bearer: Option<&secrecy::SecretString>,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> Result<serde_json::Value, boma_app::AppError> {
+        lock(&self.calls).push((tool.to_owned(), input.clone()));
+        let mut results = lock(&self.results);
+        Ok(results.pop_front().unwrap_or_else(|| serde_json::json!({})))
+    }
+}

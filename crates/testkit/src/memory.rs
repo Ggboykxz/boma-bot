@@ -538,6 +538,12 @@ struct State {
     plugin_submissions: Vec<PluginSubmissionRow>,
     /// The space-owned skills (REQ-035).
     skills: Vec<SkillRow>,
+    /// The MCP servers a space connects to (REQ-033).
+    mcp_servers: Vec<McpServerRow>,
+    /// The probed tools of those servers (REQ-033).
+    mcp_server_tools: Vec<McpToolRow>,
+    /// The audit events the escape hatches wrote (defect D-05).
+    audit_events: Vec<AuditEventRow>,
     /// The reactions people left on messages.
     reactions: Vec<ReactionRow>,
     /// The read position of each person, per conversation.
@@ -739,6 +745,18 @@ impl MemoryDatabase {
     #[must_use]
     pub fn skills(&self) -> MemorySkillStore {
         MemorySkillStore::new(self)
+    }
+
+    /// The store of MCP servers (REQ-033).
+    #[must_use]
+    pub fn mcp_servers(&self) -> MemoryMcpServerStore {
+        MemoryMcpServerStore::new(self)
+    }
+
+    /// The store of audit events (defect D-05).
+    #[must_use]
+    pub fn audit(&self) -> MemoryAuditStore {
+        MemoryAuditStore::new(self)
     }
 
     /// The store of effects.
@@ -4573,5 +4591,404 @@ impl boma_app::ports::SkillStore for MemorySkillStore {
             .skills
             .retain(|row| !(row.space_id == space_id && row.name == name));
         Ok(state.skills.len() != before)
+    }
+}
+
+/// One stored MCP server (REQ-033). Credentials never appear here in clear.
+#[derive(Debug, Clone)]
+struct McpServerRow {
+    /// The server's id.
+    id: String,
+    /// The space the server belongs to.
+    space_id: SpaceId,
+    /// The member's display name.
+    name: String,
+    /// `http` or `stdio`.
+    transport: String,
+    /// The HTTPS URL, when it is one.
+    url: Option<String>,
+    /// The command, when it is a stdio server.
+    command: Option<String>,
+    /// `none`, `oauth_pending`, `connected` or `error`.
+    auth_state: String,
+    /// The member's explicit allowance for a private endpoint (D-05).
+    allow_private: bool,
+    /// The authorization endpoint, when OAuth is configured.
+    authorization_url: Option<String>,
+    /// The token endpoint, when OAuth is configured.
+    token_url: Option<String>,
+    /// The client id, when OAuth is configured.
+    client_id: Option<String>,
+    /// The bearer token, sealed (kept like the real store seals it: in RAM, never listed).
+    bearer_token: Option<secrecy::SecretString>,
+    /// The client secret, sealed. Written now; the OAuth exchange reads it in the OAuth slice.
+    #[allow(dead_code)]
+    client_secret: Option<secrecy::SecretString>,
+    /// The number of tools the last probe discovered.
+    tool_count: Option<i32>,
+    /// When the server was registered.
+    created_at: String,
+}
+
+/// One probed MCP tool (REQ-033).
+#[derive(Debug, Clone)]
+struct McpToolRow {
+    /// The server the tool belongs to.
+    server_id: String,
+    /// The tool's name.
+    name: String,
+    /// One line about what the tool does.
+    description: String,
+    /// The JSON schema of its arguments.
+    input_schema: serde_json::Value,
+}
+
+/// One audit event the fake records (defect D-05).
+#[derive(Debug, Clone)]
+struct AuditEventRow {
+    /// The event's id.
+    #[allow(dead_code)]
+    // written for shape-parity with the PG table; never read back by tests yet
+    id: String,
+    /// The space the event belongs to.
+    space_id: SpaceId,
+    /// The member who caused it, when there was one.
+    actor_user_id: Option<UserId>,
+    /// What happened.
+    kind: String,
+    /// What it happened to.
+    target: String,
+    /// Extra structure.
+    metadata: serde_json::Value,
+    /// When it happened.
+    #[allow(dead_code)] // written for shape-parity with the PG table; M9 reads it
+    created_at: String,
+}
+
+/// The store of MCP servers (REQ-033). Never tenant data outside a space.
+#[derive(Debug, Clone)]
+pub struct MemoryMcpServerStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryMcpServerStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryMcpServerStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::McpServerStore for MemoryMcpServerStore {
+    async fn list(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::McpServerSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let mut servers: Vec<boma_app::ports::McpServerSummary> = state
+            .mcp_servers
+            .iter()
+            .filter(|row| row.space_id == space_id)
+            .map(|row| boma_app::ports::McpServerSummary {
+                id: row.id.clone(),
+                name: row.name.clone(),
+                transport: row.transport.clone(),
+                url: row.url.clone(),
+                command: row.command.clone(),
+                auth_state: row.auth_state.clone(),
+                allow_private: row.allow_private,
+                oauth_configured: row.authorization_url.is_some(),
+                tool_count: row.tool_count,
+                created_at: row.created_at.clone(),
+            })
+            .collect();
+        servers.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(servers)
+    }
+
+    async fn create(
+        &self,
+        context: &TenantContext,
+        server: boma_app::ports::NewMcpServer,
+    ) -> Result<boma_app::ports::McpServerSummary, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        if state
+            .mcp_servers
+            .iter()
+            .any(|row| row.space_id == space_id && row.name == server.name)
+        {
+            return Err(AppError::Conflict);
+        }
+        state.mcp_servers.push(McpServerRow {
+            id: server.id.clone(),
+            space_id,
+            name: server.name.clone(),
+            transport: server.transport.as_str().to_owned(),
+            url: server.url.clone(),
+            command: server.command.clone(),
+            auth_state: "none".to_owned(),
+            allow_private: server.allow_private,
+            authorization_url: server
+                .oauth
+                .as_ref()
+                .map(|oauth| oauth.authorization_url.clone()),
+            token_url: server.oauth.as_ref().map(|oauth| oauth.token_url.clone()),
+            client_id: server.oauth.as_ref().map(|oauth| oauth.client_id.clone()),
+            bearer_token: server.bearer,
+            client_secret: server.oauth.and_then(|oauth| oauth.client_secret),
+            tool_count: None,
+            created_at: server.created_at.clone(),
+        });
+        let Some(row) = state.mcp_servers.last() else {
+            return Err(AppError::Unavailable);
+        };
+        Ok(boma_app::ports::McpServerSummary {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            transport: row.transport.clone(),
+            url: row.url.clone(),
+            command: row.command.clone(),
+            auth_state: row.auth_state.clone(),
+            allow_private: row.allow_private,
+            oauth_configured: row.authorization_url.is_some(),
+            tool_count: row.tool_count,
+            created_at: row.created_at.clone(),
+        })
+    }
+
+    async fn get(
+        &self,
+        context: &TenantContext,
+        id: &str,
+    ) -> Result<Option<boma_app::ports::McpServerRecord>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .mcp_servers
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == id)
+            .map(|row| boma_app::ports::McpServerRecord {
+                id: row.id.clone(),
+                name: row.name.clone(),
+                transport: row.transport.clone(),
+                url: row.url.clone(),
+                command: row.command.clone(),
+                auth_state: row.auth_state.clone(),
+                allow_private: row.allow_private,
+                authorization_url: row.authorization_url.clone(),
+                token_url: row.token_url.clone(),
+                client_id: row.client_id.clone(),
+                tool_count: row.tool_count,
+                created_at: row.created_at.clone(),
+            }))
+    }
+
+    async fn remove(&self, context: &TenantContext, id: &str) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state = write(&self.state);
+        let before = state.mcp_servers.len();
+        state
+            .mcp_servers
+            .retain(|row| !(row.space_id == space_id && row.id == id));
+        Ok(state.mcp_servers.len() != before)
+    }
+
+    async fn reveal_bearer(
+        &self,
+        context: &TenantContext,
+        id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .mcp_servers
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == id)
+            .and_then(|row| row.bearer_token.clone()))
+    }
+
+    async fn set_auth_state(
+        &self,
+        context: &TenantContext,
+        id: &str,
+        auth_state: &str,
+        tool_count: Option<i32>,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(()),
+        };
+        let mut state = write(&self.state);
+        if let Some(row) = state
+            .mcp_servers
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.id == id)
+        {
+            auth_state.clone_into(&mut row.auth_state);
+            row.tool_count = tool_count;
+        }
+        Ok(())
+    }
+    async fn replace_tools(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        tools: &[boma_app::ports::McpTool],
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(()),
+        };
+        let mut state = write(&self.state);
+        let owned: Vec<String> = state
+            .mcp_servers
+            .iter()
+            .filter(|row| row.space_id == space_id && row.id == server_id)
+            .map(|row| row.id.clone())
+            .collect();
+        if owned.is_empty() {
+            return Ok(());
+        }
+        state
+            .mcp_server_tools
+            .retain(|row| row.server_id != server_id);
+        for tool in tools {
+            state.mcp_server_tools.push(McpToolRow {
+                server_id: server_id.to_owned(),
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                input_schema: tool.input_schema.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn catalogue_tools(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<(String, boma_app::ports::McpTool)>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let mut tools: Vec<(String, boma_app::ports::McpTool)> = state
+            .mcp_server_tools
+            .iter()
+            .filter_map(|row| {
+                let server = state.mcp_servers.iter().find(|server| {
+                    server.space_id == space_id
+                        && server.auth_state == "connected"
+                        && server.id == row.server_id
+                })?;
+                Some((
+                    server.name.clone(),
+                    boma_app::ports::McpTool {
+                        name: row.name.clone(),
+                        description: row.description.clone(),
+                        input_schema: row.input_schema.clone(),
+                    },
+                ))
+            })
+            .collect();
+        tools.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.cmp(&b.1.name)));
+        Ok(tools)
+    }
+}
+
+/// One audit event the fake records (D-05).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedAuditEvent {
+    /// The space the event belongs to.
+    pub space_id: SpaceId,
+    /// The member who caused it, when there was one.
+    pub actor_user_id: Option<UserId>,
+    /// What happened.
+    pub kind: String,
+    /// What it happened to.
+    pub target: String,
+    /// Extra structure.
+    pub metadata: serde_json::Value,
+}
+
+/// The store of audit events (defect D-05). Append-only by construction.
+#[derive(Debug, Clone)]
+pub struct MemoryAuditStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryAuditStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The events recorded so far, oldest first. For tests.
+    #[must_use]
+    pub fn events(&self) -> Vec<RecordedAuditEvent> {
+        let state = read(&self.state);
+        state
+            .audit_events
+            .iter()
+            .map(|row| RecordedAuditEvent {
+                space_id: row.space_id.clone(),
+                actor_user_id: row.actor_user_id.clone(),
+                kind: row.kind.clone(),
+                target: row.target.clone(),
+                metadata: row.metadata.clone(),
+            })
+            .collect()
+    }
+}
+
+impl Default for MemoryAuditStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::AuditStore for MemoryAuditStore {
+    async fn append(&self, event: boma_app::ports::NewAuditEvent) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        state.audit_events.push(AuditEventRow {
+            id: event.id,
+            space_id: event.space_id,
+            actor_user_id: event.actor_user_id,
+            kind: event.kind.as_str().to_owned(),
+            target: event.target,
+            metadata: event.metadata,
+            created_at: event.created_at,
+        });
+        Ok(())
     }
 }

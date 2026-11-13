@@ -1831,6 +1831,267 @@ pub trait PluginSubmissionStore: Send + Sync {
     ) -> Result<PluginSubmissionSummary, AppError>;
 }
 
+/// One audit event written by an escape hatch (defect D-05).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewAuditEvent {
+    /// The event's id.
+    pub id: String,
+    /// The space the event belongs to.
+    pub space_id: boma_domain::SpaceId,
+    /// The member who caused it, when there was one.
+    pub actor_user_id: Option<boma_domain::UserId>,
+    /// What happened.
+    pub kind: boma_domain::AuditKind,
+    /// What it happened to: the server name, the tool, the command — never the secret.
+    pub target: String,
+    /// Extra structure the row records (host, tool, run id). Never secret material.
+    pub metadata: serde_json::Value,
+    /// When it happened.
+    pub created_at: String,
+}
+
+/// Stores audit events on the escape hatches (defect D-05).
+///
+/// Insert-only: an audit trail a caller can rewrite is not an audit trail.
+#[async_trait]
+pub trait AuditStore: Send + Sync {
+    /// Appends one event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn append(&self, event: NewAuditEvent) -> Result<(), AppError>;
+}
+
+/// The credential the caller hands in for an MCP server (REQ-033).
+#[derive(Debug, Clone)]
+pub struct NewMcpBearer {
+    /// The bearer token the server expects. Sealed at rest, never returned.
+    pub token: secrecy::SecretString,
+}
+
+/// The OAuth endpoints a member registered for a server (REQ-033).
+#[derive(Debug, Clone)]
+pub struct McpOAuthConfig {
+    /// The authorization endpoint the member's browser opens.
+    pub authorization_url: String,
+    /// The token endpoint the exchange calls.
+    pub token_url: String,
+    /// The client id the member registered at the server.
+    pub client_id: String,
+    /// The client secret, when the server issues confidential ones.
+    pub client_secret: Option<secrecy::SecretString>,
+}
+
+/// What a caller hands in to register an MCP server (REQ-033).
+#[derive(Debug, Clone)]
+pub struct NewMcpServer {
+    /// The server's id.
+    pub id: String,
+    /// The member's display name for it.
+    pub name: String,
+    /// `http` or `stdio`.
+    pub transport: boma_domain::McpTransport,
+    /// The HTTPS URL, for `http`.
+    pub url: Option<String>,
+    /// The command, for `stdio`.
+    pub command: Option<String>,
+    /// The bearer token, when the server uses one.
+    pub bearer: Option<secrecy::SecretString>,
+    /// The OAuth endpoints, when the server uses a registered client.
+    pub oauth: Option<McpOAuthConfig>,
+    /// The member's explicit allowance for a private endpoint (D-05).
+    pub allow_private: bool,
+    /// When the server was registered.
+    pub created_at: String,
+}
+
+/// What the API exposes about a server. Never the credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerSummary {
+    /// The server's id.
+    pub id: String,
+    /// The member's display name.
+    pub name: String,
+    /// `http` or `stdio`.
+    pub transport: String,
+    /// The HTTPS URL, when it is one.
+    pub url: Option<String>,
+    /// The command, when it is a stdio server.
+    pub command: Option<String>,
+    /// `none`, `oauth_pending`, `connected` or `error`.
+    pub auth_state: String,
+    /// The member's explicit allowance for a private endpoint (D-05).
+    pub allow_private: bool,
+    /// Whether an OAuth client is configured (implies `oauth` in the add request).
+    pub oauth_configured: bool,
+    /// The number of tools the last probe discovered, when any.
+    pub tool_count: Option<i32>,
+    /// When the server was registered.
+    pub created_at: String,
+}
+
+/// One server as the stores persist it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerRecord {
+    /// The server's id.
+    pub id: String,
+    /// The member's display name.
+    pub name: String,
+    /// `http` or `stdio`.
+    pub transport: String,
+    /// The HTTPS URL, when it is one.
+    pub url: Option<String>,
+    /// The command, when it is a stdio server.
+    pub command: Option<String>,
+    /// `none`, `oauth_pending`, `connected` or `error`.
+    pub auth_state: String,
+    /// The member's explicit allowance for a private endpoint (D-05).
+    pub allow_private: bool,
+    /// The authorization endpoint, when OAuth is configured.
+    pub authorization_url: Option<String>,
+    /// The token endpoint, when OAuth is configured.
+    pub token_url: Option<String>,
+    /// The client id, when OAuth is configured.
+    pub client_id: Option<String>,
+    /// The number of tools the last probe discovered, when any.
+    pub tool_count: Option<i32>,
+    /// When the server was registered.
+    pub created_at: String,
+}
+
+/// One tool a server discovered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpTool {
+    /// The tool's name as the server names it.
+    pub name: String,
+    /// One line about what the tool does.
+    pub description: String,
+    /// The JSON schema of its arguments.
+    pub input_schema: serde_json::Value,
+}
+
+/// Stores the MCP servers of a space (REQ-033).
+#[async_trait]
+pub trait McpServerStore: Send + Sync {
+    /// The space's servers, name ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(&self, context: &TenantContext) -> Result<Vec<McpServerSummary>, AppError>;
+
+    /// Registers a server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the name is already taken, and an error when the
+    /// database refuses the write.
+    async fn create(
+        &self,
+        context: &TenantContext,
+        server: NewMcpServer,
+    ) -> Result<McpServerSummary, AppError>;
+
+    /// One server by id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn get(
+        &self,
+        context: &TenantContext,
+        id: &str,
+    ) -> Result<Option<McpServerRecord>, AppError>;
+
+    /// Removes a server. Removing a missing server is a success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn remove(&self, context: &TenantContext, id: &str) -> Result<bool, AppError>;
+
+    /// The bearer token, revealed for the wire call only. Never logged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the token does not unwrap under this deployment's vault.
+    async fn reveal_bearer(
+        &self,
+        context: &TenantContext,
+        id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError>;
+
+    /// Records the probe outcome: auth state and discovered tool count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn set_auth_state(
+        &self,
+        context: &TenantContext,
+        id: &str,
+        state: &str,
+        tool_count: Option<i32>,
+    ) -> Result<(), AppError>;
+
+    /// Replaces the tool rows of a server with what the probe discovered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn replace_tools(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        tools: &[McpTool],
+    ) -> Result<(), AppError>;
+
+    /// The tools the last probe discovered for every connected server of the space, keyed by
+    /// server name. Used to build a run's catalogue without a network call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn catalogue_tools(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<(String, McpTool)>, AppError>;
+}
+
+/// Calls an MCP server (REQ-033).
+///
+/// Redirects are refused by the implementation, and every call carries the SSRF guard's verdict;
+/// this port exists so a deployment can swap transports without touching a business rule.
+#[async_trait]
+pub trait McpTransport: Send + Sync {
+    /// Discovers the tools a server exposes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the server cannot be reached, answers with an error, or a URL is
+    /// refused by the outbound guard.
+    async fn list_tools(
+        &self,
+        server: &McpServerRecord,
+        bearer: Option<&secrecy::SecretString>,
+    ) -> Result<Vec<McpTool>, AppError>;
+
+    /// Calls one tool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the server cannot be reached, answers with an error, or a URL is
+    /// refused by the outbound guard.
+    async fn call_tool(
+        &self,
+        server: &McpServerRecord,
+        bearer: Option<&secrecy::SecretString>,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> Result<serde_json::Value, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

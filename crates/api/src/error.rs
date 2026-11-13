@@ -177,6 +177,10 @@ impl From<AppError> for ApiError {
         match error {
             AppError::Rule(_) => Self::bad_request(),
             AppError::Conflict => Self::new(ErrorCode::Conflict, "That already exists."),
+            AppError::StdioDisabled => Self::new(
+                ErrorCode::BadRequest,
+                "Local command servers are disabled in this deployment. An HTTPS server is the supported path.",
+            ),
             AppError::ScreenTaken => Self::screen_taken(),
             AppError::InvalidCredentials => Self::invalid_credentials(),
             AppError::NotFound => Self::not_found(),

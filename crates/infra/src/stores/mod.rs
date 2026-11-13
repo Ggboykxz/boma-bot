@@ -4,12 +4,14 @@
 //! [`crate::tenant`], so the database always knows which tenant the query acts in (REQ-043).
 
 pub mod accounts;
+pub mod audit;
 pub mod bots;
 pub mod cards;
 pub mod computer;
 mod computer_row;
 pub mod events;
 pub mod invitations;
+pub mod mcp;
 pub mod memory;
 pub mod messages;
 pub mod pending_tool_calls;
