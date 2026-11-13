@@ -22,6 +22,7 @@ pub mod model;
 pub mod plugin;
 pub mod routine;
 pub mod run;
+pub mod skill;
 pub mod tenancy;
 pub mod thread;
 
@@ -55,5 +56,9 @@ pub use routine::{
     validate_triggers,
 };
 pub use run::{Run, RunStatus, RunTrigger};
+pub use skill::{
+    Skill, SkillOrigin, builtin_skills, validate_skill_description, validate_skill_instructions,
+    validate_skill_name,
+};
 pub use tenancy::{SystemReason, TenantContext};
 pub use thread::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Thread, validate_page_size};

@@ -1690,6 +1690,106 @@ pub trait SecretStore: Send + Sync {
     ) -> Result<Option<secrecy::SecretString>, AppError>;
 }
 
+/// One skill the model may load, as the provider advertisement sees it (REQ-035).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillContext {
+    /// The wire name the model passes to `skill.load`.
+    pub name: String,
+    /// One line about what the skill does.
+    pub description: String,
+}
+
+/// What a caller hands in to teach or install a skill (REQ-035).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSkill {
+    /// The skill's id.
+    pub id: String,
+    /// The wire name; unique per space.
+    pub name: String,
+    /// One line a person reads.
+    pub description: String,
+    /// The instructions handed to the model.
+    pub instructions: String,
+    /// `taught` or `plugin`: where the skill came from.
+    pub origin: boma_domain::SkillOrigin,
+    /// The plugin source it was installed from, for plugin skills.
+    pub plugin_source: Option<String>,
+    /// When the skill was written.
+    pub created_at: String,
+}
+
+/// What the API exposes about a skill: the name and its one line. Instructions go over the wire
+/// only to a `skills.get` call or to the model's tool loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillSummary {
+    /// The wire name.
+    pub name: String,
+    /// One line a person reads.
+    pub description: String,
+    /// `builtin`, `taught` or `plugin`.
+    pub origin: String,
+    /// The plugin source, for plugin skills.
+    pub plugin_source: Option<String>,
+    /// When the skill was written.
+    pub created_at: String,
+}
+
+/// A whole skill as the stores expose it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRecord {
+    /// The wire name.
+    pub name: String,
+    /// One line a person reads.
+    pub description: String,
+    /// The instructions handed to the model.
+    pub instructions: String,
+    /// `builtin`, `taught` or `plugin`.
+    pub origin: String,
+    /// The plugin source, for plugin skills.
+    pub plugin_source: Option<String>,
+    /// When the skill was written.
+    pub created_at: String,
+}
+
+/// Stores taught and plugin skills, per space (REQ-035).
+///
+/// Built-in skills live in the domain; this store carries only what a space owns.
+#[async_trait]
+pub trait SkillStore: Send + Sync {
+    /// The space's skills, name ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(&self, context: &TenantContext) -> Result<Vec<SkillSummary>, AppError>;
+
+    /// One skill by name, with its instructions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn get(
+        &self,
+        context: &TenantContext,
+        name: &str,
+    ) -> Result<Option<SkillRecord>, AppError>;
+
+    /// Teaches or installs a skill, replacing a taught skill of the same name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when a plugin skill of the same name exists (a reinstall
+    /// replaces; two plugins never share a name) and an error when the database refuses the write.
+    async fn put(&self, context: &TenantContext, skill: NewSkill) -> Result<(), AppError>;
+
+    /// Removes a skill by name. Removing a missing skill is a success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn remove(&self, context: &TenantContext, name: &str) -> Result<bool, AppError>;
+}
+
 /// What a caller hands in to submit a plugin for review (REQ-034).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewPluginSubmission {
@@ -1791,6 +1891,9 @@ pub struct ProviderRequest {
     pub tools: Vec<ToolSpec>,
     /// Scoped memory available to this turn (REQ-022).
     pub memory: Vec<MemoryContext>,
+    /// The skills this run may load, name and one line each (REQ-035). Always carries the
+    /// built-ins; taught and plugin skills of the space ride along.
+    pub skills: Vec<SkillContext>,
 }
 
 /// Produces the next turn of the assistant's answer.

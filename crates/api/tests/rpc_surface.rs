@@ -1775,3 +1775,114 @@ async fn req_046_a_secret_name_that_is_not_an_env_var_is_refused() {
         "the error never echoes the value"
     );
 }
+
+#[tokio::test]
+async fn req_035_a_member_teaches_lists_and_reads_a_skill() {
+    let world = world().await;
+    let state = state(&world.app);
+
+    // List before teaching: the built-in rides along.
+    let response = post(
+        state.clone(),
+        "/rpc/skills/list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let names: Vec<&str> = body["skills"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|skill| skill["name"].as_str().expect("a name"))
+        .collect();
+    assert!(names.contains(&"interrogate"), "the built-in: {names:?}");
+    assert_eq!(names.len(), 1, "no space skills yet: {names:?}");
+
+    // Teach: the reply names the skill.
+    let response = post(
+        state.clone(),
+        "/rpc/skills/teach",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "commits",
+            "description": "How this space summarises commits.",
+            "instructions": "Group by intent; quote the riskiest line.",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["name"], serde_json::json!("commits"));
+
+    // List after: the taught skill is there, origin taught.
+    let response = post(
+        state.clone(),
+        "/rpc/skills/list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    let body = json(response).await;
+    let names: Vec<&str> = body["skills"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|skill| skill["name"].as_str().expect("a name"))
+        .collect();
+    assert!(names.contains(&"commits"), "the taught skill: {names:?}");
+    let taught = body["skills"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|skill| skill["name"] == serde_json::json!("commits"))
+        .expect("the taught skill");
+    assert_eq!(taught["origin"], serde_json::json!("taught"));
+
+    // Get: the instructions ride along.
+    let response = post(
+        state,
+        "/rpc/skills/get",
+        Some(&world.caller),
+        serde_json::json!({ "name": "commits" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body["instructions"],
+        serde_json::json!("Group by intent; quote the riskiest line.")
+    );
+    assert_eq!(body["origin"], serde_json::json!("taught"));
+}
+
+#[tokio::test]
+async fn req_035_teaching_over_a_builtin_name_is_refused() {
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/skills/teach",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "interrogate",
+            "description": "Shadowing a built-in must be refused.",
+            "instructions": "Not allowed.",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn req_035_getting_an_unknown_skill_is_a_not_found() {
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/skills/get",
+        Some(&world.caller),
+        serde_json::json!({ "name": "does-not-exist" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

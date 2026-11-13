@@ -220,6 +220,39 @@ impl Worker {
         Ok(bot_memory.chain(shared_memory).collect())
     }
 
+    /// The skills this run may load (REQ-035): the built-ins, then the space's own.
+    ///
+    /// Names and one line each, never the instructions — the model pulls those with
+    /// `skill.load`, and the pull is visible as a tool message.
+    async fn skills_context(
+        &self,
+        claimed: &usecases::ClaimedRun,
+    ) -> Result<Vec<crate::ports::SkillContext>, AppError> {
+        let scoped = TenantContext::Member {
+            space_id: claimed.bot.space_id.clone(),
+            user_id: claimed.run.user_id.clone(),
+        };
+        let builtins =
+            boma_domain::builtin_skills()
+                .into_iter()
+                .map(|skill| crate::ports::SkillContext {
+                    name: skill.name,
+                    description: skill.description,
+                });
+        let own = self
+            .app
+            .stores
+            .skills
+            .list(&scoped)
+            .await?
+            .into_iter()
+            .map(|skill| crate::ports::SkillContext {
+                name: skill.name,
+                description: skill.description,
+            });
+        Ok(builtins.chain(own).collect())
+    }
+
     /// One provider pass over the thread (REQ-003).
     ///
     /// Reads the newest page, calls the provider once and streams the chunks out. Returns what
@@ -257,6 +290,8 @@ impl Worker {
         // REQ-022: scoped memory rides into the turn. Bot documents first, then the
         // space-shared ones; the provider logs what it was given, so a test can assert it.
         let memory = self.memory_context(claimed).await?;
+        // REQ-035: the built-in skills and the space's own ride as names and one line each.
+        let skills = self.skills_context(claimed).await?;
         let request = ProviderRequest {
             bot: claimed.bot.clone(),
             thread: claimed.thread.clone(),
@@ -264,6 +299,7 @@ impl Worker {
             history,
             tools: tools.clone(),
             memory,
+            skills,
         };
 
         match self.provider.complete(request).await {
@@ -382,9 +418,15 @@ impl Worker {
                 None => refused.push(call),
             }
         }
+        // The tool gate and the stores act for the run's member, like the memory read: a tool
+        // the space grants must not answer across spaces, and the row level security enforces it.
+        let scoped = TenantContext::Member {
+            space_id: claimed.bot.space_id.clone(),
+            user_id: claimed.run.user_id.clone(),
+        };
         for call in read_calls {
             let result =
-                usecases::dispatch_tool(&self.app, context, claimed.bot.id.as_str(), &call).await?;
+                usecases::dispatch_tool(&self.app, &scoped, claimed.bot.id.as_str(), &call).await?;
             usecases::append_tool_result(
                 &self.app,
                 context,

@@ -52,6 +52,7 @@ pub use stores::runs::PostgresRunStore;
 pub use stores::screen::PostgresScreenCapabilityStore;
 pub use stores::secrets::{PostgresSecretStore, rekey_space_keys};
 pub use stores::sessions::PostgresSessionStore;
+pub use stores::skills::PostgresSkillStore;
 pub use stores::spaces::PostgresSpaceStore;
 pub use stores::threads::PostgresThreadStore;
 pub use stores::tools::PostgresToolStore;

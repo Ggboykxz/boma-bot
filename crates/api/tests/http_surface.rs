@@ -94,6 +94,7 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryRateLimitStore::default()),
                 std::sync::Arc::new(boma_testkit::MemorySecretStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryPluginSubmissionStore::default()),
+                std::sync::Arc::new(boma_testkit::MemorySkillStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReactionStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReadStateStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryRosterStore::default()),

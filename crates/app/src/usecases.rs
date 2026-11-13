@@ -362,6 +362,124 @@ pub async fn submit_plugin(
     Ok(id)
 }
 
+/// The skills a member sees (REQ-035): the built-ins first, then the space's own, by name.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn skills_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::SkillSummary>, AppError> {
+    let mut skills: Vec<crate::ports::SkillSummary> = boma_domain::builtin_skills()
+        .into_iter()
+        .map(|skill| crate::ports::SkillSummary {
+            name: skill.name,
+            description: skill.description,
+            origin: boma_domain::SkillOrigin::Builtin.as_str().to_owned(),
+            plugin_source: None,
+            created_at: String::new(),
+        })
+        .collect();
+    skills.extend(app.stores.skills.list(context).await?);
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(skills)
+}
+
+/// One skill with its instructions (REQ-035): built-in first, then the space's own.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when no skill of that name exists.
+pub async fn skill_get(
+    app: &App,
+    context: &TenantContext,
+    name: &str,
+) -> Result<crate::ports::SkillRecord, AppError> {
+    if let Some(skill) = boma_domain::builtin_skills()
+        .into_iter()
+        .find(|skill| skill.name == name)
+    {
+        return Ok(crate::ports::SkillRecord {
+            name: skill.name,
+            description: skill.description,
+            instructions: skill.instructions,
+            origin: boma_domain::SkillOrigin::Builtin.as_str().to_owned(),
+            plugin_source: None,
+            created_at: String::new(),
+        });
+    }
+    app.stores
+        .skills
+        .get(context, name)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Teaches a skill into the space (REQ-035).
+///
+/// A built-in's name is reserved: teaching over `interrogate` would silently change what a
+/// deployment means. The caller decides the origin — a member teaching in conversation teaches
+/// `taught`; a plugin install installs `plugin` with its source.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when a field fails validation, [`AppError::Conflict`] when the
+/// name belongs to a built-in, and an error when a store cannot answer.
+pub async fn teach_skill(
+    app: &App,
+    context: &TenantContext,
+    name: &str,
+    description: &str,
+    instructions: &str,
+    origin: boma_domain::SkillOrigin,
+    plugin_source: Option<String>,
+) -> Result<(), AppError> {
+    boma_domain::validate_skill_name(name)?;
+    boma_domain::validate_skill_description(description)?;
+    boma_domain::validate_skill_instructions(instructions)?;
+    if boma_domain::builtin_skills()
+        .into_iter()
+        .any(|skill| skill.name == name)
+    {
+        return Err(AppError::Conflict);
+    }
+    app.stores
+        .skills
+        .put(
+            context,
+            crate::ports::NewSkill {
+                id: app.services.ids.new_id("sk"),
+                name: name.to_owned(),
+                description: description.trim().to_owned(),
+                instructions: instructions.to_owned(),
+                origin,
+                plugin_source,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+}
+
+/// The names and one-line descriptions of every skill this context may load (REQ-035).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn skill_names(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::SkillContext>, AppError> {
+    Ok(skills_list(app, context)
+        .await?
+        .into_iter()
+        .map(|summary| crate::ports::SkillContext {
+            name: summary.name,
+            description: summary.description,
+        })
+        .collect())
+}
+
 /// The longest display name a submission carries.
 const MAX_PLUGIN_NAME_LENGTH: usize = 120;
 
@@ -2991,6 +3109,55 @@ async fn apply_pending_tool_calls(
     Ok(child_created)
 }
 
+/// Teaches a skill on approval (REQ-035): the member approved, the write happens once.
+async fn approved_skill_teach(
+    app: &App,
+    context: &TenantContext,
+    call: &crate::ports::PendingToolCall,
+) -> (serde_json::Value, bool) {
+    let string = |key: &str| -> Option<String> {
+        call.arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let Some(name) = string("name") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `name` argument" } }),
+            false,
+        );
+    };
+    let Some(description) = string("description") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `description` argument" } }),
+            false,
+        );
+    };
+    let Some(instructions) = string("instructions") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs an `instructions` argument" } }),
+            false,
+        );
+    };
+    let body = match teach_skill(
+        app,
+        context,
+        &name,
+        &description,
+        &instructions,
+        boma_domain::SkillOrigin::Taught,
+        None,
+    )
+    .await
+    {
+        Ok(()) => serde_json::json!({ "ok": true, "body": { "name": name } }),
+        Err(error) => {
+            serde_json::json!({ "ok": false, "body": { "error": format!("the skill was not taught: {error}") } })
+        }
+    };
+    (body, false)
+}
+
 /// Runs one approved tool call and reports what happened in a body shaped `{ ok, body }`,
 /// plus whether the call created an asynchronous child run the parent must wait for.
 ///
@@ -3039,6 +3206,7 @@ async fn execute_approved_tool(
                 };
             (body, false)
         }
+        "skill.teach" => approved_skill_teach(app, context, call).await,
         "delegate.helper" => {
             let Some(prompt) = string("prompt") else {
                 return (
@@ -3255,6 +3423,19 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
             description: "Capture the current screen of this bot's computer.".to_owned(),
             kind: boma_domain::ToolKind::Builtin,
             effect: boma_domain::ToolEffect::Read,
+        },
+        ToolSpec {
+            key: "skill.load".to_owned(),
+            description: "Load the full instructions of a skill this run may use, by name."
+                .to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Read,
+        },
+        ToolSpec {
+            key: "skill.teach".to_owned(),
+            description: "Teach this space a new skill from instructions.".to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Write,
         },
     ]
 }
@@ -3531,6 +3712,32 @@ async fn dispatch_read_tool(
                     id: call.id.clone(),
                     ok: false,
                     body: serde_json::json!({ "error": "the document does not exist" }),
+                }),
+                Err(error) => Err(error),
+            }
+        }
+        "skill.load" => {
+            let Some(name) = string("name") else {
+                return Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: false,
+                    body: serde_json::json!({ "error": "the tool needs a `name` argument" }),
+                });
+            };
+            match skill_get(app, context, &name).await {
+                Ok(skill) => Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: true,
+                    body: serde_json::json!({
+                        "name": skill.name,
+                        "origin": skill.origin,
+                        "instructions": skill.instructions,
+                    }),
+                }),
+                Err(AppError::NotFound) => Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: false,
+                    body: serde_json::json!({ "error": format!("the bot does not know a skill named `{name}`") }),
                 }),
                 Err(error) => Err(error),
             }

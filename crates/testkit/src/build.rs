@@ -369,6 +369,7 @@ impl TestAppBuilder {
             Arc::new(database.rate_limits()),
             Arc::new(database.secrets()),
             Arc::new(database.plugin_submissions()),
+            Arc::new(database.skills()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -3395,10 +3396,11 @@ mod secrets_tests {
     }
 }
 
+#[cfg(test)]
 mod plugin_submission_tests {
-    use super::TestApp;
-
     // REQ-034 — plugin marketplace: the submission is recorded with the canonical source.
+
+    use super::TestApp;
 
     #[tokio::test]
     async fn req_034_an_anonymous_submission_is_recorded_with_the_canonical_source() {
@@ -3412,7 +3414,7 @@ mod plugin_submission_tests {
             test.app(),
             &source,
             Some("  Example  ".to_owned()),
-            Some("".to_owned()),
+            Some(String::new()),
             None,
         )
         .await
@@ -3453,5 +3455,322 @@ mod plugin_submission_tests {
         let recorded = test.database().plugin_submissions().recorded();
         assert_eq!(recorded[0].name.as_ref().map(String::len), Some(120));
         assert_eq!(recorded[0].contact.as_ref().map(String::len), Some(320));
+    }
+}
+
+#[cfg(test)]
+mod skills_tests {
+    // REQ-035 — skills: a taught bundle is available in a later run, and its use is visible.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+    use crate::ScriptedProvider;
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // mirrors the approval-flow tests: the scenario is the documentation
+    async fn req_035_a_taught_skill_is_available_in_a_later_run() {
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        // Teach the skill directly, as the member-facing RPC does.
+        boma_app::usecases::teach_skill(
+            test.app(),
+            &context,
+            "commits",
+            "How to summarise commits for a reviewer.",
+            "Read the log with git log --stat; group by intent, quote the riskiest line.",
+            boma_domain::SkillOrigin::Taught,
+            None,
+        )
+        .await
+        .expect("the skill is taught");
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise the commits.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "skill.load".to_owned(),
+                arguments: serde_json::json!({ "name": "commits" }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["Done, grouped by intent.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // The run's provider turn carried the built-in and the taught skill, by name.
+        let requests = provider.requests();
+        let names: Vec<&str> = requests[0]
+            .skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"interrogate"),
+            "the built-in rides along: {names:?}"
+        );
+        assert!(
+            names.contains(&"commits"),
+            "the taught skill rides along: {names:?}"
+        );
+
+        // The load is visible on the thread as a tool message with the full instructions.
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers");
+        let tool_text = page
+            .messages
+            .iter()
+            .find(|message| message.role == boma_domain::MessageRole::Tool)
+            .map(|message| {
+                message
+                    .blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        boma_domain::Block::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .expect("a tool message carries the load");
+        assert!(tool_text.contains("skill.load"), "{tool_text}");
+        assert!(tool_text.contains("git log --stat"), "{tool_text}");
+        assert!(tool_text.contains("\"ok\":true"), "{tool_text}");
+
+        // And the reply still lands.
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &outcome.run.id)
+            .await
+            .expect("the run exists")
+            .expect("the run exists");
+        assert_eq!(run.status, boma_domain::RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn req_035_an_unknown_skill_is_refused_and_the_refusal_is_visible() {
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise the commits.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let _ = outcome;
+
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "skill.load".to_owned(),
+                arguments: serde_json::json!({ "name": "does-not-exist" }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["I do not know that skill.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers");
+        let tool_text = page
+            .messages
+            .iter()
+            .find(|message| message.role == boma_domain::MessageRole::Tool)
+            .map(|message| {
+                message
+                    .blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        boma_domain::Block::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .expect("a tool message carries the refusal");
+        assert!(tool_text.contains("\"ok\":false"), "{tool_text}");
+        assert!(tool_text.contains("does-not-exist"), "{tool_text}");
+    }
+
+    #[tokio::test]
+    async fn req_035_a_skill_taught_by_the_agent_waits_for_approval_then_lands() {
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Learn how I want releases summarised.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let _ = outcome;
+
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "skill.teach".to_owned(),
+                arguments: serde_json::json!({
+                    "name": "release-notes",
+                    "description": "How this space writes release notes.",
+                    "instructions": "Lead with the user-visible change; one bullet per fix.",
+                }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["Learned.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // The teaching parked on an approval card: no skill yet.
+        let card_id = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers")
+            .messages
+            .into_iter()
+            .flat_map(|message| message.blocks.into_iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+        assert!(
+            teaches(&test, &context, "release-notes").await.is_none(),
+            "the skill does not exist before the approval"
+        );
+
+        let answered = boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        assert!(answered.effect_recorded);
+        assert!(
+            teaches(&test, &context, "release-notes").await.is_some(),
+            "the skill lands once approved"
+        );
+
+        // The run resumes and completes.
+        assert!(worker.step().await.expect("the worker answers"));
+    }
+
+    /// Whether the named space skill exists as the member sees it.
+    #[allow(clippy::expect_used)] // test helper: a failure to list is a broken deployment, not a runtime path
+    async fn teaches(
+        test: &TestApp,
+        context: &boma_domain::TenantContext,
+        name: &str,
+    ) -> Option<boma_app::ports::SkillSummary> {
+        boma_app::usecases::skills_list(test.app(), context)
+            .await
+            .expect("the list answers")
+            .into_iter()
+            .find(|skill| skill.name == name)
     }
 }

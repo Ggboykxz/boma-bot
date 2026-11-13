@@ -26,8 +26,37 @@ as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay
 Every milestone ships test-first at the API/use-case level, then PG/functional proof, then docs +
 STATE; gates re-run at each push (fmt, clippy -D warnings, cargo test workspace).
 
-**M5 — in flight. Two slices committed: REQ-046 (secrets, `835d8e7`) and REQ-034, part 1
-(plugin submissions).**
+**M5 — in flight. Three slices committed: REQ-046 (secrets, `835d8e7`), REQ-034 slice 1
+(plugin submissions, `bc03d1e`), REQ-035 (skills).**
+
+**CI incident on `bc03d1e` (owner: "the workflows must work on every push") — both failures were
+mine, and both are fixed in the skills revision.** Run 43436566757 was red on: (1) the `rust` job's
+clippy step — the plugin-submission tests carried an unused import and a manual `String::new` at
+`crates/testkit/src/build.rs:3399/3415` (fixed when the skills slice landed: `#[cfg(test)]` on the
+module, `String::new()`); (2) the `compose` job's probe step — the app container never answered:
+`compose.yaml` passed `BOMA_MASTER_KEY` with an empty value, and `SecretBox::from_env` read
+"present but empty" as an invalid key, so `build_app` refused to boot and the container died before
+`/health` came up. `from_env` now treats empty and whitespace-only values as absent (consistent
+with every other `.env` parser in the binary and with `.env.example`), with a unit test
+(`req_046_an_empty_env_key_is_treated_as_absent`). The compose probe step now dumps
+`docker compose logs app` when it fails, so the next failure is legible. Rule recorded by the
+owner: **CI must be green on every push, verified, not assumed** — every push from here watches the
+run to conclusion and reports it.
+
+3. **REQ-035 (skills, SHOULD)** — built-in (`interrogate`, our words), taught and plugin skills:
+   migration `0028_skills.sql` (RLS), `SkillStore` port + PG + in-memory adapters, wire RPC
+   `skills.list|get|teach`, agent tools `skill.load` (Read, executes) and `skill.teach`
+   (Write, parks on the approval gate), and the run's provider request now carries the skill
+   names and one-line descriptions (`ProviderRequest.skills`). The worker's tool dispatch acts
+   for the run's member context, like the memory read (the system context cannot see the
+   member's skills — a defect the memory adapter cannot express was avoided the same way).
+   283 tests green; the docker-gated tests (REQ-026/028/029, `computer_conformance`) could not
+   run at this revision: **this box's rootless docker exhausted its kernel session-keyring quota**
+   (`unable to create session key: disk quota exceeded`), all boots fail identically and
+   unrelated to the code; earlier in this session REQ-026/028/029 were all green at least once,
+   and CI runs the full suite on every push. Restarting the owner's daemon frees the quota; it
+   was not restarted without asking.
+
 
 1. **REQ-046 (write-only bot secrets, MUST)** — see the previous block; committed `835d8e7`,
    `boma rekey` operator command wired and documented, 272 tests green at that revision.

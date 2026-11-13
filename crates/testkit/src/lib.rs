@@ -42,8 +42,8 @@ pub use memory::{
     MemoryMemoryStore, MemoryMessageStore, MemoryPendingToolCallStore, MemoryPluginSubmissionStore,
     MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
     MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,
-    MemorySessionStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore, MemoryUserStore,
-    Organization, RecordedSubmission,
+    MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore,
+    MemoryUserStore, Organization, RecordedSubmission,
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedIds,

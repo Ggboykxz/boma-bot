@@ -140,13 +140,20 @@ jobs:
       - name: the API answers liveness, readiness and their aliases
         run: |
           set -euo pipefail
-          for path in health ready healthz readyz; do
-            curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused \
-              --max-time 10 "http://127.0.0.1:3000/$path" -o "/tmp/boma-$path.json"
-            printf '/%s ' "$path"
-            cat "/tmp/boma-$path.json"
-            printf '\n'
-          done
+          probe() {
+            for path in health ready healthz readyz; do
+              curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused \
+                --max-time 10 "http://127.0.0.1:3000/$path" -o "/tmp/boma-$path.json"
+              printf '/%s ' "$path"
+              cat "/tmp/boma-$path.json"
+              printf '\n'
+            done
+          }
+          if ! probe; then
+            echo '::error::the stack did not answer; container logs follow'
+            docker compose logs app
+            exit 1
+          fi
 
       - name: stop the stack and its volume
         if: always()

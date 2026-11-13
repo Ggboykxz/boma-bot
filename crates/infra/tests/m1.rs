@@ -75,6 +75,7 @@ fn app(database: &Postgres) -> App {
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresPluginSubmissionStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresSkillStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -1719,4 +1720,85 @@ async fn req_034_a_plugin_submission_round_trips_through_postgres() {
         .execute(&pool)
         .await
         .expect("the row is removed");
+}
+
+/// REQ-035: a taught skill survives a round trip to Postgres, and the RLS barrier holds.
+#[tokio::test]
+async fn req_035_a_taught_skill_round_trips_through_postgres_and_other_spaces_cannot_see_it() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let tenant = common::tenant_pool(&fresh.database).await;
+    let fixture = common::fixture(&pool, "skil").await;
+    let outsider = common::fixture(&pool, "sko").await;
+    let store = boma_infra::PostgresSkillStore::new(tenant.clone());
+
+    store
+        .put(
+            &fixture.context,
+            boma_app::ports::NewSkill {
+                id: "sk_postgres_round_trip".to_owned(),
+                name: "commits".to_owned(),
+                description: "How this space summarises commits.".to_owned(),
+                instructions: "Group by intent; quote the riskiest line.".to_owned(),
+                origin: boma_domain::SkillOrigin::Taught,
+                plugin_source: None,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the skill is stored");
+
+    let record = store
+        .get(&fixture.context, "commits")
+        .await
+        .expect("the store answers")
+        .expect("the skill is there");
+    assert_eq!(record.name, "commits");
+    assert_eq!(record.origin, "taught");
+    assert_eq!(
+        record.instructions,
+        "Group by intent; quote the riskiest line."
+    );
+
+    // Another space: nothing is listed, nothing is read.
+    let list = store
+        .list(&outsider.context)
+        .await
+        .expect("the store answers");
+    assert!(list.is_empty(), "another space sees no skills");
+    let missing = store
+        .get(&outsider.context, "commits")
+        .await
+        .expect("the store answers");
+    assert!(missing.is_none());
+
+    // Re-teaching replaces rather than duplicates.
+    store
+        .put(
+            &fixture.context,
+            boma_app::ports::NewSkill {
+                id: "sk_postgres_round_trip_2".to_owned(),
+                name: "commits".to_owned(),
+                description: "Updated.".to_owned(),
+                instructions: "Updated instructions.".to_owned(),
+                origin: boma_domain::SkillOrigin::Taught,
+                plugin_source: None,
+                created_at: "2026-01-02T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the skill is replaced");
+    let list = store
+        .list(&fixture.context)
+        .await
+        .expect("the store answers");
+    assert_eq!(list.len(), 1, "one row per (space, name)");
+    assert_eq!(list[0].description, "Updated.");
+
+    sqlx::query("DELETE FROM skills WHERE id LIKE 'sk_postgres_round_trip%'")
+        .execute(&pool)
+        .await
+        .expect("the rows are removed");
+    common::cleanup(&pool, "skil").await;
+    common::cleanup(&pool, "sko").await;
 }

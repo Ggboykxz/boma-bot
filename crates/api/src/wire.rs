@@ -703,6 +703,57 @@ pub struct SecretsReply {
     pub secrets: Vec<SecretView>,
 }
 
+/// One skill in a list (REQ-035). Built-ins carry no timestamps; taught and plugin skills do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillView {
+    /// The wire name the model loads.
+    pub name: String,
+    /// One line a person reads.
+    pub description: String,
+    /// `builtin`, `taught` or `plugin`.
+    pub origin: String,
+    /// The plugin source it was installed from, when it was installed from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_source: Option<String>,
+    /// When the skill was written; empty for built-ins.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub created_at: String,
+}
+
+/// The reply of `skills.list` (REQ-035): built-ins first, then the space's own, by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsReply {
+    /// The skills visible to the caller.
+    pub skills: Vec<SkillView>,
+}
+
+/// The reply of `skills.get` (REQ-035): one skill with its instructions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillReply {
+    /// The wire name.
+    pub name: String,
+    /// One line a person reads.
+    pub description: String,
+    /// The instructions handed to the model.
+    pub instructions: String,
+    /// `builtin`, `taught` or `plugin`.
+    pub origin: String,
+    /// The plugin source it was installed from, when it was installed from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_source: Option<String>,
+}
+
+/// The reply of `skills.teach` (REQ-035).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeachSkillReply {
+    /// The taught skill's name.
+    pub name: String,
+}
+
 /// The reply of `botSecrets.forget` (REQ-046). Deleting a missing name is a success.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

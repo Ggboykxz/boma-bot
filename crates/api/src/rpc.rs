@@ -29,7 +29,8 @@ use crate::{
         MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply,
         RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
         RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
-        SecretView, SecretsReply, SendReply, SnoozeReply, SpaceReply, ThreadHeadReply,
+        SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply,
+        SpaceReply, TeachSkillReply, ThreadHeadReply,
     },
 };
 
@@ -51,6 +52,8 @@ pub mod namespaces {
     pub const COMPUTER: &str = "computer";
     /// Secrets for bots, write-only (REQ-046).
     pub const BOT_SECRETS: &str = "botSecrets";
+    /// Skills: named instruction bundles a bot loads (REQ-035).
+    pub const SKILLS: &str = "skills";
 }
 
 /// Every procedure this deployment serves.
@@ -97,6 +100,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BOT_SECRETS, "set"),
         (namespaces::BOT_SECRETS, "list"),
         (namespaces::BOT_SECRETS, "forget"),
+        (namespaces::SKILLS, "list"),
+        (namespaces::SKILLS, "get"),
+        (namespaces::SKILLS, "teach"),
     ]
 }
 
@@ -233,6 +239,15 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOT_SECRETS, "forget") => secrets_forget(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::SKILLS, "list") => skills_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::SKILLS, "get") => skills_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::SKILLS, "teach") => skills_teach(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -1406,4 +1421,88 @@ async fn secrets_forget(
         name: request.name,
         removed,
     })
+}
+
+/// The body of `skills.list` (REQ-035): nothing, `{}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillsListRequest {}
+
+/// `skills.list` — the built-ins and the space's own, by name.
+async fn skills_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SkillsReply, ApiError> {
+    let _: SkillsListRequest = parse(&body)?;
+    let skills = usecases::skills_list(state.app(), &auth.actor.context).await?;
+    Ok(SkillsReply {
+        skills: skills
+            .into_iter()
+            .map(|summary| SkillView {
+                name: summary.name,
+                description: summary.description,
+                origin: summary.origin,
+                plugin_source: summary.plugin_source,
+                created_at: summary.created_at,
+            })
+            .collect(),
+    })
+}
+
+/// The body of `skills.get` (REQ-035).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillsGetRequest {
+    /// The wire name to fetch.
+    name: String,
+}
+
+/// `skills.get` — one skill with its instructions.
+async fn skills_get(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SkillReply, ApiError> {
+    let request: SkillsGetRequest = parse(&body)?;
+    let skill = usecases::skill_get(state.app(), &auth.actor.context, &request.name).await?;
+    Ok(SkillReply {
+        name: skill.name,
+        description: skill.description,
+        instructions: skill.instructions,
+        origin: skill.origin,
+        plugin_source: skill.plugin_source,
+    })
+}
+
+/// The body of `skills.teach` (REQ-035).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SkillsTeachRequest {
+    /// The wire name the bot will call.
+    name: String,
+    /// One line a person reads.
+    description: String,
+    /// The instructions handed to the model.
+    instructions: String,
+}
+
+/// `skills.teach` — teach the space a skill; a built-in's name is refused.
+async fn skills_teach(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<TeachSkillReply, ApiError> {
+    let request: SkillsTeachRequest = parse(&body)?;
+    usecases::teach_skill(
+        state.app(),
+        &auth.actor.context,
+        &request.name,
+        &request.description,
+        &request.instructions,
+        boma_domain::SkillOrigin::Taught,
+        None,
+    )
+    .await?;
+    Ok(TeachSkillReply { name: request.name })
 }

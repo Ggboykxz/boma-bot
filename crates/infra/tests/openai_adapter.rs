@@ -53,6 +53,7 @@ fn request(prompt: &str) -> boma_app::ports::ProviderRequest {
         history: Vec::new(),
         tools: boma_app::usecases::builtin_tools(),
         memory: Vec::new(),
+        skills: Vec::new(),
     }
 }
 

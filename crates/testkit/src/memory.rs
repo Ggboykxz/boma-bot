@@ -278,6 +278,27 @@ struct SecretRow {
     created_at: String,
 }
 
+/// One stored skill (REQ-035). A space owns its taught and plugin skills; built-ins are code.
+///
+/// The row carries no id: the fake has no id queries, and the PG table owns the primary key.
+#[derive(Debug, Clone)]
+struct SkillRow {
+    /// The space the skill belongs to.
+    space_id: SpaceId,
+    /// The wire name; unique per space.
+    name: String,
+    /// One line a person reads.
+    description: String,
+    /// The instructions handed to the model.
+    instructions: String,
+    /// `taught` or `plugin`.
+    origin: String,
+    /// The plugin source, for plugin skills.
+    plugin_source: Option<String>,
+    /// When the skill was written or last replaced.
+    created_at: String,
+}
+
 /// One stored plugin submission (REQ-034). Anonymous rows carry no submitter.
 #[derive(Debug, Clone)]
 struct PluginSubmissionRow {
@@ -515,6 +536,8 @@ struct State {
     bot_secrets: Vec<SecretRow>,
     /// The plugin submissions awaiting review (REQ-034).
     plugin_submissions: Vec<PluginSubmissionRow>,
+    /// The space-owned skills (REQ-035).
+    skills: Vec<SkillRow>,
     /// The reactions people left on messages.
     reactions: Vec<ReactionRow>,
     /// The read position of each person, per conversation.
@@ -710,6 +733,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn plugin_submissions(&self) -> MemoryPluginSubmissionStore {
         MemoryPluginSubmissionStore::new(self)
+    }
+
+    /// The store of skills (REQ-035).
+    #[must_use]
+    pub fn skills(&self) -> MemorySkillStore {
+        MemorySkillStore::new(self)
     }
 
     /// The store of effects.
@@ -4421,5 +4450,128 @@ impl boma_app::ports::PluginSubmissionStore for MemoryPluginSubmissionStore {
             created_at: submission.created_at,
         });
         Ok(boma_app::ports::PluginSubmissionSummary { id: submission.id })
+    }
+}
+
+/// The store of skills (REQ-035).
+#[derive(Debug, Clone)]
+pub struct MemorySkillStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemorySkillStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemorySkillStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::SkillStore for MemorySkillStore {
+    async fn list(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::SkillSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let mut skills: Vec<boma_app::ports::SkillSummary> = state
+            .skills
+            .iter()
+            .filter(|row| row.space_id == space_id)
+            .map(|row| boma_app::ports::SkillSummary {
+                name: row.name.clone(),
+                description: row.description.clone(),
+                origin: row.origin.clone(),
+                plugin_source: row.plugin_source.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect();
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(skills)
+    }
+
+    async fn get(
+        &self,
+        context: &TenantContext,
+        name: &str,
+    ) -> Result<Option<boma_app::ports::SkillRecord>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .skills
+            .iter()
+            .find(|row| row.space_id == space_id && row.name == name)
+            .map(|row| boma_app::ports::SkillRecord {
+                name: row.name.clone(),
+                description: row.description.clone(),
+                instructions: row.instructions.clone(),
+                origin: row.origin.clone(),
+                plugin_source: row.plugin_source.clone(),
+                created_at: row.created_at.clone(),
+            }))
+    }
+
+    async fn put(
+        &self,
+        context: &TenantContext,
+        skill: boma_app::ports::NewSkill,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        let origin = skill.origin.as_str().to_owned();
+        if let Some(row) = state
+            .skills
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.name == skill.name)
+        {
+            row.description = skill.description;
+            row.instructions = skill.instructions;
+            row.origin = origin;
+            row.plugin_source = skill.plugin_source;
+            row.created_at = skill.created_at;
+            return Ok(());
+        }
+        let _ = skill.id; // the PG store owns the id; the fake keys by (space, name)
+        state.skills.push(SkillRow {
+            space_id,
+            name: skill.name,
+            description: skill.description,
+            instructions: skill.instructions,
+            origin,
+            plugin_source: skill.plugin_source,
+            created_at: skill.created_at,
+        });
+        Ok(())
+    }
+
+    async fn remove(&self, context: &TenantContext, name: &str) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state = write(&self.state);
+        let before = state.skills.len();
+        state
+            .skills
+            .retain(|row| !(row.space_id == space_id && row.name == name));
+        Ok(state.skills.len() != before)
     }
 }

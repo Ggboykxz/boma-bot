@@ -39,12 +39,20 @@ impl std::fmt::Debug for SecretBox {
 impl SecretBox {
     /// Builds the vault from `BOMA_MASTER_KEY` when set and valid.
     ///
+    /// An empty or whitespace-only value is treated as absent: the variable left empty in an
+    /// `.env` or a Compose file means "no key configured", not a malformed key.
+    ///
     /// # Errors
     ///
-    /// Returns [`SecretBoxError::InvalidKey`] when the variable is set but does not hold
-    /// exactly 64 hex characters (32 bytes).
+    /// Returns [`SecretBoxError::InvalidKey`] when the variable is set to something that does
+    /// not hold exactly 64 hex characters (32 bytes).
     pub fn from_env(env: &BTreeMap<String, String>) -> Result<Self, SecretBoxError> {
-        match env.get("BOMA_MASTER_KEY").map(String::as_str) {
+        match env
+            .get("BOMA_MASTER_KEY")
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             None => {
                 tracing::warn!(
                     "BOMA_MASTER_KEY is not set: sealing secrets with an ephemeral per-process key"
@@ -250,6 +258,24 @@ mod tests {
         assert_eq!(outcome.err(), Some(SecretBoxError::InvalidKey));
         let outcome = SecretBox::from_env(&env("0011"));
         assert_eq!(outcome.err(), Some(SecretBoxError::InvalidKey));
+    }
+
+    #[test]
+    fn req_046_an_empty_env_key_is_treated_as_absent() {
+        use std::collections::BTreeMap;
+
+        let vault = SecretBox::from_env(&BTreeMap::from([(
+            "BOMA_MASTER_KEY".to_owned(),
+            String::new(),
+        )]))
+        .expect("an empty value is absent, not malformed");
+        assert!(!vault.stable_key());
+        let vault = SecretBox::from_env(&BTreeMap::from([(
+            "BOMA_MASTER_KEY".to_owned(),
+            "   ".to_owned(),
+        )]))
+        .expect("a whitespace value is absent, not malformed");
+        assert!(!vault.stable_key());
     }
 
     #[test]

@@ -686,6 +686,7 @@ mod tests {
             history: Vec::new(),
             tools: Vec::new(),
             memory: Vec::new(),
+            skills: Vec::new(),
         }
     }
 

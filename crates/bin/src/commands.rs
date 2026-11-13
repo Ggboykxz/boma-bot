@@ -12,8 +12,8 @@ use boma_infra::{
     PostgresPendingToolCallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
     PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
     PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
-    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore,
-    ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
+    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -102,6 +102,7 @@ fn build_app(
             Arc::new(PostgresRateLimitStore::new(pool.clone())),
             Arc::new(PostgresSecretStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresPluginSubmissionStore::new(pool.clone())),
+            Arc::new(PostgresSkillStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

@@ -24,6 +24,7 @@ pub mod runs;
 pub mod screen;
 pub mod secrets;
 pub mod sessions;
+pub mod skills;
 pub mod spaces;
 pub mod threads;
 pub mod tools;

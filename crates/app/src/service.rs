@@ -14,7 +14,7 @@ use crate::{
         EventStore, IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher,
         PendingToolCallStore, PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore,
         RosterStore, RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore,
-        SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
+        SkillStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -51,6 +51,8 @@ pub struct Stores {
     pub secrets: Arc<dyn SecretStore>,
     /// Anonymous plugin submissions awaiting review (REQ-034).
     pub plugin_submissions: Arc<dyn PluginSubmissionStore>,
+    /// Taught and plugin skills of the space (REQ-035).
+    pub skills: Arc<dyn SkillStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
     /// The per-run tool catalogue.
@@ -96,6 +98,7 @@ impl Stores {
         rate_limits: Arc<dyn RateLimitStore>,
         secrets: Arc<dyn SecretStore>,
         plugin_submissions: Arc<dyn PluginSubmissionStore>,
+        skills: Arc<dyn SkillStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -120,6 +123,7 @@ impl Stores {
             rate_limits,
             secrets,
             plugin_submissions,
+            skills,
             effects,
             tools,
             reactions,
