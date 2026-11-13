@@ -149,6 +149,40 @@ impl Worker {
         Ok(true)
     }
 
+    /// Builds the scoped memory context for one turn: bot documents first, then the
+    /// space-shared ones (REQ-022).
+    async fn memory_context(
+        &self,
+        context: &TenantContext,
+        claimed: &usecases::ClaimedRun,
+    ) -> Result<Vec<crate::ports::MemoryContext>, AppError> {
+        let bot_memory = self
+            .app
+            .stores
+            .memory
+            .list(context, Some(&claimed.bot.id))
+            .await?
+            .into_iter()
+            .map(|document| crate::ports::MemoryContext {
+                path: document.path,
+                content: document.content,
+                scope: boma_domain::MemoryScope::Bot,
+            });
+        let shared_memory = self
+            .app
+            .stores
+            .memory
+            .list(context, None)
+            .await?
+            .into_iter()
+            .map(|document| crate::ports::MemoryContext {
+                path: document.path,
+                content: document.content,
+                scope: boma_domain::MemoryScope::Shared,
+            });
+        Ok(bot_memory.chain(shared_memory).collect())
+    }
+
     /// One provider pass over the thread (REQ-003).
     ///
     /// Reads the newest page, calls the provider once and streams the chunks out. Returns what
@@ -182,14 +216,16 @@ impl Worker {
         // The catalogue is built per pass: the bot's grant and the space's installs can change
         // between one pass and the next (REQ-016).
         let tools = usecases::tool_catalogue(&self.app, context, claimed.bot.id.as_str()).await?;
+        // REQ-022: scoped memory rides into the turn. Bot documents first, then the
+        // space-shared ones; the provider logs what it was given, so a test can assert it.
+        let memory = self.memory_context(context, claimed).await?;
         let request = ProviderRequest {
             bot: claimed.bot.clone(),
             thread: claimed.thread.clone(),
             prompt,
             history,
             tools,
-            // REQ-022: the context arrives with the worker slice that assembles scoped memory.
-            memory: Vec::new(),
+            memory,
         };
 
         match self.provider.complete(request).await {

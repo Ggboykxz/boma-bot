@@ -1367,6 +1367,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn req_022_a_memory_entry_is_available_in_a_later_run_context() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        boma_app::usecases::memory_write(
+            test.app(),
+            &context,
+            "bot",
+            Some(bot_id.as_str()),
+            "notes/commits.md",
+            "# Commits\n- previous work\n",
+        )
+        .await
+        .expect("the memory write happened");
+        boma_app::usecases::memory_write(
+            test.app(),
+            &context,
+            "shared",
+            None,
+            "shared/decisions.md",
+            "# Decisions\n- Friday release\n",
+        )
+        .await
+        .expect("the shared memory write happened");
+
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise my week.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let provider = std::sync::Arc::new(crate::ScriptedProvider::default());
+        let worker = boma_app::worker::Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let request = provider
+            .requests()
+            .into_iter()
+            .next()
+            .expect("the provider was asked");
+        let memory: Vec<&boma_app::ports::MemoryContext> = request.memory.iter().collect();
+        assert_eq!(
+            memory.len(),
+            2,
+            "both the bot and the space-shared memory rode into the turn"
+        );
+        let has = |scope, path, content| {
+            memory.iter().any(|document| {
+                document.scope == scope && document.path == path && document.content == content
+            })
+        };
+        assert!(
+            has(
+                boma_domain::MemoryScope::Bot,
+                "notes/commits.md",
+                "# Commits\n- previous work\n"
+            ),
+            "the bot's own document reached the turn"
+        );
+        assert!(
+            has(
+                boma_domain::MemoryScope::Shared,
+                "shared/decisions.md",
+                "# Decisions\n- Friday release\n"
+            ),
+            "the space-shared document reached the turn"
+        );
+    }
+
+    #[tokio::test]
     async fn req_019_delegate_helper_run_creates_a_child_run() {
         let test = TestApp::builder().build();
         let user_id = test
