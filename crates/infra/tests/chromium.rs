@@ -23,6 +23,65 @@ const PAGE: &str = "data:text/html,<html><body>\
 <script>window.__clicks=0;</script>\
 </body></html>";
 
+/// Observes the computer until its browser answers, or fails with the last error and the state
+/// of the containers the daemon holds: a red run must say why, not just that it was red.
+async fn observe_until_ready(
+    fixture: &common::ComputerFixture,
+    context: &boma_domain::TenantContext,
+    docker: &bollard::Docker,
+) -> boma_app::usecases::ComputerObservation {
+    let mut last_error = None;
+    for _ in 0..10 {
+        match usecases::computer_observe(&fixture.app, context, fixture.bot_id.as_str()).await {
+            Ok(observed) => return observed,
+            Err(error) => {
+                last_error = Some(error);
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+    panic!(
+        "the observation answers: {} (containers: {})",
+        last_error.map_or_else(
+            || "no error was kept".to_owned(),
+            |error| format!("{error:?}")
+        ),
+        describe_containers(docker).await
+    );
+}
+
+/// What the daemon says about the containers a failed test left behind.
+///
+/// A browser test that fails before it can talk to Chromium is almost always a container that
+/// died or a port that was never published; printing both turns a red run into a diagnosis.
+async fn describe_containers(docker: &bollard::Docker) -> String {
+    use bollard::query_parameters::ListContainersOptions;
+    let containers = docker
+        .list_containers(Some(ListContainersOptions {
+            all: true,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_or_default();
+    let mut described = Vec::new();
+    for container in containers {
+        let labels = container.labels.clone().unwrap_or_default();
+        if !labels.contains_key("boma.computer") {
+            continue;
+        }
+        let names = container.names.unwrap_or_default().join(",");
+        described.push(format!(
+            "{names} state={:?} status={:?} ports={:?}",
+            container.state, container.status, container.ports
+        ));
+    }
+    if described.is_empty() {
+        "none".to_owned()
+    } else {
+        described.join("; ")
+    }
+}
+
 /// The daemon must answer and the image be pullable; a failure here is a loud failure.
 async fn pull_image(docker: &bollard::Docker) {
     match docker.ping().await {
@@ -77,17 +136,7 @@ async fn req_028_the_computer_observes_acts_and_reads_back_through_a_real_browse
     assert_eq!(booted.computer.status.as_str(), "running");
 
     // Chromium needs a moment to bring its debug endpoint up; poll until it answers.
-    let mut observation = None;
-    for _ in 0..10 {
-        match usecases::computer_observe(&fixture.app, &context, fixture.bot_id.as_str()).await {
-            Ok(observed) => {
-                observation = Some(observed);
-                break;
-            }
-            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
-        }
-    }
-    let observation = observation.expect("the observation answers");
+    let observation = observe_until_ready(&fixture, &context, &docker).await;
     assert_eq!(&observation.png[..4], b"\x89PNG");
 
     // Navigate to a data page with a button and a tall div.
