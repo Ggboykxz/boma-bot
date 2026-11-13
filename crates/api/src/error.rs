@@ -108,6 +108,15 @@ impl ApiError {
         Self::new(ErrorCode::Conflict, "That already exists.")
     }
 
+    /// Another member holds the screen of a computer (REQ-029).
+    ///
+    /// Same status and code as [`ApiError::conflict`], a different message: the caller is taking
+    /// control of a screen a person is already driving, and the answer has to say so.
+    #[must_use]
+    pub const fn screen_taken() -> Self {
+        Self::new(ErrorCode::Conflict, "Someone else has control.")
+    }
+
     /// Absent, or owned by another tenant.
     #[must_use]
     pub const fn not_found() -> Self {
@@ -168,6 +177,7 @@ impl From<AppError> for ApiError {
         match error {
             AppError::Rule(_) => Self::bad_request(),
             AppError::Conflict => Self::new(ErrorCode::Conflict, "That already exists."),
+            AppError::ScreenTaken => Self::screen_taken(),
             AppError::InvalidCredentials => Self::invalid_credentials(),
             AppError::NotFound => Self::not_found(),
             AppError::Unavailable => Self::unavailable(),

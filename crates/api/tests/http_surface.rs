@@ -186,6 +186,19 @@ async fn req_053_health_aliases_answer_like_the_canonical_paths() {
     }
 }
 
+/// D-02: the reference served every captured mail, tokens included, on a development route. The
+/// rebuild has no development mail reader at all, so the route must stay unknown — a 404, never a
+/// body. Named after the defect, not a requirement: the route belongs to no milestone's REQ.
+#[tokio::test]
+async fn d_02_the_development_mail_route_is_not_served() {
+    for path in ["/api/dev/emails", "/api/dev/mail", "/api/dev/inbox"] {
+        let response = get(state(true), path).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        let body = json(response).await;
+        assert_eq!(body["code"], serde_json::json!("NOT_FOUND"), "{path}");
+    }
+}
+
 #[tokio::test]
 async fn req_040_an_unknown_route_uses_the_stable_error_envelope() {
     let response = get(state(true), "/nope").await;

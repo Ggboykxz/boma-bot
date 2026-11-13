@@ -1887,8 +1887,9 @@ pub fn confine_home_path(path: &str) -> Result<&str, AppError> {
 ///
 /// # Errors
 ///
-/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
-/// [`AppError::Conflict`] when another member holds the screen or the computer is not running.
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::ScreenTaken`] when another member holds the screen, and [`AppError::Conflict`] when
+/// the computer is not running.
 pub async fn computer_takeover(
     app: &App,
     context: &TenantContext,
@@ -1911,7 +1912,7 @@ pub async fn computer_takeover(
         if holder == &user_id {
             return Ok(computer); // idempotent: the member already holds the screen
         }
-        return Err(AppError::Conflict);
+        return Err(AppError::ScreenTaken);
     }
     computer.takeover_by_user = Some(user_id);
     computer.takeover_at = Some(app.services.clock.now());
@@ -1926,8 +1927,9 @@ pub async fn computer_takeover(
 ///
 /// # Errors
 ///
-/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and
-/// [`AppError::Conflict`] when another member holds the screen.
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant,
+/// [`AppError::ScreenTaken`] when another member holds the screen, and [`AppError::Conflict`] when
+/// no one holds it.
 pub async fn computer_release(
     app: &App,
     context: &TenantContext,
@@ -1945,7 +1947,7 @@ pub async fn computer_release(
         .ok_or(AppError::NotFound)?;
     match computer.takeover_by_user.as_ref() {
         None => return Err(AppError::Conflict),
-        Some(holder) if holder != &user_id => return Err(AppError::Conflict),
+        Some(holder) if holder != &user_id => return Err(AppError::ScreenTaken),
         Some(_) => {}
     }
     computer.takeover_by_user = None;

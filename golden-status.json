@@ -31,9 +31,9 @@
       "reason": null
     },
     "computer-takeover-conflict": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-029",
-      "reason": "M4 - takeover exclusivity needs the computer provider and its leases"
+      "reason": null
     },
     "cross-tenant-not-found": {
       "status": "implemented",

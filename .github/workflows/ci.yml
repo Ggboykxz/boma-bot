@@ -80,6 +80,16 @@ jobs:
       - name: secret scan
         run: python3 tools/secret_scan.py .
 
+      # D-02: the reference exposed every captured mail on a development route. The obligation is
+      # that no such route exists, so the route table is grepped, not just probed by a test.
+      - name: no development mail route
+        run: |
+          # `route(` and not the bare path: a test may probe the path to prove it is unknown.
+          if grep -rn --include='*.rs' 'route("/api/dev' crates/; then
+            echo "a development mail route was registered" >&2
+            exit 1
+          fi
+
   web:
     name: web (build, typecheck, lint, playwright, golden, axe)
     runs-on: ubuntu-24.04
@@ -112,3 +122,32 @@ jobs:
           name: playwright-report
           path: apps/web/playwright-report
           retention-days: 7
+
+  compose:
+    # M0's last exit criterion: `docker compose up` migrates and serves. Reviewed-only YAML is not
+    # evidence, so the stack is built and probed here on every push.
+    name: compose (build, migrate, serve, health)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build the image and start the stack
+        run: docker compose up -d --build
+
+      # `up -d` returns when the containers start, not when the API answers; the healthcheck inside
+      # the image is the readiness signal, and the probe below is the observable one.
+      - name: the API answers liveness, readiness and their aliases
+        run: |
+          set -euo pipefail
+          for path in health ready healthz readyz; do
+            curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused \
+              --max-time 10 "http://127.0.0.1:3000/$path" -o "/tmp/boma-$path.json"
+            printf '/%s ' "$path"
+            cat "/tmp/boma-$path.json"
+            printf '\n'
+          done
+
+      - name: stop the stack and its volume
+        if: always()
+        run: docker compose down -v

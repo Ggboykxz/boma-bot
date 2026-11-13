@@ -239,6 +239,7 @@ impl From<AppError> for Failure {
         let reason = match &error {
             AppError::Rule(_) => "rule_violation",
             AppError::Conflict => "conflict",
+            AppError::ScreenTaken => "screen_taken",
             AppError::InvalidCredentials => "invalid_credentials",
             AppError::Unavailable => "dependency_unavailable",
             AppError::NotFound => "not_found",

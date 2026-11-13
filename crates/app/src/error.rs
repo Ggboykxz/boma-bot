@@ -14,6 +14,12 @@ pub enum AppError {
     /// The request conflicts with what already exists: the address is taken, the name is used.
     #[error("conflict")]
     Conflict,
+    /// Another member holds the screen of a computer (REQ-029).
+    ///
+    /// A distinct variant, not [`AppError::Conflict`], because the answer the client needs names the
+    /// reason: the caller is not told "that already exists" when a person is driving the computer.
+    #[error("the screen is held by another member")]
+    ScreenTaken,
     /// The credentials do not match an account.
     #[error("invalid credentials")]
     InvalidCredentials,
@@ -40,7 +46,11 @@ impl AppError {
     pub const fn is_client_fault(&self) -> bool {
         matches!(
             self,
-            Self::Rule(_) | Self::Conflict | Self::InvalidCredentials | Self::NotFound
+            Self::Rule(_)
+                | Self::Conflict
+                | Self::ScreenTaken
+                | Self::InvalidCredentials
+                | Self::NotFound
         )
     }
 }

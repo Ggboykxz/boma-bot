@@ -119,6 +119,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "routine-create"
             | "routine-once"
             | "computer-status"
+            | "computer-takeover-conflict"
     );
     if !needs_world {
         return None;
@@ -176,7 +177,19 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         }
         "computer-status" => {
             let (bot, _thread) = seed_bot(&app, &space_id, &user_id).await;
-            seed_computer(&test_app, &space_id, bot.id.clone()).await;
+            seed_computer(&test_app, &space_id, bot.id.clone(), None).await;
+        }
+        // The capture shows the golden member asking for a screen another member is already
+        // driving: the answer is a conflict that says who holds it (REQ-029).
+        "computer-takeover-conflict" => {
+            let (bot, _thread) = seed_bot(&app, &space_id, &user_id).await;
+            seed_computer(
+                &test_app,
+                &space_id,
+                bot.id.clone(),
+                Some("usr_other_golden"),
+            )
+            .await;
         }
         "cross-tenant-not-found" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
@@ -536,8 +549,14 @@ pub fn session() -> Session {
 /// Seeds the running computer the fixture reads.
 ///
 /// The capture shows a docker computer started at ten seconds past the seed with generation 2;
-/// the world is seeded with exactly that.
-async fn seed_computer(test_app: &TestApp, space_id: &SpaceId, bot_id: boma_domain::BotId) {
+/// the world is seeded with exactly that. `held_by` names the member already driving the screen,
+/// which is what the takeover-conflict fixture captured.
+async fn seed_computer(
+    test_app: &TestApp,
+    space_id: &SpaceId,
+    bot_id: boma_domain::BotId,
+    held_by: Option<&str>,
+) {
     let created = test_app
         .app()
         .stores
@@ -569,6 +588,10 @@ async fn seed_computer(test_app: &TestApp, space_id: &SpaceId, bot_id: boma_doma
     computer.started_at = Some("2026-01-01T00:00:10Z".to_owned());
     computer.last_used_at = Some("2026-01-01T00:00:10Z".to_owned());
     computer.screen_generation = 2;
+    if let Some(holder) = held_by {
+        computer.takeover_by_user = Some(UserId::new(holder).expect("the holder id is valid"));
+        computer.takeover_at = Some("2026-01-01T00:00:20Z".to_owned());
+    }
     "2026-01-01T00:00:10Z".clone_into(&mut computer.updated_at);
     test_app
         .app()

@@ -2,6 +2,49 @@
 
 ## Current milestone
 
+**M0–M4 audit — M1, M3, M4 complete; M0 and M2 carry gaps.** Every requirement id of M0–M4 is
+named by a test, and the whole gate suite is green at HEAD (`fmt`, `clippy -D warnings`,
+`nextest` 225/225, `deny`, `machete`, trace 21/40, secret scan). CI is green at `2a8709c` for both
+jobs (rust 224/224, web build/typecheck/lint/Playwright), and red then green on `abdbf78` →
+`a35c82e`, so "CI red/green proven" is observed. Per milestone:
+
+- **M0 — complete after this audit.** Build/lint, `/healthz` + `/readyz`, and CI red/green were
+  already observed. Two gaps closed here: the Compose stack set `BOMA_SANDBOX`, a variable nothing
+  reads (the binary reads `SANDBOX_PROVIDER`), so it silently ran with no computers while claiming
+  docker — compose and `.env.example` now name the real variable and default to `none`
+  (fail-closed, REQ-027); and a `compose` CI job now builds the image and probes all four health
+  paths, which is the only environment where the criterion can be observed (this box has ~380 MB
+  free against a ~1.3 GB builder image). D-02's obligation is now enforced twice: a test that
+  probes the development mail paths and a CI grep that fails on any `route("/api/dev…` registration.
+- **M1 — complete.** The walking skeleton test signs up, lands in a space, creates a bot, sends,
+  replays the nonce, and the worker folds steering into one run; `send-message` and
+  `send-message-replay` replay byte for byte; the RLS suite passes; the thread screen is a UI
+  golden. REQ-057 was recorded as "not built yet" in `TRACEABILITY.md`: it is built
+  (`apps/web/lib/i18n.ts`) and covered by eight Playwright tests, including RTL. The row is
+  corrected.
+- **M2 — one real gap.** Steering, stop, cards, replies/reactions, lease recovery, model fallback,
+  tool catalogue, approval exactly-once, and legible failures are all proved. **REQ-019
+  (subagent delegation, SHOULD) is only half done**: a parent can create a helper run, but nothing
+  resumes the parent with the helper's result — `crates/app/src/worker.rs` has no helper handling.
+  M2 recorded that branch as "lands with M3"; M3 shipped without it. It is the one unmet acceptance
+  criterion in M0–M4 and needs a decision (see Decisions needed).
+- **M3 — complete.** Append-only revisions, shared memory scope, cron `@once`, dispatch coalescing
+  and try-before-enable are all proved. REQ-022's "the entry is available in a later run's context"
+  is explicitly deferred to the agent engine (the scripted provider builds no prompt context); it
+  is not one of M3's exit criteria.
+- **M4 — complete.** All five exit criteria observe green, freshly re-run here: the provider
+  conformance suite 6/6 against the rootless daemon and `req_028_…through_a_real_browser` 1/1
+  against `zenika/alpine-chrome`. The last stale marker is closed: the `computer-takeover-conflict`
+  API golden, pending since M4 with a reason that no longer held, now replays. Closing it needed a
+  real wire fix: the takeover conflict answered "That already exists." where the capture says
+  "Someone else has control.", so `AppError::ScreenTaken` now maps to that message.
+
+Still true of M4: the agent-driven tool loop is not wired (the scripted provider calls no tool), so
+computer tools are proved at the use-case boundary, not by an agent run; and idle release has no UI
+surface (M10).
+
+## Previous milestone
+
 **M4 — computers — done.** Exit criteria from the plan all observe green on `802344c` (rust and
 web jobs): the Docker supervisor boots a computer (`computer.start`), the screen streams behind a
 sealed capability (`computer.openScreen` + `/api/internal/screen-target`), takeover is exclusive
@@ -468,17 +511,18 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
   no system fonts, and Chromium dies with `SkFontMgr_FontConfigInterface Not implemented` the first
   time it renders a Hebrew (or any non-Latin) glyph — which is why every Hebrew test crashed before
   it could fail an assertion. CI (ubuntu-24.04) has system fonts and does not need it.
-- **The M2+ UI goldens stay pending** (`spec/golden/ui/`): `REQ-007-pending-card`,
-  `REQ-009-unread-divider`, `REQ-026-computer-panel`, `REQ-037-shared-page`,
-  `REQ-037-shared-page-invalid`. Each carries its milestone; the runner skips them explicitly.
+- **The later UI goldens stay pending** (`spec/golden/ui/`): `REQ-026-computer-panel` (M10, the
+  panel; M4 shipped the RPC, not the screen), `REQ-037-shared-page`,
+  `REQ-037-shared-page-invalid` (M6). `REQ-007-pending-card` and `REQ-009-unread-divider` are
+  implemented and replayed. Each pending fixture carries its milestone; the runner skips it
+  explicitly.
 
-- **No Docker daemon and no `sudo`** on this machine: the container image and the Compose stack are
-  written and reviewed but never built. Everything Compose does was verified by hand against a real
-  PostgreSQL 17.11 instead (same image major, same environment variables, same migration step).
+- **The Compose stack is built and probed in CI** (job `compose`, added with the M0–M4 audit):
+  `docker compose up -d --build` then `/health`, `/ready`, `/healthz`, `/readyz`. This box cannot
+  run it (the overlay has ~380 MB free; the Rust builder image alone is ~1.3 GB), so CI is the only
+  place the criterion is observed.
 - **Tauri shell deferred to M10** (`apps/desktop/README.md`): REQ-055 is a SHOULD and a shell that
   was never compiled would be a false claim. Mobile (REQ-056) stays deferred per ADR-016.
-- **No remote**: nothing has been pushed, so CI has never run on GitHub. The workflow is therefore
-  unproven as a workflow, even though every command inside it was run by hand here.
 - **opencode must be restarted** for the BoardUI skill and the always-on rules to load: MCP tools
   and skills are bound at session start.
 
@@ -558,6 +602,12 @@ recommendation stands.
 | DEC-13 | Keep RPC procedure names | Yes, for the documented ones | 003 |
 | DEC-14 | **Project licence** | MIT (owner accepted 2026-11-12) | — (`docs/DEPENDENCIES.md`) |
 
+Raised by the M0–M4 audit, no recommendation yet:
+
+| Id | Question | Recommendation | ADR |
+|---|---|---|---|
+| DEC-15 | REQ-019's "the parent receives the helper's result and continues" is unimplemented. It was deferred from M2 to M3 and M3 shipped without it. Should it land with the agent engine (when a run can call tools), or as a small worker rule now (helper completes → write a `tool` message to the parent → resume the parent)? | The small worker rule now: it is a state-machine change with no model dependency, and it makes REQ-019's only unmet acceptance criterion observable | — |
+
 ## Deferred requirements
 
 | REQ | Why | Where recorded |
@@ -580,7 +630,8 @@ None. Anything proposed during the build goes here first, with the REQ it would 
   components; a Pro template would be an owner decision plus a licence check before any public repo.
 - The JSON Schema validation of `opencode.json` never ran; the file was edited by hand and reviewed,
   not validated by a tool.
-- The Compose stack and the Docker image were never built or run (no daemon).
+- The Compose stack and the Docker image are built and probed **in CI** (job `compose`); this box
+  cannot run them (no disk for the builder image), so the local observation is still absent.
 
 ## What was consulted in the original
 

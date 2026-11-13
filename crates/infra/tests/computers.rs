@@ -402,7 +402,9 @@ async fn req_029_a_member_holds_the_screen_and_the_computer_refuses_other_input(
     let outsider = usecases::computer_takeover(&app, &other_context, fixture.bot_id.as_str()).await;
     assert!(matches!(
         outsider,
-        Err(boma_app::AppError::NotFound | boma_app::AppError::Conflict)
+        Err(boma_app::AppError::NotFound
+            | boma_app::AppError::Conflict
+            | boma_app::AppError::ScreenTaken,)
     ));
 
     // The holder releases; the computer acts again.

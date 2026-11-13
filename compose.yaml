@@ -11,7 +11,12 @@ x-app-environment: &app-environment
   BOMA_VERSION: ${BOMA_VERSION:-0.1.0}
   BOMA_REVISION: ${BOMA_REVISION:-}
   BOMA_RUNTIME: sandboxed
-  BOMA_SANDBOX: docker
+  # The provider variable is `SANDBOX_PROVIDER` (spec/01-requirements.md REQ-027); a `BOMA_SANDBOX`
+  # key here was silently ignored, so the stack ran with no computers while claiming docker.
+  # The default is `none` (valid, fail-closed): starting a computer needs the host daemon, so a
+  # self-hoster who wants one mounts /var/run/docker.sock into `app` and sets
+  # SANDBOX_PROVIDER=docker.
+  SANDBOX_PROVIDER: ${SANDBOX_PROVIDER:-none}
   BOMA_JOBS: postgres
   BOMA_REALTIME: postgres
   BOMA_DEGRADED: ${BOMA_DEGRADED:-false}
