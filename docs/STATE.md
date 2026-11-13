@@ -2,11 +2,21 @@
 
 ## Current milestone
 
-**M0–M4 audit — M1, M3, M4 complete; M0 and M2 carry gaps.** Every requirement id of M0–M4 is
-named by a test, and the whole gate suite is green at HEAD (`fmt`, `clippy -D warnings`,
-`nextest` 225/225, `deny`, `machete`, trace 21/40, secret scan). CI is green at `2a8709c` for both
-jobs (rust 224/224, web build/typecheck/lint/Playwright), and red then green on `abdbf78` →
-`a35c82e`, so "CI red/green proven" is observed. Per milestone:
+**Before-M5 Phase 1 — M0–M4 closure for the agent loop is done and pushed (`d9762a4`).** REQ-016/017/019/022
+improved materially: a write/spend tool turn parks the run on one approval card per run (`cards_thread_run_key`),
+the person answers, the parked call applies exactly once behind the effect key `tool:{run}:{call}`, and the run
+resumes to `queued`. `delegate.helper` spawns a `HelperResult` child run; the parent waits for it, the helper's
+outcome is written as a structured `role=tool` message on the parent thread, and the parent re-enters. The tool
+loop is bounded by `MAX_TOOL_CALLS = 8` before any tool executes. Scoped memory (bot first, space-shared, REQ-022)
+rides into the provider turn. Counts are CONFIRMED by commands run on the pushed tree: `cargo test --workspace
+--all-features --locked --no-fail-fast` → **237 passed, 0 failed** (this rebuild environment has no `cargo-nextest`
+binary after the server restart; `cargo test` is the observed gate); `clippy --workspace --all-targets
+--all-features --locked -- -D warnings` green; `fmt --check` green; `cargo deny check` exit 0 (advisories/bans/
+licenses/sources ok, duplicates are warnings only); `cargo machete` clean; `tools/secret_scan.py` clean; trace
+ratchet tightened 40 → 21 missing (`--max-missing 21`, 37/58 ids named by tests). Pushed to `origin/dev`
+(`c30cb37..d9762a4`). The earlier `VersionMismatch(21)` incident is recorded: 0021 froze in the dev DB, so 0022
+carries the status CHECK; migrations are never edited once recorded. Phase 2 (D-01..D-09) and Phase 3 (BYOK model
+provider over the same port) remain.
 
 - **M0 — complete after this audit.** Build/lint, `/healthz` + `/readyz`, and CI red/green were
   already observed. Two gaps closed here: the Compose stack set `BOMA_SANDBOX`, a variable nothing
