@@ -39,10 +39,10 @@ use boma_app::{
 };
 use boma_domain::DomainError;
 use boma_domain::{
-    Block, Bot, BotId, Card, CardId, CardStatus, Email, Event, ExternalEffect, MemoryDocument,
-    Message, MessageId, MessagePage, OrganizationId, Reaction, Run, RunId, RunStatus, Session,
-    SessionId, Space, SpaceId, SpaceRole, TenantContext, Thread, ThreadId, ToolKind, ToolSpec,
-    User, UserId, cursor_from_seq, validate_memory_path,
+    Block, Bot, BotId, Card, CardId, CardKind, CardStatus, Email, Event, ExternalEffect,
+    MemoryDocument, Message, MessageId, MessagePage, OrganizationId, PendingToolCallStatus,
+    Reaction, Run, RunId, RunStatus, Session, SessionId, Space, SpaceId, SpaceRole, TenantContext,
+    Thread, ThreadId, ToolKind, ToolSpec, User, UserId, cursor_from_seq, validate_memory_path,
 };
 use tokio::sync::broadcast;
 
@@ -253,6 +253,15 @@ struct CardRow {
     space_id: SpaceId,
 }
 
+/// A tool call waiting on an approval (REQ-017).
+#[derive(Debug, Clone)]
+struct PendingToolCallRow {
+    /// The call.
+    call: boma_app::ports::PendingToolCall,
+    /// The tenant.
+    space_id: SpaceId,
+}
+
 /// An effect a run performs, keyed so it can never execute twice.
 #[derive(Debug, Clone)]
 struct EffectRow {
@@ -331,6 +340,8 @@ struct State {
     invitations: Vec<InvitationRow>,
     /// The cards, with the space they belong to.
     cards: Vec<CardRow>,
+    /// The tool calls waiting on an approval (REQ-017).
+    pending_tool_calls: Vec<PendingToolCallRow>,
     /// The reactions people left on messages.
     reactions: Vec<ReactionRow>,
     /// The read position of each person, per conversation.
@@ -502,6 +513,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn cards(&self) -> MemoryCardStore {
         MemoryCardStore::new(self)
+    }
+
+    /// The store of pending tool calls (REQ-017).
+    #[must_use]
+    pub fn pending_tool_calls(&self) -> MemoryPendingToolCallStore {
+        MemoryPendingToolCallStore::new(self)
     }
 
     /// The store of effects.
@@ -2072,6 +2089,50 @@ impl CardStore for MemoryCardStore {
         Ok(Some(row.card.clone()))
     }
 
+    async fn create(
+        &self,
+        context: &TenantContext,
+        card: boma_app::ports::NewCard,
+    ) -> Result<Card, AppError> {
+        let mut state = write(&self.state);
+        if !visible(context, &card.space_id) {
+            return Err(AppError::NotFound);
+        }
+        // Emulates the partial unique index `cards_thread_run_key`: at most one pending card
+        // per (thread_id, run_id) may exist.
+        let already_pending = state.cards.iter().any(|row| {
+            row.card.thread_id == card.thread_id
+                && row.card.run_id.as_ref().map(boma_domain::RunId::as_str)
+                    == card.run_id.as_ref().map(boma_domain::RunId::as_str)
+                && row.card.status == CardStatus::Pending
+        });
+        if already_pending {
+            return Err(AppError::Conflict);
+        }
+        // Only an approval card is minted by the worker; anything else is a caller bug.
+        if card.kind != CardKind::Approval {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "only an approval card is created by the worker".to_owned(),
+            )));
+        }
+        let stored = Card {
+            id: card.id,
+            space_id: card.space_id.clone(),
+            thread_id: card.thread_id.clone(),
+            run_id: card.run_id,
+            kind: card.kind,
+            status: CardStatus::Pending,
+            answer: None,
+            created_at: card.created_at,
+            answered_at: None,
+        };
+        state.cards.push(CardRow {
+            card: stored.clone(),
+            space_id: stored.space_id.clone(),
+        });
+        Ok(stored)
+    }
+
     async fn answer(
         &self,
         context: &TenantContext,
@@ -2092,6 +2153,137 @@ impl CardStore for MemoryCardStore {
         row.card.answer = Some(answer.to_owned());
         row.card.answered_at = Some("2026-01-01T00:00:00Z".to_owned());
         Ok(row.card.clone())
+    }
+}
+
+/// The store of pending tool calls (REQ-017).
+#[derive(Debug, Clone)]
+pub struct MemoryPendingToolCallStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryPendingToolCallStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryPendingToolCallStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::PendingToolCallStore for MemoryPendingToolCallStore {
+    async fn create(
+        &self,
+        context: &TenantContext,
+        call: boma_app::ports::NewPendingToolCall,
+    ) -> Result<boma_app::ports::PendingToolCall, AppError> {
+        let mut state = write(&self.state);
+        if !visible(context, &call.space_id) {
+            return Err(AppError::NotFound);
+        }
+        // Exactly one pending row per (run, call): a replayed dispatch replays the same row.
+        if state
+            .pending_tool_calls
+            .iter()
+            .any(|row| row.call.run_id == call.run_id && row.call.call_id == call.call_id)
+        {
+            return Err(AppError::Conflict);
+        }
+        let stored = boma_app::ports::PendingToolCall {
+            run_id: call.run_id,
+            call_id: call.call_id,
+            space_id: call.space_id.clone(),
+            thread_id: call.thread_id.clone(),
+            name: call.name,
+            arguments: call.arguments,
+            status: PendingToolCallStatus::Pending,
+            result: None,
+            created_at: call.created_at,
+            answered_at: None,
+        };
+        state.pending_tool_calls.push(PendingToolCallRow {
+            call: stored.clone(),
+            space_id: stored.space_id.clone(),
+        });
+        Ok(stored)
+    }
+
+    async fn find_pending(
+        &self,
+        context: &TenantContext,
+        run_id: &RunId,
+    ) -> Result<Vec<boma_app::ports::PendingToolCall>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .pending_tool_calls
+            .iter()
+            .filter(|row| row.call.run_id == *run_id)
+            .filter(|row| row.call.status == PendingToolCallStatus::Pending)
+            .filter(|row| visible(context, &row.space_id))
+            .map(|row| row.call.clone())
+            .collect())
+    }
+
+    async fn mark_applied(
+        &self,
+        context: &TenantContext,
+        run_id: &RunId,
+        call_id: &str,
+        result: serde_json::Value,
+        answered_at: &str,
+    ) -> Result<boma_app::ports::PendingToolCall, AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state
+            .pending_tool_calls
+            .iter_mut()
+            .find(|row| row.call.run_id == *run_id && row.call.call_id == call_id)
+        else {
+            return Err(AppError::NotFound);
+        };
+        if !visible(context, &row.space_id) {
+            return Err(AppError::NotFound);
+        }
+        if row.call.status != PendingToolCallStatus::Pending {
+            return Err(AppError::Conflict);
+        }
+        row.call.status = PendingToolCallStatus::Applied;
+        row.call.result = Some(result);
+        row.call.answered_at = Some(answered_at.to_owned());
+        Ok(row.call.clone())
+    }
+
+    async fn mark_refused(
+        &self,
+        context: &TenantContext,
+        run_id: &RunId,
+        call_id: &str,
+        answered_at: &str,
+    ) -> Result<boma_app::ports::PendingToolCall, AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state
+            .pending_tool_calls
+            .iter_mut()
+            .find(|row| row.call.run_id == *run_id && row.call.call_id == call_id)
+        else {
+            return Err(AppError::NotFound);
+        };
+        if !visible(context, &row.space_id) {
+            return Err(AppError::NotFound);
+        }
+        if row.call.status != PendingToolCallStatus::Pending {
+            return Err(AppError::Conflict);
+        }
+        row.call.status = PendingToolCallStatus::Refused;
+        row.call.answered_at = Some(answered_at.to_owned());
+        Ok(row.call.clone())
     }
 }
 

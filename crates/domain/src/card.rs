@@ -99,6 +99,44 @@ pub enum ToolEffect {
     Spend,
 }
 
+/// Lifecycle of a tool call waiting on an approval (REQ-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingToolCallStatus {
+    /// Waiting for a member to approve or refuse.
+    Pending,
+    /// The effect was applied exactly once after approval.
+    Applied,
+    /// A member refused; the effect never ran.
+    Refused,
+}
+
+impl PendingToolCallStatus {
+    /// The wire value.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Applied => "applied",
+            Self::Refused => "refused",
+        }
+    }
+
+    /// Parses the wire value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DomainError::UnknownEventType`] for a value the product does not name.
+    pub fn parse(value: &str) -> Result<Self, DomainError> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "applied" => Ok(Self::Applied),
+            "refused" => Ok(Self::Refused),
+            other => Err(DomainError::UnknownEventType(other.to_owned())),
+        }
+    }
+}
+
 /// The family a tool belongs to (REQ-016).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -2443,6 +2443,401 @@ pub async fn write_reply(
     Ok(stored.message)
 }
 
+/// What one tool call produced, to be appended as a `role=tool` message (REQ-016, REQ-017).
+#[derive(Debug, Clone)]
+pub struct ToolResultReport {
+    /// The provider's correlation id for the call.
+    pub id: String,
+    /// The tool's key.
+    pub name: String,
+    /// Whether the call succeeded.
+    pub ok: bool,
+    /// The body the model reads as the result.
+    pub body: serde_json::Value,
+}
+
+/// Appends one tool result as a `role=tool` message the next pass can read (REQ-016, REQ-017).
+///
+/// The correlation id and the tool's name are part of the body, so a client and a BYOK adapter
+/// both see which call produced which result.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+pub async fn append_tool_result(
+    app: &App,
+    context: &TenantContext,
+    thread: &Thread,
+    bot_id: &boma_domain::BotId,
+    run_id: &boma_domain::RunId,
+    report: &ToolResultReport,
+) -> Result<Message, AppError> {
+    let payload = serde_json::json!({
+        "id": report.id,
+        "name": report.name,
+        "ok": report.ok,
+        "body": report.body,
+    });
+    let stored = app
+        .stores
+        .messages
+        .insert(
+            context,
+            NewMessage {
+                id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                space_id: thread.space_id.clone(),
+                thread_id: thread.id.clone(),
+                role: boma_domain::MessageRole::Tool,
+                blocks: vec![boma_domain::Block::Text {
+                    text: payload.to_string(),
+                }],
+                bot_id: Some(bot_id.clone()),
+                author_user_id: None,
+                run_id: Some(run_id.clone()),
+                client_nonce: None,
+                created_at: app.services.clock.now(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await?;
+    app.stores
+        .events
+        .append(
+            context,
+            crate::ports::NewEvent {
+                space_id: thread.space_id.clone(),
+                thread_id: thread.id.clone(),
+                kind: boma_domain::EventType::Message,
+                payload: serde_json::json!({
+                    "messageId": stored.message.id.as_str(),
+                    "seq": stored.message.seq,
+                }),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(stored.message)
+}
+
+/// Parks a run on an approval: pending tool calls, one approval card, the run waiting on input.
+///
+/// REQ-017: a write-class tool call never has an effect before a person approves. The rows are
+/// registered exactly once per `(run_id, call_id)` — a pass replay re-registers the same calls and
+/// conflicts on the store's primary key, which is harmless. The approval card is exactly one per
+/// run (`cards_thread_run_key`): a replay that finds a card already pending reuses it instead of
+/// stacking a second. The run goes to `WaitingInput`; answering the card re-queues it.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+pub async fn park_tool_calls(
+    app: &App,
+    context: &TenantContext,
+    claimed: &ClaimedRun,
+    calls: Vec<crate::ports::ToolCallRequest>,
+) -> Result<(), AppError> {
+    let run = &claimed.run;
+    let thread = &claimed.thread;
+    let bot_id = claimed.bot.id.clone();
+    let now = app.services.clock.now();
+    for call in calls {
+        let pending = crate::ports::NewPendingToolCall {
+            run_id: run.id.clone(),
+            call_id: call.id.clone(),
+            space_id: thread.space_id.clone(),
+            thread_id: thread.id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
+            created_at: now.clone(),
+        };
+        match app.stores.pending_tool_calls.create(context, pending).await {
+            Ok(_) => {}
+            Err(AppError::Conflict) => {
+                tracing::info!(run = %run.id, call_id = %call.id, "the call was already registered; the replay is absorbed");
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let card = match app
+        .stores
+        .cards
+        .create(
+            context,
+            crate::ports::NewCard {
+                id: boma_domain::CardId::new(app.services.ids.new_id("card"))?,
+                space_id: thread.space_id.clone(),
+                thread_id: thread.id.clone(),
+                kind: boma_domain::CardKind::Approval,
+                created_at: now.clone(),
+                run_id: Some(run.id.clone()),
+            },
+        )
+        .await
+    {
+        Ok(card) => Some(card),
+        Err(AppError::Conflict) => {
+            // A card is already pending for this run (crash replay): keep it, the person answers
+            // the one they can see, and the flip below stays idempotent.
+            tracing::info!(run = %run.id, "an approval card is already pending; the replay is absorbed");
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    if let Some(card) = card {
+        // The person sees the card as part of the thread (the UI renders the block).
+        let stored = app
+            .stores
+            .messages
+            .insert(
+                context,
+                NewMessage {
+                    id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                    space_id: thread.space_id.clone(),
+                    thread_id: thread.id.clone(),
+                    role: boma_domain::MessageRole::System,
+                    blocks: vec![boma_domain::Block::Card {
+                        card_id: card.id.as_str().to_owned(),
+                        kind: "approval".to_owned(),
+                    }],
+                    bot_id: Some(bot_id),
+                    author_user_id: None,
+                    run_id: Some(run.id.clone()),
+                    client_nonce: None,
+                    created_at: now,
+                    reply_to_message_id: None,
+                    reply_quote: None,
+                },
+            )
+            .await?;
+        app.stores
+            .events
+            .append(
+                context,
+                crate::ports::NewEvent {
+                    space_id: thread.space_id.clone(),
+                    thread_id: thread.id.clone(),
+                    kind: boma_domain::EventType::Message,
+                    payload: serde_json::json!({
+                        "messageId": stored.message.id.as_str(),
+                        "seq": stored.message.seq,
+                    }),
+                    created_at: app.services.clock.now(),
+                },
+            )
+            .await?;
+    }
+    set_run_status(
+        app,
+        context,
+        run.id.as_str(),
+        RunStatus::WaitingInput,
+        Some(run.lease_fence),
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Marks the parked calls of a run refused, appends their refusals as `role=tool` messages, and
+/// leaves the queue state alone (the resume decides what happens next).
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+async fn refuse_pending_tool_calls(
+    app: &App,
+    context: &TenantContext,
+    run_id: &boma_domain::RunId,
+    bot: &Bot,
+    thread: &Thread,
+    calls: Vec<crate::ports::PendingToolCall>,
+) -> Result<(), AppError> {
+    let now = app.services.clock.now();
+    for call in calls {
+        let refused = serde_json::json!({ "error": "the person refused the call" });
+        if let Err(error) = app
+            .stores
+            .pending_tool_calls
+            .mark_refused(context, run_id, &call.call_id, &now)
+            .await
+        {
+            tracing::warn!(run = %run_id, call_id = %call.call_id, %error, "the pending call could not be marked refused");
+        }
+        append_tool_result(
+            app,
+            context,
+            thread,
+            &bot.id,
+            run_id,
+            &ToolResultReport {
+                id: call.call_id.clone(),
+                name: call.name.clone(),
+                ok: false,
+                body: refused,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Applies the tool calls a run was parked on, exactly once each (REQ-017).
+///
+/// For every pending call this run registered: an effect key `tool:{run}:{call}` is recorded —
+/// that key, not the answer, is the exactly-once guard — then the tool executes, then the row
+/// flips to `applied`. A replay that finds the key already recorded does not re-execute; it marks
+/// the row applied with a note instead, because the effect really happened already. When the
+/// answer refuses, the calls are marked refused and never execute.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+async fn apply_pending_tool_calls(
+    app: &App,
+    context: &TenantContext,
+    run_id: &boma_domain::RunId,
+    bot: &Bot,
+    thread: &Thread,
+    approve: bool,
+) -> Result<(), AppError> {
+    let now = app.services.clock.now();
+    let pending = app
+        .stores
+        .pending_tool_calls
+        .find_pending(context, run_id)
+        .await?;
+    if !approve {
+        refuse_pending_tool_calls(app, context, run_id, bot, thread, pending).await?;
+        return Ok(());
+    }
+    for call in pending {
+        let effect_key = format!("tool:{}:{}", run_id.as_str(), call.call_id);
+        let already_applied = match app
+            .stores
+            .effects
+            .record(
+                context,
+                crate::ports::NewEffect {
+                    run_id: run_id.clone(),
+                    effect_key,
+                    kind: "tool".to_owned(),
+                    payload: serde_json::json!({
+                        "call_id": call.call_id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }),
+                },
+            )
+            .await
+        {
+            Ok(_) => false,
+            Err(AppError::Conflict) => {
+                tracing::warn!(run = %run_id, call_id = %call.call_id, "the effect is already recorded; the call is not executed again");
+                true
+            }
+            Err(error) => return Err(error),
+        };
+        if already_applied {
+            let note = serde_json::json!({ "note": "the effect was already applied" });
+            let _ = app
+                .stores
+                .pending_tool_calls
+                .mark_applied(context, run_id, &call.call_id, note.clone(), &now)
+                .await;
+            append_tool_result(
+                app,
+                context,
+                thread,
+                &bot.id,
+                run_id,
+                &ToolResultReport {
+                    id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    ok: true,
+                    body: note,
+                },
+            )
+            .await?;
+            continue;
+        }
+        let body = execute_approved_tool(app, context, &call).await;
+        let ok = body
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if let Err(error) = app
+            .stores
+            .pending_tool_calls
+            .mark_applied(context, run_id, &call.call_id, body.clone(), &now)
+            .await
+        {
+            tracing::warn!(run = %run_id, call_id = %call.call_id, %error, "the pending call could not be marked applied");
+        }
+        append_tool_result(
+            app,
+            context,
+            thread,
+            &bot.id,
+            run_id,
+            &ToolResultReport {
+                id: call.call_id.clone(),
+                name: call.name.clone(),
+                ok,
+                body,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Runs one approved tool call and reports what happened in a body shaped `{ ok, body }`.
+///
+/// An approval never fakes a success: the only tool whose effects are implemented here is
+/// `memory.write`; anything else is refused inside the tool message instead of skipped silently.
+async fn execute_approved_tool(
+    app: &App,
+    context: &TenantContext,
+    call: &crate::ports::PendingToolCall,
+) -> serde_json::Value {
+    let string = |key: &str| -> Option<String> {
+        call.arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    match call.name.as_str() {
+        "memory.write" => {
+            let scope = string("scope").unwrap_or_else(|| "shared".to_owned());
+            let bot_id = string("botId");
+            let Some(path) = string("path") else {
+                return serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `path` argument" } });
+            };
+            let Some(text) = string("text") else {
+                return serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `text` argument" } });
+            };
+            match memory_write(app, context, &scope, bot_id.as_deref(), &path, &text).await {
+                Ok(outcome) => serde_json::json!({
+                    "ok": true,
+                    "body": {
+                        "path": outcome.document.path,
+                        "revision": outcome.document.revision,
+                    },
+                }),
+                Err(error) => serde_json::json!({
+                    "ok": false,
+                    "body": { "error": format!("the write did not happen: {error}") },
+                }),
+            }
+        }
+        other => serde_json::json!({
+            "ok": false,
+            "body": { "error": format!("the tool {other} cannot be applied yet") },
+        }),
+    }
+}
+
 /// Answers a card and, when the answer approves it, records and performs its effect exactly
 /// once (REQ-017).
 ///
@@ -2474,44 +2869,66 @@ pub async fn answer_card(
     let card = app.stores.cards.answer(context, &card_id, answer).await?;
 
     let mut effect_recorded = false;
-    if answer == "approve"
-        && let Some(run_id) = &card.run_id
-    {
-        // One effect key per card answer: a retried answer never executes twice.
-        let effect_key = format!("approve:{}", card_id.as_str());
-        match app
-            .stores
-            .effects
-            .record(
-                context,
-                NewEffect {
-                    run_id: run_id.clone(),
-                    effect_key,
-                    kind: "card_answer".to_owned(),
-                    payload: serde_json::json!({
-                        "card_id": card_id.as_str(),
-                        "answer": answer,
-                    }),
-                },
-            )
-            .await
-        {
-            Ok(_) => effect_recorded = true,
-            Err(AppError::Conflict) => {
-                // The effect was already recorded: the answer is a replay.
+    if let Some(run_id) = &card.run_id {
+        // An approval card gates its effect; a question card does not, but both resume the run:
+        // the person answered, so the conversation may move on (REQ-007, REQ-017).
+        let is_approval = card.kind == boma_domain::CardKind::Approval;
+        if is_approval && answer == "approve" {
+            // One effect key per card answer: a retried answer never executes twice.
+            let effect_key = format!("approve:{}", card_id.as_str());
+            match app
+                .stores
+                .effects
+                .record(
+                    context,
+                    NewEffect {
+                        run_id: run_id.clone(),
+                        effect_key,
+                        kind: "card_answer".to_owned(),
+                        payload: serde_json::json!({
+                            "card_id": card_id.as_str(),
+                            "answer": answer,
+                        }),
+                    },
+                )
+                .await
+            {
+                Ok(_) => effect_recorded = true,
+                Err(AppError::Conflict) => {
+                    // The effect was already recorded: the answer is a replay.
+                }
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
         }
-        // The run that was waiting on the card resumes (REQ-017).
-        set_run_status(
-            app,
-            context,
-            run_id.as_str(),
-            RunStatus::Running,
-            None,
-            None,
-        )
-        .await?;
+        // Locate the parked conversation: the run id is all the card carries, the thread and
+        // the bot answer from it.
+        let run = app
+            .stores
+            .runs
+            .find(context, run_id)
+            .await?
+            .ok_or(AppError::Unavailable)?;
+        let bot = app
+            .stores
+            .bots
+            .find(context, &run.bot_id)
+            .await?
+            .ok_or(AppError::Unavailable)?;
+        let thread = app
+            .stores
+            .threads
+            .for_bot(context, &run.bot_id)
+            .await?
+            .ok_or(AppError::Unavailable)?;
+        // Parked calls apply only from the card that parked them: approve applies, anything else
+        // refuses; question cards have no parked calls.
+        if is_approval {
+            apply_pending_tool_calls(app, context, run_id, &bot, &thread, answer == "approve")
+                .await?;
+        }
+        // The run that was waiting on the card resumes (REQ-017): parked on the queue, not
+        // `running`, so the claim picks it up again.
+        set_run_status(app, context, run_id.as_str(), RunStatus::Queued, None, None).await?;
     }
 
     Ok(AnswerCardOutcome {

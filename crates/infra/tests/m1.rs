@@ -21,9 +21,10 @@ use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresEffectStore,
     PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSessionStore, PostgresSpaceStore,
-    PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresPendingToolCallStore, PostgresReactionStore, PostgresReadStateStore,
+    PostgresRosterStore, PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore,
+    PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
+    PostgresUserStore, SystemClock, TokenGenerator,
 };
 
 mod common;
@@ -65,6 +66,7 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresEventStore::new(pool.clone())),
             Arc::new(PostgresInvitationStore::new(pool.clone())),
             Arc::new(PostgresCardStore::new(pool.clone())),
+            Arc::new(PostgresPendingToolCallStore::new(pool.clone())),
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),

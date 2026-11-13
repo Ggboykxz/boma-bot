@@ -14,10 +14,10 @@ use boma_infra::{
     Argon2idHasher, BroadcastPublisher, DockerComputerRuntime, IdGenerator, Postgres,
     PostgresAccountStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
     PostgresEffectStore, PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore,
-    PostgresMessageStore, PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore,
-    PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore, PostgresSessionStore,
-    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock,
-    TokenGenerator,
+    PostgresMessageStore, PostgresPendingToolCallStore, PostgresReactionStore,
+    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
+    PostgresScreenCapabilityStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
 };
 use common::{cleanup, fixture, fresh_database};
 
@@ -55,6 +55,7 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             Arc::new(PostgresEventStore::new(pool.clone())),
             Arc::new(PostgresInvitationStore::new(pool.clone())),
             Arc::new(PostgresCardStore::new(pool.clone())),
+            Arc::new(PostgresPendingToolCallStore::new(pool.clone())),
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),

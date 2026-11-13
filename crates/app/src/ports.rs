@@ -14,8 +14,9 @@
 
 use async_trait::async_trait;
 use boma_domain::{
-    Bot, Card, CardId, Email, Event, ExternalEffect, Message, MessagePage, Reaction, Run, RunId,
-    RunStatus, Session, Space, SpaceRole, TenantContext, Thread, ToolSpec, User, UserId,
+    Bot, Card, CardId, CardKind, Email, Event, ExternalEffect, Message, MessagePage, Reaction, Run,
+    RunId, RunStatus, Session, Space, SpaceId, SpaceRole, TenantContext, Thread, ThreadId,
+    ToolSpec, User, UserId,
 };
 
 use crate::error::AppError;
@@ -725,6 +726,18 @@ pub trait CardStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn find(&self, context: &TenantContext, id: &CardId) -> Result<Option<Card>, AppError>;
+
+    /// Persists a card exactly once.
+    ///
+    /// At most one pending card per `(thread_id, run_id)` may exist; asking for a second raises
+    /// [`AppError::Conflict`], and re-opening a closed card replays the original on the caller's
+    /// side.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when a pending card already exists for this thread and run,
+    /// and an error when the database cannot answer.
+    async fn create(&self, context: &TenantContext, card: NewCard) -> Result<Card, AppError>;
 
     /// Marks a card as answered with `answer`, refusing a card that was already answered.
     ///
@@ -1440,6 +1453,122 @@ pub trait EffectStore: Send + Sync {
         context: &TenantContext,
         effect: NewEffect,
     ) -> Result<ExternalEffect, AppError>;
+}
+
+/// A fresh card ready to persist (REQ-007, REQ-016).
+#[derive(Debug, Clone)]
+pub struct NewCard {
+    /// The card id.
+    pub id: CardId,
+    /// The tenant the card lives in.
+    pub space_id: SpaceId,
+    /// The conversation the card asks its question in.
+    pub thread_id: ThreadId,
+    /// What the card asks.
+    pub kind: CardKind,
+    /// When the card was created.
+    pub created_at: String,
+    /// The run the card blocks, when there is one.
+    pub run_id: Option<RunId>,
+}
+
+/// The body needed to register a tool call waiting for an approval (REQ-017).
+#[derive(Debug, Clone)]
+pub struct NewPendingToolCall {
+    /// The run that invoked the tool.
+    pub run_id: RunId,
+    /// The provider's correlation id for the call.
+    pub call_id: String,
+    /// The tenant the run lives in.
+    pub space_id: SpaceId,
+    /// The conversation it happens in.
+    pub thread_id: ThreadId,
+    /// The tool's key as it appears in the catalogue.
+    pub name: String,
+    /// The arguments the provider produced.
+    pub arguments: serde_json::Value,
+    /// When the call was registered.
+    pub created_at: String,
+}
+
+/// A tool call waiting on an approval, as a relation (REQ-017).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingToolCall {
+    /// The run the call belongs to.
+    pub run_id: RunId,
+    /// The provider's correlation id for the call.
+    pub call_id: String,
+    /// The tenant the call lives in.
+    pub space_id: SpaceId,
+    /// The conversation it happens in.
+    pub thread_id: ThreadId,
+    /// The tool's key.
+    pub name: String,
+    /// The arguments the call carries.
+    pub arguments: serde_json::Value,
+    /// Where the call stands.
+    pub status: boma_domain::PendingToolCallStatus,
+    /// What the model read as the result, once applied.
+    pub result: Option<serde_json::Value>,
+    /// When the call was registered.
+    pub created_at: String,
+    /// When the member answered, when it did.
+    pub answered_at: Option<String>,
+}
+
+/// Stores the tool calls a run is waiting to apply (REQ-017).
+#[async_trait]
+pub trait PendingToolCallStore: Send + Sync {
+    /// Registers a pending call exactly once per `(run_id, call_id)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn create(
+        &self,
+        context: &TenantContext,
+        call: NewPendingToolCall,
+    ) -> Result<PendingToolCall, AppError>;
+
+    /// The still-pending calls of one run, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_pending(
+        &self,
+        context: &TenantContext,
+        run_id: &RunId,
+    ) -> Result<Vec<PendingToolCall>, AppError>;
+
+    /// Marks a call applied with its result; refuses to apply an already-applied call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the call is not pending any more, and an error when
+    /// the database cannot answer.
+    async fn mark_applied(
+        &self,
+        context: &TenantContext,
+        run_id: &RunId,
+        call_id: &str,
+        result: serde_json::Value,
+        answered_at: &str,
+    ) -> Result<PendingToolCall, AppError>;
+
+    /// Marks a call refused, no effect running. Refuses to refuse an already-answered call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the call is not pending any more, and an error when
+    /// the database cannot answer.
+    async fn mark_refused(
+        &self,
+        context: &TenantContext,
+        run_id: &RunId,
+        call_id: &str,
+        answered_at: &str,
+    ) -> Result<PendingToolCall, AppError>;
 }
 
 /// A memory document carried into a provider turn (REQ-022).

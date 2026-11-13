@@ -12,8 +12,9 @@ use crate::{
     ports::{
         AccountStore, BotStore, CardStore, Clock, ComputerStore, EffectStore, EventPublisher,
         EventStore, IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher,
-        ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore, ScreenCapabilityStore,
-        SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
+        PendingToolCallStore, ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore,
+        ScreenCapabilityStore, SessionStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore,
+        UserStore,
     },
 };
 
@@ -42,6 +43,8 @@ pub struct Stores {
     pub invitations: Arc<dyn InvitationStore>,
     /// Approval and question cards.
     pub cards: Arc<dyn CardStore>,
+    /// Tool calls waiting on an approval (REQ-017).
+    pub pending_tool_calls: Arc<dyn PendingToolCallStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
     /// The per-run tool catalogue.
@@ -81,6 +84,7 @@ impl Stores {
         events: Arc<dyn EventStore>,
         invitations: Arc<dyn InvitationStore>,
         cards: Arc<dyn CardStore>,
+        pending_tool_calls: Arc<dyn PendingToolCallStore>,
         effects: Arc<dyn EffectStore>,
         tools: Arc<dyn ToolStore>,
         reactions: Arc<dyn ReactionStore>,
@@ -103,6 +107,7 @@ impl Stores {
             events,
             invitations,
             cards,
+            pending_tool_calls,
             effects,
             tools,
             reactions,

@@ -21,11 +21,22 @@ use crate::{
 /// being folded into this one: the loop terminates even if the member keeps typing.
 const MAX_STEERING_PASSES: u32 = 4;
 
+/// How many rounds of tool calls a worker folds into one run (REQ-020).
+///
+/// The loop always terminates: after this many rounds of calls the run fails legibly instead of
+/// looping forever. A turn that only reads tools counts as one round; a single round may carry
+/// several calls.
+const MAX_TOOL_CALLS: u32 = 8;
+
 /// What a provider pass did, so the caller can steer the next one.
 #[derive(Debug)]
 enum PassOutcome {
     /// The chunks were streamed and appended; `latest_seq` is the newest message read.
     Answered { text: String, latest_seq: i64 },
+    /// Read tools ran and the results are in the history; the model continues.
+    ToolsDispatched,
+    /// Write-class calls parked the run on an approval card; a person decides.
+    Suspended,
     /// The person cancelled while the model was working.
     Cancelled,
     /// The provider did not answer: the run is already marked failed.
@@ -91,6 +102,7 @@ impl Worker {
         // second run. Bounded so a member cannot hold the worker in a loop forever.
         let mut text = String::new();
         let mut passes: u32 = 0;
+        let mut tool_passes: u32 = 0;
         loop {
             match self.provider_pass(&context, &claimed).await? {
                 PassOutcome::Answered {
@@ -116,7 +128,20 @@ impl Worker {
                     }
                     break;
                 }
-                PassOutcome::Cancelled | PassOutcome::Failed => return Ok(true),
+                PassOutcome::ToolsDispatched => {
+                    tool_passes += 1;
+                    if tool_passes > MAX_TOOL_CALLS {
+                        let error = AppError::Rule(boma_domain::DomainError::InvalidName(format!(
+                            "the run asked for more than {MAX_TOOL_CALLS} rounds of tool calls"
+                        )));
+                        tracing::warn!(run = %claimed.run.id, %error, "the tool loop hit its cap");
+                        self.fail_run(&context, &run, error).await?;
+                        return Ok(true);
+                    }
+                }
+                PassOutcome::Suspended | PassOutcome::Cancelled | PassOutcome::Failed => {
+                    return Ok(true);
+                }
             }
         }
 
@@ -224,7 +249,7 @@ impl Worker {
             thread: claimed.thread.clone(),
             prompt,
             history,
-            tools,
+            tools: tools.clone(),
             memory,
         };
 
@@ -260,17 +285,11 @@ impl Worker {
                     latest_seq: latest,
                 })
             }
-            // The tool loop lands in Task 2/4/5. Until then a tool call is refused legibly:
-            // the run fails with a reason the person can read, never with a silent drop.
+            // The loop: read tools execute and fold into the history, write/spend tools park
+            // the run on an approval card (REQ-016, REQ-017).
             Ok(ProviderTurn::ToolCalls(calls)) => {
-                let names: Vec<&str> = calls.iter().map(|call| call.name.as_str()).collect();
-                let error = AppError::Rule(boma_domain::DomainError::InvalidName(format!(
-                    "the model asked for tools this build cannot dispatch yet: {}",
-                    names.join(", ")
-                )));
-                tracing::warn!(run = %run.id, %error, "a run asked for a tool call before the loop exists");
-                self.fail_run(context, &run, error).await?;
-                Ok(PassOutcome::Failed)
+                self.dispatch_tool_calls(context, claimed, &tools, &run, calls)
+                    .await
             }
             Err(error) => {
                 let retryable = error.is_retryable();
@@ -292,6 +311,91 @@ impl Worker {
                 Ok(PassOutcome::Failed)
             }
         }
+    }
+
+    /// Executes a tool-call turn (REQ-016, REQ-017).
+    ///
+    /// Read tools dispatch inline and their results join the history as `role=tool` messages.
+    /// Write/spend tools never execute: the calls are parked, one approval card covers the park,
+    /// and the run waits on a person. A tool the catalogue does not hold is refused and recorded,
+    /// never executed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError`] when a store cannot answer. The run is already failed or parked with
+    /// a person, never left dangling.
+    async fn dispatch_tool_calls(
+        &self,
+        context: &TenantContext,
+        claimed: &usecases::ClaimedRun,
+        tools: &[boma_domain::ToolSpec],
+        run: &boma_domain::Run,
+        calls: Vec<crate::ports::ToolCallRequest>,
+    ) -> Result<PassOutcome, AppError> {
+        if calls.is_empty() {
+            let error = AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the model returned an empty tool call turn".to_owned(),
+            ));
+            tracing::warn!(run = %run.id, %error, "the model returned no tool calls");
+            self.fail_run(context, run, error).await?;
+            return Ok(PassOutcome::Failed);
+        }
+        let mut read_calls: Vec<crate::ports::ToolCallRequest> = Vec::new();
+        let mut parked: Vec<crate::ports::ToolCallRequest> = Vec::new();
+        let mut refused: Vec<crate::ports::ToolCallRequest> = Vec::new();
+        for call in calls {
+            match tools
+                .iter()
+                .find(|tool| tool.key == call.name)
+                .map(|tool| tool.effect)
+            {
+                Some(boma_domain::ToolEffect::Read) => read_calls.push(call),
+                Some(boma_domain::ToolEffect::Write | boma_domain::ToolEffect::Spend) => {
+                    parked.push(call);
+                }
+                None => refused.push(call),
+            }
+        }
+        for call in read_calls {
+            let result =
+                usecases::dispatch_tool(&self.app, context, claimed.bot.id.as_str(), &call).await?;
+            usecases::append_tool_result(
+                &self.app,
+                context,
+                &claimed.thread,
+                &claimed.bot.id,
+                &run.id,
+                &usecases::ToolResultReport {
+                    id: result.id,
+                    name: call.name,
+                    ok: result.ok,
+                    body: result.body,
+                },
+            )
+            .await?;
+        }
+        for call in refused {
+            let body = serde_json::json!({ "error": "the bot may not use this tool" });
+            usecases::append_tool_result(
+                &self.app,
+                context,
+                &claimed.thread,
+                &claimed.bot.id,
+                &run.id,
+                &usecases::ToolResultReport {
+                    id: call.id,
+                    name: call.name,
+                    ok: false,
+                    body,
+                },
+            )
+            .await?;
+        }
+        if !parked.is_empty() {
+            usecases::park_tool_calls(&self.app, context, claimed, parked).await?;
+            return Ok(PassOutcome::Suspended);
+        }
+        Ok(PassOutcome::ToolsDispatched)
     }
 
     /// Whether the run has not reached a terminal state yet.

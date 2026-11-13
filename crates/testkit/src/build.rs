@@ -352,6 +352,7 @@ impl TestAppBuilder {
             Arc::new(database.events(Arc::clone(&publisher) as Arc<dyn EventPublisher>)),
             Arc::new(database.invitations()),
             Arc::new(database.cards()),
+            Arc::new(database.pending_tool_calls()),
             Arc::new(database.effects()),
             Arc::new(database.tools()),
             Arc::new(database.reactions()),
@@ -898,6 +899,261 @@ mod tests {
         // A second answer to the same card is refused: the effect never executes twice.
         let second =
             boma_app::usecases::answer_card(test.app(), &context, "card_golden", "approve").await;
+        assert!(second.is_err(), "a closed card absorbs no second answer");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_017_a_write_tool_waits_for_approval() {
+        use std::sync::Arc;
+
+        use crate::ScriptedProvider;
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Remember these commits.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let run_id = outcome.run.id.clone();
+
+        // The model asks for a write-class tool; the run must park, never write.
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "memory.write".to_owned(),
+                arguments: serde_json::json!({
+                    "scope": "bot",
+                    "botId": bot_id.as_str(),
+                    "path": "notes/pending.md",
+                    "text": "this must not be written before approval",
+                }),
+            }]),
+        ]));
+        let worker = Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // The run waits on the person; it did not fail and it did not complete.
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(
+            run.status,
+            RunStatus::WaitingInput,
+            "a write-class call parks the run instead of executing"
+        );
+
+        // The card is visible as a thread message, carrying its id.
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 10)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, kind } => Some((card_id.clone(), kind.clone())),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+        assert_eq!(card_id.1, "approval");
+
+        // No bot reply was written and the document does not exist yet.
+        let bot_replies = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Bot)
+            .count();
+        assert_eq!(bot_replies, 0, "the suspended run does not answer yet");
+        assert!(
+            boma_app::usecases::memory_read(
+                test.app(),
+                &context,
+                "bot",
+                Some(bot_id.as_str()),
+                "notes/pending.md",
+            )
+            .await
+            .is_err(),
+            "the write did not happen before the approval"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_017_an_approved_tool_effect_runs_exactly_once() {
+        use std::sync::Arc;
+
+        use crate::ScriptedProvider;
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Remember these commits.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let run_id = outcome.run.id.clone();
+
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "memory.write".to_owned(),
+                arguments: serde_json::json!({
+                    "scope": "bot",
+                    "botId": bot_id.as_str(),
+                    "path": "notes/approved.md",
+                    "text": "# Friday release\n- ship\n",
+                }),
+            }]),
+        ]));
+        let worker = Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 10)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+
+        let outcome = boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        assert!(outcome.effect_recorded, "the approval effect is recorded");
+
+        // The run resumes on the queue, not as running (the claim re-picks it up).
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(
+            run.status,
+            RunStatus::Queued,
+            "an approved tool re-queues the run"
+        );
+
+        let document = boma_app::usecases::memory_read(
+            test.app(),
+            &context,
+            "bot",
+            Some(bot_id.as_str()),
+            "notes/approved.md",
+        )
+        .await
+        .expect("the write happened on approval");
+        assert_eq!(document.revision, 1, "the effect ran exactly once");
+
+        // The exactly-once effect key is recorded, so a replay records a conflict instead of
+        // applying twice.
+        let replay = test
+            .app()
+            .stores
+            .effects
+            .record(
+                &context,
+                boma_app::ports::NewEffect {
+                    run_id: run_id.clone(),
+                    effect_key: format!("tool:{}:call_1", run_id.as_str()),
+                    kind: "tool".to_owned(),
+                    payload: serde_json::json!({}),
+                },
+            )
+            .await;
+        assert!(
+            matches!(replay, Err(boma_app::AppError::Conflict)),
+            "the effect key prevents a second execution"
+        );
+
+        // A second answer to the same card is refused: the effect never executes twice.
+        let second =
+            boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve").await;
         assert!(second.is_err(), "a closed card absorbs no second answer");
     }
 

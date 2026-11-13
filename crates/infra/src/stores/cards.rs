@@ -48,6 +48,57 @@ impl CardStore for PostgresCardStore {
         row.map(rows::card).transpose()
     }
 
+    async fn create(
+        &self,
+        context: &TenantContext,
+        card: boma_app::ports::NewCard,
+    ) -> Result<Card, AppError> {
+        let space_id = card.space_id.as_str().to_owned();
+        let kind = match card.kind {
+            boma_domain::CardKind::Question => "question",
+            boma_domain::CardKind::Approval => "approval",
+            boma_domain::CardKind::Purchase => "purchase",
+            boma_domain::CardKind::Takeover => "takeover",
+        };
+        let run_id = card
+            .run_id
+            .as_ref()
+            .map(|run_id| run_id.as_str().to_owned());
+        let row = tenant::with_tenant(&self.pool, context, |conn| {
+            let space_id = space_id.clone();
+            let run_id = run_id.clone();
+            Box::pin(async move {
+                sqlx::query_as::<_, CardRow>(
+                    "INSERT INTO cards
+                         (id, space_id, thread_id, run_id, kind, status, created_at)
+                     VALUES ($1, $2, $3, $4, $5, 'pending', $6::timestamptz)
+                     RETURNING id, space_id, thread_id, run_id, kind, status, answer,
+                               boma.rfc3339(created_at) AS created_at,
+                               boma.rfc3339(answered_at) AS answered_at",
+                )
+                .bind(card.id.as_str())
+                .bind(&space_id)
+                .bind(card.thread_id.as_str())
+                .bind(run_id)
+                .bind(kind)
+                .bind(card.created_at.as_str())
+                .fetch_one(&mut *conn)
+                .await
+                .map_err(|error| {
+                    // The partial unique index `cards_thread_run_key` refuses a second pending
+                    // card for the same thread and run; the caller treats the replay as absorbed.
+                    if tenant::is_unique_violation(&error) {
+                        AppError::Conflict
+                    } else {
+                        tenant::unavailable(error)
+                    }
+                })
+            })
+        })
+        .await?;
+        rows::card(row)
+    }
+
     async fn answer(
         &self,
         context: &TenantContext,
