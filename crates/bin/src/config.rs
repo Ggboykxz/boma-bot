@@ -80,6 +80,34 @@ pub struct Config {
     pub computer: ComputerConfig,
     /// Which sign-in methods the deployment offers.
     pub auth_capabilities: AuthCapabilities,
+    /// The bring-your-own-key provider, when the deployment is configured with one (REQ-015).
+    ///
+    /// `None` means the scripted provider answers: the deployment is exercised end to end
+    /// without a model, exactly the state an operator wants before wiring one.
+    pub provider: Option<ProviderConfig>,
+}
+
+/// The bring-your-own-key OpenAI-compatible provider (REQ-015).
+///
+/// The three `BOMA_PROVIDER_*` variables come together or the provider is not configured; a
+/// half-configured provider is a startup error, never a silent downgrade to the script.
+#[derive(Clone)]
+pub struct ProviderConfig {
+    /// The base URL, for example `https://api.openai.com/v1`.
+    pub endpoint: String,
+    /// The model identifier the deployment calls.
+    pub model: String,
+    /// The operator's key. Never printed, never logged.
+    pub api_key: secrecy::SecretString,
+}
+
+impl fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Config {
@@ -185,6 +213,7 @@ impl Config {
             passkey_rp_id(&web_origin),
         );
 
+        let provider = parse_provider(&env)?;
         Ok(Self {
             http,
             database,
@@ -195,6 +224,7 @@ impl Config {
             capabilities,
             computer,
             auth_capabilities,
+            provider,
         })
     }
 }
@@ -221,6 +251,25 @@ fn passkey_rp_id(web_origin: &str) -> Option<String> {
     let host = without_scheme.split('/').next().unwrap_or(without_scheme);
     let host = host.rsplit_once(':').map_or(host, |(name, _port)| name);
     (!host.is_empty()).then(|| host.to_owned())
+}
+
+/// Reads the bring-your-own-key provider, when it is configured.
+fn parse_provider(env: &BTreeMap<String, String>) -> Result<Option<ProviderConfig>, ConfigError> {
+    let endpoint = optional(env, "BOMA_PROVIDER_ENDPOINT");
+    let model = optional(env, "BOMA_PROVIDER_MODEL");
+    let api_key = optional(env, "BOMA_PROVIDER_API_KEY");
+    match (endpoint, model, api_key) {
+        (None, None, None) => Ok(None),
+        (Some(endpoint), Some(model), Some(api_key)) => Ok(Some(ProviderConfig {
+            endpoint,
+            model,
+            api_key: secrecy::SecretString::from(api_key),
+        })),
+        // The operator meant to configure one; refusing loudly beats answering with a script.
+        _ => Err(ConfigError::Missing {
+            name: "BOMA_PROVIDER_ENDPOINT/MODEL/API_KEY (set all three or none)",
+        }),
+    }
 }
 
 fn required(env: &BTreeMap<String, String>, name: &'static str) -> Result<String, ConfigError> {
@@ -296,6 +345,38 @@ mod tests {
                 .map(|e| e.to_string()),
             Some("`BOMA_DATABASE_URL` is required".to_owned())
         );
+    }
+
+    #[test]
+    fn req_015_the_provider_config_is_all_or_nothing() {
+        // Nothing set: the deployment runs the scripted provider.
+        let config = Config::from_pairs(minimum()).expect("the minimum configuration is valid");
+        assert!(config.provider.is_none());
+
+        // Half-set: the operator meant to configure a provider; the deployment must not start
+        // on the scripted agent silently.
+        let mut pairs = minimum();
+        pairs.push(("BOMA_PROVIDER_ENDPOINT", "https://api.openai.com/v1"));
+        pairs.push(("BOMA_PROVIDER_MODEL", "gpt-5"));
+        assert!(matches!(
+            Config::from_pairs(pairs),
+            Err(ConfigError::Missing { .. })
+        ));
+
+        // All three: the provider is configured, and the key never prints.
+        let mut pairs = minimum();
+        pairs.push(("BOMA_PROVIDER_ENDPOINT", "https://api.openai.com/v1"));
+        pairs.push(("BOMA_PROVIDER_MODEL", "gpt-5"));
+        pairs.push(("BOMA_PROVIDER_API_KEY", "sk-test-key")); // secret-scan: allow (test fixture)
+        let config = Config::from_pairs(pairs).expect("the provider configuration is valid");
+        let provider = config
+            .provider
+            .as_ref()
+            .expect("the provider is configured");
+        assert_eq!(provider.endpoint, "https://api.openai.com/v1");
+        assert_eq!(provider.model, "gpt-5");
+        let rendered = format!("{provider:?}");
+        assert!(!rendered.contains("sk-test-key"), "{rendered}");
     }
 
     #[test]

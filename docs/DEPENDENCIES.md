@@ -54,10 +54,14 @@ maintenance, licence, simplicity).
 | `tokio-stream` | 0.1.19 | MIT | streaming SSE frames and the golden replay harness |
 | `bollard` | 0.21.1 | Apache-2.0 | Docker API client for the computer supervisor (REQ-026): create/start/stop/inspect/exec, no shelling out to the CLI |
 | `tokio-tungstenite` | 0.27.0 | MIT | CDP websocket for observe-and-act (REQ-028): a plain-text JSON-RPC session to the computer's Chromium, one fresh connection per tool call, no TLS stack pulled in (`connect` + `stream` + `handshake` only) |
+| `reqwest` | 0.13.5 | MIT OR Apache-2.0 | the BYOK HTTP client (REQ-015); `rustls` for TLS, no default features pulled, 60s timeout, minimal features |
+| `secrecy` | 0.10.3 | Apache-2.0 OR MIT | the operator's provider key and the passkey material never log or format (REQ-015, REQ-040); `zeroize` on drop |
+| `wiremock` | 0.6.5 | MIT OR Apache-2.0 | loopback wire server for the BYOK fixture replay tests (REQ-015); dev-dependency only, never in a release binary |
 
-Deliberately **not** added yet, so no unused dependency rots in the tree: `secrecy`,
-`aes-gcm`, `proptest`, `wiremock`, `testcontainers`, `criterion`, `reqwest`. Each arrives with the
-milestone that needs it (M1 for `argon2`, now landed; M2 for `wiremock`, M4 for HTTP providers).
+Deliberately **not** added yet, so no unused dependency rots in the tree: `aes-gcm`, `proptest`,
+`testcontainers`, `criterion`, `cargo-llvm-cov`. Each arrives with the milestone that needs it
+(M6/M8 for crypto, M14/M16 for tooling). `wiremock`, `secrecy` and `reqwest` landed with the BYOK
+adapter in before-M5 Phase 3.
 
 **YAML parser (deliberate).** The contract test parses the spec's OpenAPI document, so one YAML
 parser is needed. `serde_yaml_ng` was replaced by **`serde-saphyr` 2.1.1** (published 2026-11-05,

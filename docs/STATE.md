@@ -2,6 +2,18 @@
 
 ## Current milestone
 
+**Before-M5 Phase 3 (BYOK provider) — done.** `boma-infra::OpenAiCompatibleAdapter` implements the
+`ModelProvider` port against an OpenAI-compatible HTTP surface (REQ-015): `finish_reason`/`tool_calls`
+map to `ProviderTurn` exactly like the scripted provider, memory rides as a scoped system message,
+the wire carries only the built-in tool schemas the dispatcher enforces. No live calls in tests —
+fixture replay through a loopback wire server (wiremock); the operator's key rides `secrecy`.
+`BOMA_PROVIDER_ENDPOINT`/`BOMA_PROVIDER_MODEL`/`BOMA_PROVIDER_API_KEY` wire the deployment all-or-none
+(half-set is a startup error) — the variable names are a GUESS flagged for the owner. The deployment
+wires nothing unless all three are set; absent, the scripted provider keeps end-to-end exercise green.
+Counts CONFIRMED at this revision: 257 tests (cargo test --workspace --all-features --locked), clippy,
+fmt, deny (reqwest/secrecy/wiremock licences: MIT/Apache-2.0), machete, secret scan, trace ratchet 21.
+Phase 2 of this plan (defects D-01..D-09 honestly in scope) landed as 7ebd427; before-M5 Phase 1 as d864865.
+
 **Before-M5 Phase 2 (defects) — done and pushed.** D-01 (shared auth rate limiting across
 replicas via migration 0023's bucket table, 10 sign-in / 5 sign-up per IP per window, 429 with
 the stable envelope), D-04 re-verified (unlisted proxies cannot steer the resolved address; a

@@ -29,3 +29,4 @@ boma-api = { workspace = true }
 boma-app = { workspace = true }
 boma-domain = { workspace = true }
 boma-infra = { workspace = true }
+secrecy = "0.10.3"

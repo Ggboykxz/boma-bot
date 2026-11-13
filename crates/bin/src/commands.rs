@@ -141,8 +141,25 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         )
     })?);
     let app = Arc::new(build_app(&database, computer));
-    let provider = Arc::new(ScriptedProvider::default());
     let dispatcher_app = Arc::clone(&app);
+    // The BYOK provider, when the deployment is configured with one (REQ-015);
+    // otherwise the scripted provider keeps the deployment exercisable end to end.
+    let provider: Arc<dyn boma_app::ports::ModelProvider> = if let Some(provider) = &config.provider
+    {
+        let adapter = boma_infra::OpenAiCompatibleAdapter::new(boma_infra::OpenAiConfig {
+            endpoint: provider.endpoint.clone(),
+            model: provider.model.clone(),
+            api_key: provider.api_key.clone(),
+        })
+        .context("the BYOK provider could not be built")?;
+        tracing::info!(endpoint = %provider.endpoint, model = %provider.model, "the deployment answers with the provider's model");
+        Arc::new(adapter)
+    } else {
+        tracing::info!(
+            "BOMA_PROVIDER_ENDPOINT/MODEL/API_KEY not set: the scripted provider answers"
+        );
+        Arc::new(ScriptedProvider::default())
+    };
     let worker = Worker::new(app, provider, worker_owner());
 
     tracing::info!(owner = %worker_owner(), "the worker is draining the queue");
