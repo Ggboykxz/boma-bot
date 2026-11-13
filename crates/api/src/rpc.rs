@@ -25,13 +25,14 @@ use crate::{
     wire::{
         AnswerReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
         ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
-        ComputerTakeoverReply, InvitationReply, McpServerReply, McpServerView, McpServersListReply,
-        McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply,
-        MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply, RosterBotView,
-        RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply,
-        RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply, SecretView,
-        SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
-        TeachSkillReply, ThreadHeadReply,
+        ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
+        ConnectionsRemoveReply, ConnectorView, InvitationReply, McpServerReply, McpServerView,
+        McpServersListReply, McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply,
+        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply,
+        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
+        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
+        SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply,
+        SpaceReply, TeachSkillReply, ThreadHeadReply,
     },
 };
 
@@ -57,6 +58,8 @@ pub mod namespaces {
     pub const SKILLS: &str = "skills";
     /// MCP servers: the integration registry of the space (REQ-033).
     pub const MCP: &str = "mcp";
+    /// Connectors: the builtin catalogue of integrations (REQ-032).
+    pub const CONNECTIONS: &str = "connections";
 }
 
 /// Every procedure this deployment serves.
@@ -110,6 +113,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::MCP, "servers.add"),
         (namespaces::MCP, "servers.remove"),
         (namespaces::MCP, "servers.probe"),
+        (namespaces::CONNECTIONS, "list"),
+        (namespaces::CONNECTIONS, "install"),
+        (namespaces::CONNECTIONS, "remove"),
     ]
 }
 
@@ -267,6 +273,15 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::MCP, "servers.probe") => mcp_servers_probe(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::CONNECTIONS, "list") => connections_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::CONNECTIONS, "install") => connections_install(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::CONNECTIONS, "remove") => connections_remove(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -1659,4 +1674,83 @@ async fn mcp_servers_probe(
     Ok(McpServerReply {
         server: mcp_view(summary),
     })
+}
+
+/// The body of `connections.list` (REQ-032): nothing, `{}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConnectionsListRequest {}
+
+fn connector_view(summary: boma_app::ports::ConnectorSummary) -> ConnectorView {
+    ConnectorView {
+        connector_id: summary.connector_id,
+        name: summary.name,
+        description: summary.description,
+        auth_kind: summary.auth_kind,
+        installed: summary.installed,
+    }
+}
+
+/// `connections.list` — the catalogue with this space's install state.
+async fn connections_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ConnectionsListReply, ApiError> {
+    let _: ConnectionsListRequest = parse(&body)?;
+    let connectors = usecases::connections_list(state.app(), &auth.actor.context).await?;
+    Ok(ConnectionsListReply {
+        connections: connectors.into_iter().map(connector_view).collect(),
+    })
+}
+
+/// The body of `connections.install` (REQ-032).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConnectionsInstallRequest {
+    /// The catalogue id to install.
+    connector_id: String,
+    /// The bearer key for an `api_key` connector. Never returned by any API.
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+/// `connections.install` — install or re-key a connector.
+async fn connections_install(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ConnectionsInstallReply, ApiError> {
+    let request: ConnectionsInstallRequest = parse(&body)?;
+    let connector = usecases::connections_install(
+        state.app(),
+        &auth.actor.context,
+        &request.connector_id,
+        request.api_key.map(secrecy::SecretString::from),
+    )
+    .await?;
+    Ok(ConnectionsInstallReply {
+        connector: connector_view(connector),
+    })
+}
+
+/// The body of `connections.remove` (REQ-032).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConnectionsRemoveRequest {
+    /// The catalogue id to revoke.
+    connector_id: String,
+}
+
+/// `connections.remove` — revoke the installation; revoking a missing one is a success.
+async fn connections_remove(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ConnectionsRemoveReply, ApiError> {
+    let request: ConnectionsRemoveRequest = parse(&body)?;
+    let removed =
+        usecases::connections_remove(state.app(), &auth.actor.context, &request.connector_id)
+            .await?;
+    Ok(ConnectionsRemoveReply { removed })
 }

@@ -273,6 +273,8 @@ pub struct TestAppBuilder {
     /// The MCP transport to use instead of a fresh scripted one. Not `Debug`: a
     /// transport's internals are the server's business.
     mcp_transport: Option<Arc<dyn boma_app::ports::McpTransport>>,
+    /// The connector runner to use instead of a fresh scripted one.
+    connector_runner: Option<Arc<dyn boma_app::ports::ConnectorRunner>>,
 }
 
 impl Default for TestAppBuilder {
@@ -286,6 +288,7 @@ impl Default for TestAppBuilder {
             computer_answers: Vec::new(),
             runtime: None,
             mcp_transport: None,
+            connector_runner: None,
         }
     }
 }
@@ -332,6 +335,13 @@ impl TestAppBuilder {
     #[must_use]
     pub fn mcp_transport(mut self, transport: Arc<dyn boma_app::ports::McpTransport>) -> Self {
         self.mcp_transport = Some(transport);
+        self
+    }
+
+    /// Builds the application with this connector runner instead of a fresh scripted one.
+    #[must_use]
+    pub fn connector_runner(mut self, runner: Arc<dyn boma_app::ports::ConnectorRunner>) -> Self {
+        self.connector_runner = Some(runner);
         self
     }
 
@@ -383,6 +393,7 @@ impl TestAppBuilder {
             Arc::new(database.skills()),
             Arc::new(database.mcp_servers()),
             Arc::new(database.audit()),
+            Arc::new(database.connectors()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -407,6 +418,11 @@ impl TestAppBuilder {
             self.mcp_transport
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::ScriptedMcpTransport::new())),
+        )
+        .with_connectors(
+            self.connector_runner
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::ScriptedConnectorRunner::new())),
         );
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
@@ -4184,5 +4200,244 @@ mod mcp_tests {
             .join("\n");
         assert!(tool_text.contains("list-issues"), "{tool_text}");
         assert!(tool_text.contains("\"A\""), "{tool_text}");
+    }
+}
+
+#[cfg(test)]
+mod connector_tests {
+    // REQ-032 — connectors: install, expose, refuse after revoke.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+
+    async fn seeded() -> (
+        TestApp,
+        boma_domain::UserId,
+        boma_domain::TenantContext,
+        boma_app::usecases::BotCreated,
+    ) {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        (test, user_id, context, created)
+    }
+
+    #[tokio::test]
+    async fn req_032_installing_a_connector_stores_its_credential_and_exposes_its_tool() {
+        let (test, _user_id, context, created) = seeded().await;
+        let bot_id = created.bot.id.clone();
+
+        // An api-key connector refuses to install without its key.
+        let refused =
+            boma_app::usecases::connections_install(test.app(), &context, "http-json", None).await;
+        assert!(
+            refused.is_err(),
+            "an api-key connector without a key is refused"
+        );
+
+        let installed = boma_app::usecases::connections_install(
+            test.app(),
+            &context,
+            "http-json",
+            Some(secrecy::SecretString::from("key-1".to_owned())),
+        )
+        .await
+        .expect("the install lands");
+        assert_eq!(installed.connector_id, "http-json");
+        assert!(installed.installed);
+
+        // The list carries no credential, only state.
+        let list = boma_app::usecases::connections_list(test.app(), &context)
+            .await
+            .expect("the list answers");
+        assert_eq!(list.len(), 2);
+        let http_json = list
+            .iter()
+            .find(|entry| entry.connector_id == "http-json")
+            .expect("the connector is listed");
+        assert!(http_json.installed);
+        assert_eq!(http_json.auth_kind, "api_key");
+        assert!(
+            !format!("{list:?}").contains("key-1"),
+            "no credential leaks into the list"
+        );
+
+        // The tool appears in the bot's catalogue.
+        let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
+            .await
+            .expect("the catalogue answers");
+        let keys: Vec<&str> = catalogue.iter().map(|tool| tool.key.as_str()).collect();
+        assert!(keys.contains(&"connector.http-json.get"), "{keys:?}");
+
+        // The stored row is sealed like every secret.
+        let revealed = test
+            .app()
+            .stores
+            .connectors
+            .connected_credential(&context, "http-json")
+            .await
+            .expect("the reveal answers")
+            .expect("the credential is there");
+        assert_eq!(secrecy::ExposeSecret::expose_secret(&revealed), "key-1");
+    }
+
+    #[tokio::test]
+    async fn req_032_a_bot_with_a_grant_excludes_the_connector_tool() {
+        let (test, _user_id, context, created) = seeded().await;
+        let bot_id = created.bot.id.clone();
+
+        boma_app::usecases::connections_install(test.app(), &context, "rss", None)
+            .await
+            .expect("the install lands");
+
+        // An empty grant sees everything; this grant does not.
+        test.database()
+            .seed_bot_grant(&bot_id, vec!["memory.read".to_owned()]);
+        let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
+            .await
+            .expect("the catalogue answers");
+        let keys: Vec<&str> = catalogue.iter().map(|tool| tool.key.as_str()).collect();
+        assert!(!keys.contains(&"connector.rss.read"), "{keys:?}");
+        assert!(keys.contains(&"memory.read"), "{keys:?}");
+
+        // An empty grant sees the connector again.
+        test.database().seed_bot_grant(&bot_id, Vec::new());
+        let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
+            .await
+            .expect("the catalogue answers");
+        let keys: Vec<&str> = catalogue.iter().map(|tool| tool.key.as_str()).collect();
+        assert!(keys.contains(&"connector.rss.read"), "{keys:?}");
+    }
+
+    #[tokio::test]
+    async fn req_032_a_removed_connector_refuses_the_tool_call() {
+        let (test, _user_id, context, created) = seeded().await;
+        let bot_id = created.bot.id.clone();
+
+        boma_app::usecases::connections_install(test.app(), &context, "rss", None)
+            .await
+            .expect("the install lands");
+        boma_app::usecases::connections_remove(test.app(), &context, "rss")
+            .await
+            .expect("the remove answers");
+
+        let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
+            .await
+            .expect("the catalogue answers");
+        assert!(
+            !catalogue
+                .iter()
+                .any(|tool| tool.key == "connector.rss.read")
+        );
+
+        // Even a direct call is refused, without executing anything.
+        let call = boma_app::ports::ToolCallRequest {
+            id: "call_1".to_owned(),
+            name: "connector.rss.read".to_owned(),
+            arguments: serde_json::json!({ "url": "https://example.test/feed" }),
+        };
+        let result =
+            boma_app::usecases::dispatch_tool(test.app(), &context, bot_id.as_str(), &call)
+                .await
+                .expect("the dispatch answers");
+        assert!(
+            !result.ok,
+            "the revoked connector cannot run: {:?}",
+            result.body
+        );
+        assert_eq!(
+            result.body["error"],
+            serde_json::json!("the bot may not use this tool")
+        );
+    }
+
+    #[tokio::test]
+    async fn req_032_the_credential_reaches_the_runner_but_never_the_reply() {
+        let runner = Arc::new(crate::ScriptedConnectorRunner::new());
+        let test = TestApp::builder().connector_runner(runner.clone()).build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+
+        boma_app::usecases::connections_install(
+            test.app(),
+            &context,
+            "http-json",
+            Some(secrecy::SecretString::from("key-1".to_owned())),
+        )
+        .await
+        .expect("the install lands");
+
+        let call = boma_app::ports::ToolCallRequest {
+            id: "call_1".to_owned(),
+            name: "connector.http-json.get".to_owned(),
+            arguments: serde_json::json!({ "url": "https://api.example.test/data" }),
+        };
+        let result =
+            boma_app::usecases::dispatch_tool(test.app(), &context, created.bot.id.as_str(), &call)
+                .await
+                .expect("the dispatch answers");
+        assert!(result.ok, "{:?}", result.body);
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "http-json");
+        assert_eq!(calls[0].1, "get");
+        assert!(calls[0].3, "the credential rode the call");
+        assert!(
+            !serde_json::to_string(&result.body)
+                .expect("the body serialises")
+                .contains("key-1"),
+            "the reply never carries the credential"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_032_the_connector_runner_records_what_it_was_asked_for() {
+        let (test, _user_id, context, created) = seeded().await;
+        let bot_id = created.bot.id.clone();
+
+        boma_app::usecases::connections_install(test.app(), &context, "rss", None)
+            .await
+            .expect("the install lands");
+
+        let call = boma_app::ports::ToolCallRequest {
+            id: "call_1".to_owned(),
+            name: "connector.rss.read".to_owned(),
+            arguments: serde_json::json!({ "url": "https://example.test/feed" }),
+        };
+        let result =
+            boma_app::usecases::dispatch_tool(test.app(), &context, bot_id.as_str(), &call)
+                .await
+                .expect("the dispatch answers");
+        assert!(result.ok, "{:?}", result.body);
+        assert_eq!(result.body["result"], serde_json::json!({}));
     }
 }

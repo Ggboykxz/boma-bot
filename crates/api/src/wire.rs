@@ -756,6 +756,46 @@ pub struct McpServersRemoveReply {
     pub removed: bool,
 }
 
+/// One catalogue connector with this space's install state (REQ-032).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorView {
+    /// The catalogue id.
+    pub connector_id: String,
+    /// The member's display name.
+    pub name: String,
+    /// One line about what installing it gives.
+    pub description: String,
+    /// `none` or `api_key`.
+    pub auth_kind: String,
+    /// Whether this space installed it.
+    pub installed: bool,
+}
+
+/// The reply of `connections.list` (REQ-032).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionsListReply {
+    /// The catalogue, id ascending.
+    pub connections: Vec<ConnectorView>,
+}
+
+/// The reply of `connections.install` (REQ-032).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionsInstallReply {
+    /// The installed connector.
+    pub connector: ConnectorView,
+}
+
+/// The reply of `connections.remove` (REQ-032). Revoking a missing install is a success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionsRemoveReply {
+    /// Whether anything was there.
+    pub removed: bool,
+}
+
 /// One skill in a list (REQ-035). Built-ins carry no timestamps; taught and plugin skills do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

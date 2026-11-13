@@ -14,6 +14,7 @@ pub mod audit;
 pub mod bot;
 pub mod card;
 pub mod computer;
+pub mod connector;
 pub mod error;
 pub mod event;
 pub mod ids;
@@ -39,6 +40,9 @@ pub use computer::{
     Computer, ComputerId, ComputerStatus, MAX_CPU_LIMIT, MAX_IDLE_MINUTES, MAX_MEMORY_LIMIT_MB,
     MIN_CPU_LIMIT, MIN_IDLE_MINUTES, MIN_MEMORY_LIMIT_MB, validate_cpu_limit,
     validate_idle_minutes, validate_memory_limit,
+};
+pub use connector::{
+    ConnectorAuth, ConnectorSpec, ConnectorToolSpec, builtin_connectors, validate_connector_id,
 };
 pub use error::DomainError;
 pub use event::{Event, EventType};

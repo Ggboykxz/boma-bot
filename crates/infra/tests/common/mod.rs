@@ -548,6 +548,10 @@ pub async fn computer_app(
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresAuditStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresConnectorStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
             Arc::new(boma_infra::PostgresReactionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReadStateStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresRosterStore::new(pool.clone())),

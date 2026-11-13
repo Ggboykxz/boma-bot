@@ -26,6 +26,23 @@ as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay
 Every milestone ships test-first at the API/use-case level, then PG/functional proof, then docs +
 STATE; gates re-run at each push (fmt, clippy -D warnings, cargo test workspace).
 
+**M5 — in flight. Five slices committed: REQ-046 (secrets, `835d8e7`), REQ-034 slice 1
+(plugin submissions, `bc03d1e`), REQ-035 (skills, `d56f248`), REQ-033 (MCP servers, `494d194` +
+the `d427ee7` fmt fix), REQ-032 (connectors, in this revision).**
+
+5. **REQ-032 (connector catalogue and per-space installs, MUST)** — the catalogue is code
+   (`builtin_connectors`: `rss` — a public feed reader, no credential, best-effort parse of RSS
+   2.0 `item` and Atom `entry`, title/link/summary, 20 entries default, cap 50 — and `http-json`
+   — a guarded GET with the installation's bearer, 16 KiB cap, content sniffed JSON or text).
+   `connections.list|install|remove` RPC; credentials sealed under the space's DEK (ADR-020
+   machinery), never listed, `connected_credential` the only read path; installed tools join the
+   run catalogue as `connector.<id>.<tool>` (Read effect, SSRF-guarded); the bot's tool grant
+   applies exactly like installed connectors; **a revoked install contributes no tools everywhere,
+   and a direct dispatch attempt is refused before any network call.** 321 tests green (docker-
+   gated suites excluded — kernel keyring exhausted on this box; CI is the evidence path). The
+   connector executor's happy path against a loopback fixture is untestable because connectors
+   intentionally have no private-allow-list — recorded in docs/STATE.md as an accepted limit; the
+   parse/guard/seal paths are covered by unit and PG tests.
 **M5 — in flight. Four slices committed: REQ-046 (secrets, `835d8e7`), REQ-034 slice 1
 (plugin submissions, `bc03d1e`), REQ-035 (skills, `d56f248`), REQ-033 (MCP servers, in this
 revision).**

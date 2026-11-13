@@ -57,6 +57,7 @@ maintenance, licence, simplicity).
 | `reqwest` | 0.13.5 | MIT OR Apache-2.0 | the BYOK HTTP client (REQ-015); `rustls` for TLS, no default features pulled, 60s timeout, minimal features |
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT | the operator's provider key and the passkey material never log or format (REQ-015, REQ-040); `zeroize` on drop |
 | `wiremock` | 0.6.5 | MIT OR Apache-2.0 | loopback wire server for the BYOK fixture replay tests (REQ-015); dev-dependency only, never in a release binary |
+| `url` | 2.5.8 | MIT OR Apache-2.0 | URL parsing for the plugin-source grammar (REQ-034) and the MCP server-name rules (REQ-033); already in the tree via transitive deps, now declared directly |
 | `aes-gcm` | 0.11.1 | Apache-2.0 OR MIT | AES-256-GCM seal for bot secrets and the per-space data keys (REQ-046, ADR-020); `aes`, `cipher`, `aead` come with it |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 | fresh nonces and the per-space DEKs (REQ-046); direct `getrandom::fill`, no rand-wrapper needed |
 

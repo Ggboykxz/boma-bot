@@ -9,6 +9,7 @@ pub mod bots;
 pub mod cards;
 pub mod computer;
 mod computer_row;
+pub mod connectors;
 pub mod events;
 pub mod invitations;
 pub mod mcp;

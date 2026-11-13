@@ -540,6 +540,8 @@ struct State {
     skills: Vec<SkillRow>,
     /// The MCP servers a space connects to (REQ-033).
     mcp_servers: Vec<McpServerRow>,
+    /// The connector installs a space installed (REQ-032).
+    connector_installs: Vec<ConnectorRow>,
     /// The probed tools of those servers (REQ-033).
     mcp_server_tools: Vec<McpToolRow>,
     /// The audit events the escape hatches wrote (defect D-05).
@@ -757,6 +759,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn audit(&self) -> MemoryAuditStore {
         MemoryAuditStore::new(self)
+    }
+
+    /// The store of connector installs (REQ-032).
+    #[must_use]
+    pub fn connectors(&self) -> MemoryConnectorStore {
+        MemoryConnectorStore::new(self)
     }
 
     /// The store of effects.
@@ -4990,5 +4998,225 @@ impl boma_app::ports::AuditStore for MemoryAuditStore {
             created_at: event.created_at,
         });
         Ok(())
+    }
+}
+
+/// One connector install row (REQ-032). The fake keeps the credential in RAM like the real
+/// store keeps it sealed.
+#[derive(Debug, Clone)]
+struct ConnectorRow {
+    /// The space the install belongs to.
+    space_id: SpaceId,
+    /// The catalogue id.
+    connector_id: String,
+    /// The credential, kept like the real store's sealed form.
+    credential: Option<secrecy::SecretString>,
+    /// `connected` or `revoked`.
+    status: String,
+    /// When the install happened.
+    created_at: String,
+}
+
+/// The store of connector installs (REQ-032).
+#[derive(Debug, Clone)]
+pub struct MemoryConnectorStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryConnectorStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryConnectorStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ConnectorStore for MemoryConnectorStore {
+    async fn list(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::ConnectorSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let installed: std::collections::HashMap<String, String> = state
+            .connector_installs
+            .iter()
+            .filter(|row| row.space_id == space_id)
+            .map(|row| (row.connector_id.clone(), row.status.clone()))
+            .collect();
+        Ok(boma_domain::builtin_connectors()
+            .into_iter()
+            .map(|connector| {
+                let installed = installed
+                    .get(&connector.id)
+                    .is_some_and(|status| status == "connected");
+                boma_app::ports::ConnectorSummary {
+                    connector_id: connector.id,
+                    name: connector.name,
+                    description: connector.description,
+                    auth_kind: connector.auth_kind.as_str().to_owned(),
+                    installed,
+                }
+            })
+            .collect())
+    }
+
+    async fn install(
+        &self,
+        context: &TenantContext,
+        connector_id: &str,
+        credential: Option<secrecy::SecretString>,
+    ) -> Result<boma_app::ports::ConnectorSummary, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let Some(connector) = boma_domain::builtin_connectors()
+            .into_iter()
+            .find(|connector| connector.id == connector_id)
+        else {
+            return Err(AppError::NotFound);
+        };
+        let needs_key = connector.auth_kind == boma_domain::ConnectorAuth::ApiKey;
+        if needs_key && credential.is_none() {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "this connector needs an `apiKey`".to_owned(),
+            )));
+        }
+        if !needs_key && credential.is_some() {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "this connector takes no credential".to_owned(),
+            )));
+        }
+        let mut state = write(&self.state);
+        if let Some(row) = state
+            .connector_installs
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.connector_id == connector.id)
+        {
+            row.credential = credential;
+            "connected".clone_into(&mut row.status);
+            "2026-01-01T00:00:00Z".clone_into(&mut row.created_at);
+        } else {
+            state.connector_installs.push(ConnectorRow {
+                space_id,
+                connector_id: connector.id.clone(),
+                credential,
+                status: "connected".to_owned(),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            });
+        }
+        let auth_kind = connector.auth_kind.as_str().to_owned();
+        Ok(boma_app::ports::ConnectorSummary {
+            connector_id: connector.id,
+            name: connector.name,
+            description: connector.description,
+            auth_kind,
+            installed: true,
+        })
+    }
+
+    async fn revoke(&self, context: &TenantContext, connector_id: &str) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state = write(&self.state);
+        let mut found = false;
+        for row in &mut state.connector_installs {
+            if row.space_id == space_id && row.connector_id == connector_id {
+                "revoked".clone_into(&mut row.status);
+                found = true;
+            }
+        }
+        Ok(found)
+    }
+
+    async fn is_connected(
+        &self,
+        context: &TenantContext,
+        connector_id: &str,
+    ) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let state = read(&self.state);
+        Ok(state.connector_installs.iter().any(|row| {
+            row.space_id == space_id
+                && row.connector_id == connector_id
+                && row.status == "connected"
+        }))
+    }
+
+    async fn connected_credential(
+        &self,
+        context: &TenantContext,
+        connector_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .connector_installs
+            .iter()
+            .find(|row| {
+                row.space_id == space_id
+                    && row.connector_id == connector_id
+                    && row.status == "connected"
+            })
+            .and_then(|row| row.credential.clone()))
+    }
+
+    async fn catalogue_tools(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_domain::ToolSpec>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let ids: Vec<String> = state
+            .connector_installs
+            .iter()
+            .filter(|row| row.space_id == space_id && row.status == "connected")
+            .map(|row| row.connector_id.clone())
+            .collect();
+        Ok(ids
+            .iter()
+            .flat_map(|id| {
+                boma_domain::builtin_connectors()
+                    .into_iter()
+                    .filter(|connector| &connector.id == id)
+                    .flat_map(|connector| {
+                        connector
+                            .tools
+                            .iter()
+                            .map(|tool| boma_domain::ToolSpec {
+                                key: connector.tool_key(tool),
+                                description: tool.description.clone(),
+                                kind: boma_domain::ToolKind::Connector,
+                                effect: boma_domain::ToolEffect::Read,
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect())
     }
 }

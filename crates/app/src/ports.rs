@@ -2092,6 +2092,108 @@ pub trait McpTransport: Send + Sync {
     ) -> Result<serde_json::Value, AppError>;
 }
 
+/// One connector of the catalogue as the space sees it (REQ-032).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectorSummary {
+    /// The catalogue id.
+    pub connector_id: String,
+    /// The member's display name.
+    pub name: String,
+    /// One line about what installing it gives.
+    pub description: String,
+    /// `none` or `api_key`.
+    pub auth_kind: String,
+    /// Whether this space installed it.
+    pub installed: bool,
+}
+
+/// Stores the connectors a space installed (REQ-032).
+///
+/// Credentials are sealed under the space's data-encryption key (ADR-020 machinery); listings
+/// never carry them, `connected_credential` is the only read path, used by the executor.
+#[async_trait]
+pub trait ConnectorStore: Send + Sync {
+    /// The catalogue with this space's install state, id ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(&self, context: &TenantContext) -> Result<Vec<ConnectorSummary>, AppError>;
+
+    /// Installs (or re-keys) a connector for the space.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Rule`] when an api-key connector is installed without a key, and an
+    /// error when the database refuses the write.
+    async fn install(
+        &self,
+        context: &TenantContext,
+        connector_id: &str,
+        credential: Option<secrecy::SecretString>,
+    ) -> Result<ConnectorSummary, AppError>;
+
+    /// Revokes the installation. Removing a missing installation is a success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn revoke(&self, context: &TenantContext, connector_id: &str) -> Result<bool, AppError>;
+
+    /// Whether the connector is installed and connected in this space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn is_connected(
+        &self,
+        context: &TenantContext,
+        connector_id: &str,
+    ) -> Result<bool, AppError>;
+
+    /// The credential, revealed for the executor only. Never logged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the credential does not unwrap under this deployment's vault.
+    async fn connected_credential(
+        &self,
+        context: &TenantContext,
+        connector_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError>;
+
+    /// The tools the installed, connected connectors expose, filtered by nothing — the bot's
+    /// tool grant is applied by the catalogue builder, not here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn catalogue_tools(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_domain::ToolSpec>, AppError>;
+}
+
+/// Runs the tools of an installed connector (REQ-032).
+///
+/// Implementations decide where the work happens: network, parse, cap. This port exists so the
+/// dispatch path never names a concrete adapter.
+#[async_trait]
+pub trait ConnectorRunner: Send + Sync {
+    /// Runs one tool of one connector with the installation's credential, when it has one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connector refuses the call.
+    async fn run(
+        &self,
+        connector_id: &str,
+        tool: &str,
+        arguments: &serde_json::Value,
+        credential: Option<&secrecy::SecretString>,
+    ) -> Result<serde_json::Value, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

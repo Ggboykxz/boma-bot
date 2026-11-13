@@ -8,13 +8,13 @@ use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresAuditStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
-    PostgresEffectStore, PostgresEventStore, PostgresInvitationStore, PostgresMcpServerStore,
-    PostgresMemoryStore, PostgresMessageStore, PostgresPendingToolCallStore,
-    PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
-    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSkillStore,
-    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore,
-    ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresInvitationStore,
+    PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
+    PostgresPendingToolCallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
+    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
+    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
+    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
+    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -87,6 +87,10 @@ fn build_app(
     let mcp_transport = Arc::new(
         boma_infra::HttpMcpTransport::new().context("the MCP transport could not be built")?,
     );
+    let connector_runner = Arc::new(
+        boma_infra::HttpConnectorRunner::new()
+            .context("the connector runner could not be built")?,
+    );
     Ok(App::new(
         Stores::new(
             Arc::new(PostgresAccountStore::new(pool.clone())),
@@ -109,6 +113,7 @@ fn build_app(
             Arc::new(PostgresSkillStore::new(pool.clone())),
             Arc::new(PostgresMcpServerStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresAuditStore::new(pool.clone())),
+            Arc::new(PostgresConnectorStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -132,7 +137,8 @@ fn build_app(
                     default: "anthropic/claude-sonnet".to_owned(),
                 },
                 mcp_transport,
-            );
+            )
+            .with_connectors(connector_runner);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,

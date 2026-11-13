@@ -1961,3 +1961,81 @@ async fn req_033_a_stdio_registration_is_refused_over_rpc_with_the_reason() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn req_032_a_member_installs_lists_and_removes_a_connector() {
+    let world = world().await;
+    let state = state(&world.app);
+
+    // The catalogue lists both builtin connectors, none installed.
+    let response = post(
+        state.clone(),
+        "/rpc/connections/list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let entries = body["connections"].as_array().expect("a list");
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["installed"] == serde_json::json!(false))
+    );
+
+    // An api-key connector without its key refuses.
+    let response = post(
+        state.clone(),
+        "/rpc/connections/install",
+        Some(&world.caller),
+        serde_json::json!({ "connectorId": "http-json" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Install with the key; the reply never carries it.
+    let response = post(
+        state.clone(),
+        "/rpc/connections/install",
+        Some(&world.caller),
+        serde_json::json!({ "connectorId": "http-json", "apiKey": "key-1" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["connector"]["installed"], serde_json::json!(true));
+    assert!(!body.to_string().contains("key-1"));
+
+    // The list shows it installed, not the key.
+    let response = post(
+        state.clone(),
+        "/rpc/connections/list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    let body = json(response).await;
+    let http_json = body["connections"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|entry| entry["connectorId"] == serde_json::json!("http-json"))
+        .expect("the connector is listed")
+        .clone();
+    assert_eq!(http_json["installed"], serde_json::json!(true));
+    assert_eq!(http_json["authKind"], serde_json::json!("api_key"));
+
+    // Remove; the reply confirms something was there; removing again answers false.
+    let response = post(
+        state.clone(),
+        "/rpc/connections/remove",
+        Some(&world.caller),
+        serde_json::json!({ "connectorId": "http-json" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(true));
+}

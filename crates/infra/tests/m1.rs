@@ -81,6 +81,10 @@ fn app(database: &Postgres) -> App {
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresAuditStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresConnectorStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -1928,4 +1932,67 @@ async fn req_033_a_server_and_its_tools_round_trip_through_postgres() {
         .await
         .expect("the audit row is removed");
     common::cleanup(&pool, "mcpa").await;
+}
+
+/// REQ-032: a connector install, its sealed credential and its catalogue flip survive Postgres.
+#[tokio::test]
+async fn req_032_a_connector_install_seals_its_credential_and_the_catalogue_flips() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "cnct").await;
+    let app = app(&fresh.database);
+    let context = fixture.context.clone();
+
+    boma_app::usecases::connections_install(
+        &app,
+        &context,
+        "http-json",
+        Some(secrecy::SecretString::from("pg-key-1".to_owned())),
+    )
+    .await
+    .expect("the install lands");
+
+    // The credential is sealed: the row carries no plaintext.
+    let stored: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT sealed_credential FROM connector_installs WHERE connector_id = 'http-json' AND space_id = $1",
+    )
+    .bind(fixture.space_id.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("the row exists");
+    let bytes = stored.expect("a sealed credential is stored");
+    assert!(
+        !bytes.windows(b"pg-key-1".len()).any(|w| w == b"pg-key-1"),
+        "the stored bytes are not the plaintext"
+    );
+
+    let tools = app
+        .stores
+        .connectors
+        .catalogue_tools(&context)
+        .await
+        .expect("the catalogue answers");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].key, "connector.http-json.get");
+
+    boma_app::usecases::connections_remove(&app, &context, "http-json")
+        .await
+        .expect("the remove answers");
+
+    let tools = app
+        .stores
+        .connectors
+        .catalogue_tools(&context)
+        .await
+        .expect("the catalogue answers");
+    assert!(tools.is_empty(), "a revoked connector contributes no tools");
+    let removed = app
+        .stores
+        .connectors
+        .is_connected(&context, "http-json")
+        .await
+        .expect("the store answers");
+    assert!(!removed);
+
+    common::cleanup(&pool, "cnct").await;
 }

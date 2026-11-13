@@ -842,3 +842,63 @@ impl boma_app::ports::McpTransport for ScriptedMcpTransport {
         Ok(results.pop_front().unwrap_or_else(|| serde_json::json!({})))
     }
 }
+
+/// What the scripted connector runner hands out, in order, and what it saw.
+///
+/// Responses are popped in call order; an empty response is `{}`. Tests use it to drive the
+/// connector tool loop without a network.
+#[derive(Debug, Default)]
+pub struct ScriptedConnectorRunner {
+    responses: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    calls: std::sync::Mutex<Vec<(String, String, serde_json::Value, bool)>>,
+}
+
+impl ScriptedConnectorRunner {
+    /// A runner that answers every call with `{}`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Queues one answer per call.
+    #[must_use]
+    pub fn with_responses(responses: Vec<serde_json::Value>) -> Self {
+        Self {
+            responses: std::sync::Mutex::new(responses.into()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The calls the runner received, in order: connector, tool, arguments, and whether a
+    /// credential rode the call (never the credential itself).
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn calls(&self) -> Vec<(String, String, serde_json::Value, bool)> {
+        lock(&self.calls).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ConnectorRunner for ScriptedConnectorRunner {
+    async fn run(
+        &self,
+        connector_id: &str,
+        tool: &str,
+        arguments: &serde_json::Value,
+        _credential: Option<&secrecy::SecretString>,
+    ) -> Result<serde_json::Value, boma_app::AppError> {
+        lock(&self.calls).push((
+            connector_id.to_owned(),
+            tool.to_owned(),
+            arguments.clone(),
+            _credential.is_some(),
+        ));
+        let mut responses = lock(&self.responses);
+        Ok(responses
+            .pop_front()
+            .unwrap_or_else(|| serde_json::json!({})))
+    }
+}

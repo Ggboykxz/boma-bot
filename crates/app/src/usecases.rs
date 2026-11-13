@@ -651,6 +651,119 @@ async fn audit_private_use(
         .await
 }
 
+/// Lists the connector catalogue with this space's install state (REQ-032).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn connections_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::ConnectorSummary>, AppError> {
+    app.stores.connectors.list(context).await
+}
+
+/// Installs (or re-keys) a connector for the space (REQ-032).
+///
+/// The catalogue decides what `api_key` connectors need; the store seals whatever credential it
+/// receives. A missing key is refused by the store with the reason, before anything persists.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the connector needs an `apiKey` and none is given,
+/// [`AppError::NotFound`] when the catalogue has no such connector, and an error when a store
+/// cannot answer.
+pub async fn connections_install(
+    app: &App,
+    context: &TenantContext,
+    connector_id: &str,
+    api_key: Option<secrecy::SecretString>,
+) -> Result<crate::ports::ConnectorSummary, AppError> {
+    boma_domain::validate_connector_id(connector_id)?;
+    app.stores
+        .connectors
+        .install(context, connector_id, api_key)
+        .await
+}
+
+/// Revokes the installation of a connector (REQ-032). Revoking a missing install is a success.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn connections_remove(
+    app: &App,
+    context: &TenantContext,
+    connector_id: &str,
+) -> Result<bool, AppError> {
+    boma_domain::validate_connector_id(connector_id)?;
+    app.stores.connectors.revoke(context, connector_id).await
+}
+
+/// Dispatches one connector tool (REQ-032): the install must be connected, the credential never
+/// enters the reply, and the executor applies its own bounds.
+async fn dispatch_connector_tool(
+    app: &App,
+    context: &TenantContext,
+    call: &crate::ports::ToolCallRequest,
+) -> Result<crate::ports::ToolCallResult, AppError> {
+    let rest = call.name.strip_prefix("connector.").unwrap_or_default();
+    let mut parts = rest.splitn(2, '.');
+    let (Some(connector_id), Some(tool)) = (parts.next(), parts.next()) else {
+        return Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: serde_json::json!({ "error": "the tool key is not connector.<connector>.<tool>" }),
+        });
+    };
+    if tool.is_empty() || boma_domain::validate_connector_id(connector_id).is_err() {
+        return Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: serde_json::json!({ "error": "the tool key is not connector.<connector>.<tool>" }),
+        });
+    }
+    if !app
+        .stores
+        .connectors
+        .is_connected(context, connector_id)
+        .await?
+    {
+        return Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: serde_json::json!({ "error": format!("the connector `{connector_id}` is not installed for this space") }),
+        });
+    }
+    let credential = app
+        .stores
+        .connectors
+        .connected_credential(context, connector_id)
+        .await?;
+    let Some(runner) = app.services.connector_runner.clone() else {
+        return Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: serde_json::json!({ "error": "connector tools are not wired in this deployment" }),
+        });
+    };
+    let outcome = runner
+        .run(connector_id, tool, &call.arguments, credential.as_ref())
+        .await;
+    match outcome {
+        Ok(value) => Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: true,
+            body: serde_json::json!({ "result": value }),
+        }),
+        Err(error) => Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: serde_json::json!({ "error": format!("the connector refused: {error}") }),
+        }),
+    }
+}
+
 /// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors
@@ -3936,6 +4049,28 @@ pub async fn tool_catalogue(
         context.clone()
     };
     tools.extend(mcp_catalogue_tools(app, &mcp_context).await?);
+    tools.extend(connector_catalogue_tools(app, &mcp_context, &bot).await?);
+    Ok(tools)
+}
+
+/// The connector tools a run may see (REQ-032): installed, connected connectors only.
+///
+/// The bot's tool grant applies exactly like for installed connectors: an empty grant asks for
+/// everything connected in the space, a non-empty grant asks for exactly the keys it names.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+async fn connector_catalogue_tools(
+    app: &App,
+    context: &TenantContext,
+    bot: &boma_domain::Bot,
+) -> Result<Vec<ToolSpec>, AppError> {
+    let grant = &bot.enabled_tools;
+    let mut tools = app.stores.connectors.catalogue_tools(context).await?;
+    if !grant.is_empty() {
+        tools.retain(|tool| grant.iter().any(|key| key == &tool.key));
+    }
     Ok(tools)
 }
 
@@ -4072,6 +4207,7 @@ async fn dispatch_read_tool(
                 Err(error) => Err(error),
             }
         }
+        key if key.starts_with("connector.") => dispatch_connector_tool(app, context, call).await,
         // Computer reads are only callable from a running computer, and this use case enforces
         // that: dispatching the tool reports that the observation itself needs a computer to
         // answer first. Budgeting and base64 stay out of the model's reach.
