@@ -181,6 +181,10 @@ impl From<AppError> for ApiError {
                 ErrorCode::BadRequest,
                 "Local command servers are disabled in this deployment. An HTTPS server is the supported path.",
             ),
+            AppError::RateLimited => Self::new(
+                ErrorCode::TooManyRequests,
+                "Too many requests; wait and try again.",
+            ),
             AppError::ScreenTaken => Self::screen_taken(),
             AppError::InvalidCredentials => Self::invalid_credentials(),
             AppError::NotFound => Self::not_found(),

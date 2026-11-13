@@ -17,6 +17,9 @@ pub enum AppError {
     /// A local command server was registered while stdio is disabled (the default).
     #[error("local command servers are disabled in this deployment")]
     StdioDisabled,
+    /// The shared per-submitter counter refused the caller (defect D-01).
+    #[error("too many requests; wait and try again")]
+    RateLimited,
     /// Another member holds the screen of a computer (REQ-029).
     ///
     /// A distinct variant, not [`AppError::Conflict`], because the answer the client needs names the
@@ -55,6 +58,7 @@ impl AppError {
                 | Self::InvalidCredentials
                 | Self::StdioDisabled
                 | Self::NotFound
+                | Self::RateLimited
         )
     }
 }

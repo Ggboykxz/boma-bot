@@ -86,6 +86,25 @@ with every other `.env` parser in the binary and with `.env.example`), with a un
 owner: **CI must be green on every push, verified, not assumed** — every push from here watches the
 run to conclusion and reports it.
 
+**M5 — in flight. Six slices committed: REQ-046 (`835d8e7`), REQ-034 slice 1
+(`bc03d1e`), REQ-035 (`d56f248`), REQ-033 (`494d194` + fmt fix `d427ee7`), REQ-032 (`fc8de75`),
+REQ-034 slice 2 (marketplace install/submit/list, in this revision).**
+
+6. **REQ-034 (plugin marketplace, MUST) — slice 2.** `marketplace.list|install|submit` RPC.
+   The install is a real one: `GitHubPluginFetcher` (api.github.com → SHA pin verified against a
+   full-SHA ref, recursive tree, `raw.githubusercontent.com` for component files; HTTPS only,
+   no redirects, 100 KiB per file, 40 files, 4 MiB tree) — the loopback wiremock path reuses the
+   same code via a doc-hidden `with_loopback_endpoints` constructor. The no-local-code rule:
+   **nothing that is not a skill or a remote HTTPS MCP server installs**; stdio parts are named
+   and skipped (`mcp_stdio`), unsafe companions are named and skipped (`skill_non_text`),
+   built-in-name collisions skipped (`name_taken`), empty/invalid instructions skipped
+   (`skill_invalid`), non-component parts named (`editor_only` or `unsafe_path`), registration
+   failures named (`mcp_invalid`). Skills land in the space (origin plugin, `plugin_source`
+   canonical), plugin MCP servers register without credentials and without private access,
+   `plugin_installs` records the outcome (`parts`, `skipped`); a reinstall revokes the plugin's
+   own skills wholesale first. Scripted fetcher drives the tests offline; live GitHub fetch
+   against the public API is untested at this revision (no live calls in the suite — network
+   is loopback-only in tests). **328 tests green** (docker-gated suites excluded, same cause).
 **CI on `d56f248` — green, verified, not assumed.** Run 43439074293: `rust` (fmt, clippy, nextest,
 coverage, deny, trace), `web` (build, typecheck, lint, Playwright + axe) and `compose` (image
 build + migrate + serve + health probe) all succeed. The `bc03d1e` failure and its two root causes

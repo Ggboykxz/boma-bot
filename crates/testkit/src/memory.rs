@@ -542,6 +542,8 @@ struct State {
     mcp_servers: Vec<McpServerRow>,
     /// The connector installs a space installed (REQ-032).
     connector_installs: Vec<ConnectorRow>,
+    /// The plugin installs a space installed (REQ-034).
+    plugin_installs: Vec<PluginInstallRow>,
     /// The probed tools of those servers (REQ-033).
     mcp_server_tools: Vec<McpToolRow>,
     /// The audit events the escape hatches wrote (defect D-05).
@@ -765,6 +767,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn connectors(&self) -> MemoryConnectorStore {
         MemoryConnectorStore::new(self)
+    }
+
+    /// The store of plugin installs (REQ-034).
+    #[must_use]
+    pub fn plugin_installs(&self) -> MemoryPluginInstallStore {
+        MemoryPluginInstallStore::new(self)
     }
 
     /// The store of effects.
@@ -5218,5 +5226,198 @@ impl boma_app::ports::ConnectorStore for MemoryConnectorStore {
                     .collect::<Vec<_>>()
             })
             .collect())
+    }
+}
+
+/// One stored plugin install (REQ-034).
+#[derive(Debug, Clone)]
+struct PluginInstallRow {
+    /// The install's id.
+    #[allow(dead_code)] // written for shape parity; reinstall matching is by (space, source)
+    id: String,
+    /// The space the install belongs to.
+    space_id: SpaceId,
+    /// The canonical source.
+    source: String,
+    /// The commit SHA, when one was resolved.
+    resolved_sha: Option<String>,
+    /// The plugin's name.
+    name: String,
+    /// What was installed.
+    parts: serde_json::Value,
+    /// What was left out, named with reasons.
+    skipped: Vec<serde_json::Value>,
+    /// When it was recorded.
+    created_at: String,
+}
+
+/// The store of plugin installs (REQ-034).
+#[derive(Debug, Clone)]
+pub struct MemoryPluginInstallStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryPluginInstallStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryPluginInstallStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::PluginInstallStore for MemoryPluginInstallStore {
+    async fn list(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::PluginInstallSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let mut installs: Vec<boma_app::ports::PluginInstallSummary> = state
+            .plugin_installs
+            .iter()
+            .filter(|row| row.space_id == space_id)
+            .map(|row| boma_app::ports::PluginInstallSummary {
+                id: row.id.clone(),
+                name: row.name.clone(),
+                source: row.source.clone(),
+                resolved_sha: row.resolved_sha.clone(),
+                parts: row.parts.clone(),
+                skipped: serde_json::Value::Array(row.skipped.clone()),
+                created_at: row.created_at.clone(),
+            })
+            .collect();
+        installs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(installs)
+    }
+
+    async fn record(
+        &self,
+        context: &TenantContext,
+        install: boma_app::ports::NewPluginInstall,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        if let Some(row) = state
+            .plugin_installs
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.source == install.source)
+        {
+            row.name = install.name;
+            row.resolved_sha = install.resolved_sha;
+            row.parts = install.parts;
+            row.skipped = install.skipped;
+            row.created_at = install.created_at;
+            return Ok(());
+        }
+        state.plugin_installs.push(PluginInstallRow {
+            id: install.id,
+            space_id,
+            source: install.source,
+            resolved_sha: install.resolved_sha,
+            name: install.name,
+            parts: install.parts,
+            skipped: install.skipped,
+            created_at: install.created_at,
+        });
+        Ok(())
+    }
+
+    async fn remove_plugin_skills(
+        &self,
+        context: &TenantContext,
+        source: &str,
+    ) -> Result<u32, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(0),
+        };
+        let mut state = write(&self.state);
+        let before = state.skills.len();
+        state.skills.retain(|row| {
+            !(row.space_id == space_id
+                && row.origin == "plugin"
+                && row.plugin_source.as_deref() == Some(source))
+        });
+        Ok(u32::try_from(before - state.skills.len()).unwrap_or(u32::MAX))
+    }
+}
+
+/// A plugin install as the fake stores it, exposed for tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedPluginInstall {
+    /// The plugin's name.
+    pub name: String,
+    /// The canonical source.
+    pub source: String,
+    /// The commit SHA, when one was resolved.
+    pub resolved_sha: Option<String>,
+    /// What was installed.
+    pub parts: serde_json::Value,
+    /// What was left out, named with reasons.
+    pub skipped: Vec<serde_json::Value>,
+    /// When it was recorded.
+    pub created_at: String,
+}
+
+impl MemoryPluginInstallStore {
+    /// The installs recorded so far, oldest first.
+    #[must_use]
+    pub fn recorded(&self) -> Vec<RecordedPluginInstall> {
+        let state = read(&self.state);
+        state
+            .plugin_installs
+            .iter()
+            .map(|row| RecordedPluginInstall {
+                name: row.name.clone(),
+                source: row.source.clone(),
+                resolved_sha: row.resolved_sha.clone(),
+                parts: row.parts.clone(),
+                skipped: row.skipped.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect()
+    }
+}
+
+/// A skill as the fake stores it, exposed for tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedSkill {
+    /// The wire name.
+    pub name: String,
+    /// `taught` or `plugin`.
+    pub origin: String,
+    /// The plugin source, for plugin skills.
+    pub plugin_source: Option<String>,
+}
+
+impl MemorySkillStore {
+    /// Every skill row in the shared rows.
+    #[must_use]
+    pub fn recorded(&self) -> Vec<RecordedSkill> {
+        let state = read(&self.state);
+        state
+            .skills
+            .iter()
+            .map(|row| RecordedSkill {
+                name: row.name.clone(),
+                origin: row.origin.clone(),
+                plugin_source: row.plugin_source.clone(),
+            })
+            .collect()
     }
 }

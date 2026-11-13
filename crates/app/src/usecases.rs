@@ -764,6 +764,385 @@ async fn dispatch_connector_tool(
     }
 }
 
+/// The parts of a plugin the installer recognises, parsed out of the fetched files.
+struct PluginPlan {
+    name: String,
+    description: Option<String>,
+    skills: Vec<(String, String)>,   // (name, instructions)
+    mcp_http: Vec<(String, String)>, // (name, url)
+    skipped: Vec<serde_json::Value>,
+}
+
+/// Parses a plugin's `plugin.json`. Anything unexpected is a hard refusal: the member who
+/// submits a malformed plugin hears why, and nothing is installed.
+fn parse_plugin_manifest(
+    files: &[crate::ports::PluginRepoFile],
+) -> Result<(String, Option<String>), AppError> {
+    let manifest = files
+        .iter()
+        .find(|file| file.path == "plugin.json")
+        .map(|file| file.content.as_slice())
+        .ok_or_else(|| {
+            AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the plugin has no `plugin.json` manifest".to_owned(),
+            ))
+        })?;
+    let parsed: serde_json::Value = serde_json::from_slice(manifest).map_err(|_| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the plugin manifest is not JSON".to_owned(),
+        ))
+    })?;
+    let name = parsed
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the plugin manifest needs a `name`".to_owned(),
+            ))
+        })?;
+    boma_domain::validate_skill_name(name)?;
+    let description = parsed
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Ok((name.to_owned(), description))
+}
+
+/// Computes the install plan for a fetched plugin, naming everything left out.
+#[allow(clippy::too_many_lines)] // the plan is the installer's contract, in order
+fn build_plugin_plan(files: &[crate::ports::PluginRepoFile]) -> Result<PluginPlan, AppError> {
+    let (name, description) = parse_plugin_manifest(files)?;
+    let mut skipped = Vec::new();
+
+    // The skill folders: one directory under `skills/` per skill, SKILL.md required.
+    let mut skills: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut companions: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for file in files {
+        let Some(rest) = file.path.strip_prefix("skills/") else {
+            continue;
+        };
+        if rest.contains("..") {
+            skipped.push(serde_json::json!({ "kind": "unsafe_path", "name": file.path, "reason": "the path escapes the skill folder" }));
+            continue;
+        }
+        let mut segments = rest.splitn(2, '/');
+        let (Some(skill), Some(inner)) = (segments.next(), segments.next()) else {
+            continue;
+        };
+        if boma_domain::validate_skill_name(skill).is_err() {
+            skipped.push(serde_json::json!({ "kind": "skill_invalid", "name": skill, "reason": "the skill folder name is refused" }));
+            continue;
+        }
+        if inner == "SKILL.md" {
+            skills.insert(
+                skill.to_owned(),
+                String::from_utf8_lossy(&file.content).into_owned(),
+            );
+        } else {
+            companions
+                .entry(skill.to_owned())
+                .or_default()
+                .push(inner.to_owned());
+        }
+    }
+    // Non-text companions are left out of the install and named.
+    let text_ok = ["md", "mdx", "txt", "json", "yml", "yaml", "csv"];
+    for (skill, files) in companions {
+        for file in files {
+            let extension = file
+                .rsplit('.')
+                .next()
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            if !text_ok.contains(&extension.as_str()) {
+                skipped.push(serde_json::json!({ "kind": "skill_non_text", "name": format!("{skill}/{file}"), "reason": "the companion is not a text reference; it was not installed" }));
+            }
+        }
+    }
+    // Built-in and name-collision skills are refused.
+    let mut planned: Vec<(String, String)> = Vec::new();
+    for (skill, instructions) in skills {
+        if boma_domain::builtin_skills()
+            .iter()
+            .any(|builtin| builtin.name == skill)
+        {
+            skipped.push(serde_json::json!({ "kind": "name_taken", "name": skill, "reason": "a built-in skill has this name; it was not installed" }));
+            continue;
+        }
+        if let Err(error) = boma_domain::validate_skill_instructions(&instructions) {
+            skipped.push(serde_json::json!({ "kind": "skill_invalid", "name": skill, "reason": error.to_string() }));
+            continue;
+        }
+        planned.push((skill, instructions));
+    }
+
+    // The MCP servers: remote HTTPS only; stdio never.
+    let mut mcp_http = Vec::new();
+    let mcp_document = files
+        .iter()
+        .find(|file| file.path == ".mcp.json" || file.path == "mcp.json")
+        .and_then(|file| serde_json::from_slice::<serde_json::Value>(&file.content).ok())
+        .and_then(|doc| doc.get("mcpServers").cloned());
+    let manifest_mcp = parse_plugin_manifest_mcp(files);
+    let servers = manifest_mcp.or(mcp_document);
+    if let Some(servers) = servers {
+        let items: Vec<(String, &serde_json::Value)> = match &servers {
+            serde_json::Value::Object(map) => map
+                .iter()
+                .map(|(name, value)| (name.clone(), value))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (server_name, server) in items {
+            let transport = server
+                .get("transport")
+                .or_else(|| server.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| server.get("command").map(|_| "stdio".to_owned()))
+                .unwrap_or_default();
+            match transport.as_str() {
+                "http" | "streamable_http" | "sse" | "streamable-http" => {
+                    let Some(url) = server.get("url").and_then(serde_json::Value::as_str) else {
+                        skipped.push(serde_json::json!({ "kind": "mcp_invalid", "name": server_name, "reason": "an HTTP MCP server needs a `url`" }));
+                        continue;
+                    };
+                    if let Err(error) = boma_domain::validate_mcp_server_url(url, false) {
+                        skipped.push(serde_json::json!({ "kind": "mcp_invalid", "name": server_name, "reason": error.to_string() }));
+                        continue;
+                    }
+                    mcp_http.push((server_name, url.to_owned()));
+                }
+                "stdio" => {
+                    skipped.push(serde_json::json!({ "kind": "mcp_stdio", "name": server_name, "reason": "local command servers are never installed from plugins" }));
+                }
+                other => {
+                    skipped.push(serde_json::json!({ "kind": "unsupported_transport", "name": server_name, "reason": format!("the transport `{other}` is not supported") }));
+                }
+            }
+        }
+    }
+    // Top-level parts that are neither components nor inert metadata are named, not installed.
+    for file in files {
+        let path = file.path.as_str();
+        let inert = path == "plugin.json"
+            || path == ".mcp.json"
+            || path == "mcp.json"
+            || path.starts_with("skills/")
+            || path == "README.md"
+            || path.starts_with("README")
+            || path.starts_with("LICENSE")
+            || path == ".gitignore";
+        if !inert && !path.starts_with("skills/") {
+            skipped.push(serde_json::json!({ "kind": "editor_only", "name": path, "reason": "the part is not a skill or an MCP server; it was not installed" }));
+        }
+    }
+    Ok(PluginPlan {
+        name,
+        description,
+        skills: planned,
+        mcp_http,
+        skipped,
+    })
+}
+
+fn parse_plugin_manifest_mcp(files: &[crate::ports::PluginRepoFile]) -> Option<serde_json::Value> {
+    files
+        .iter()
+        .find(|file| file.path == "plugin.json")
+        .and_then(|file| serde_json::from_slice::<serde_json::Value>(&file.content).ok())
+        .and_then(|manifest| manifest.get("mcpServers").cloned())
+}
+
+/// `marketplace.list` — the connector catalogue plus this space's installed plugins (REQ-034).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn marketplace_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<
+    (
+        Vec<crate::ports::ConnectorSummary>,
+        Vec<crate::ports::PluginInstallSummary>,
+    ),
+    AppError,
+> {
+    let connectors = connections_list(app, context).await?;
+    let installed = app.stores.plugin_installs.list(context).await?;
+    Ok((connectors, installed))
+}
+
+/// `marketplace.submit` — submit a plugin for review (REQ-034).
+///
+/// The submit path is the same as the public one; this one carries the account. D-06's
+/// "require an account" half is satisfied here; the public endpoint stays cookieless per the
+/// spec's golden. Both draw from one counter: ten submissions per hour per submitter.
+///
+/// # Errors
+///
+/// Returns an error when the shared counter refuses the caller or a store cannot answer.
+pub async fn marketplace_submit(
+    app: &App,
+    context: &TenantContext,
+    source: &str,
+) -> Result<String, AppError> {
+    let submitter = match context {
+        TenantContext::Member { user_id, .. } => Some(user_id.clone()),
+        TenantContext::System { .. } => None,
+    };
+    let key = match &submitter {
+        Some(user_id) => format!("plugin-submissions:{user_id}"),
+        None => "plugin-submissions:anonymous".to_owned(),
+    };
+    let allowed = 10_u64;
+    let decision = hit_rate_limit(app, &key, 3600).await?;
+    if decision.count > allowed {
+        return Err(AppError::RateLimited);
+    }
+    let parsed = boma_domain::parse_plugin_source(source).map_err(|_| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "Invalid source.".to_owned(),
+        ))
+    })?;
+    submit_plugin(app, &parsed, None, None, submitter).await
+}
+
+/// `marketplace.install` — fetch, validate and install a plugin (REQ-034).
+///
+/// The installer never executes anything from the plugin, and never fetches beyond what the
+/// fetcher keeps: `skills/*/SKILL.md` and their text companions, `plugin.json`, `.mcp.json`
+/// or the manifest's `mcpServers`. Everything else is named in `skipped` and left out. A source
+/// that does not parse, a repository that does not answer, or a manifest that does not validate
+/// installs nothing.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the source or the plugin is refused, and an error when a
+/// store cannot answer.
+pub async fn marketplace_install(
+    app: &App,
+    context: &TenantContext,
+    source: &str,
+) -> Result<crate::ports::PluginInstallOutcome, AppError> {
+    let parsed = boma_domain::parse_plugin_source(source).map_err(|_| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the plugin source does not parse".to_owned(),
+        ))
+    })?;
+    let fetched = app.services.plugin_fetcher.fetch(&parsed).await?;
+    let plan = build_plugin_plan(&fetched.files)?;
+    let plan_skipped = plan.skipped.clone();
+    let canonical = parsed.canonical();
+
+    // Replacing this source revokes its previous skills wholesale, then writes the fresh set.
+    app.stores
+        .plugin_installs
+        .remove_plugin_skills(context, &canonical)
+        .await?;
+
+    let mut skill_count: u32 = 0;
+    for (skill_name, instructions) in &plan.skills {
+        teach_skill(
+            app,
+            context,
+            skill_name,
+            &plan
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("{skill_name} ({})", plan.name)),
+            instructions,
+            boma_domain::SkillOrigin::Plugin,
+            Some(canonical.clone()),
+        )
+        .await?;
+        skill_count += 1;
+    }
+
+    let mut mcp_server_count: u32 = 0;
+    for (server_name, url) in &plan.mcp_http {
+        let summary = mcp_server_add(
+            app,
+            context,
+            server_name,
+            boma_domain::McpTransport::Http,
+            Some(url.clone()),
+            None,
+            None,
+            false,
+            None,
+        )
+        .await;
+        match summary {
+            Ok(_) => mcp_server_count += 1,
+            Err(error) => {
+                let mut skipped = Vec::with_capacity(plan_skipped.len().max(1));
+                skipped.extend(plan_skipped.iter().cloned());
+                skipped.push(serde_json::json!({ "kind": "mcp_invalid", "name": server_name, "reason": format!("the server could not be registered: {error}") }));
+                return record_install(
+                    app,
+                    context,
+                    &fetched,
+                    &plan,
+                    &canonical,
+                    skill_count,
+                    mcp_server_count,
+                    skipped,
+                )
+                .await;
+            }
+        }
+    }
+
+    record_install(
+        app,
+        context,
+        &fetched,
+        &plan,
+        &canonical,
+        skill_count,
+        mcp_server_count,
+        plan_skipped,
+    )
+    .await
+}
+
+/// Records the outcome of one install and returns it.
+#[allow(clippy::too_many_arguments)]
+async fn record_install(
+    app: &App,
+    context: &TenantContext,
+    fetched: &crate::ports::FetchedPlugin,
+    plan: &PluginPlan,
+    canonical: &str,
+    skill_count: u32,
+    mcp_server_count: u32,
+    skipped: Vec<serde_json::Value>,
+) -> Result<crate::ports::PluginInstallOutcome, AppError> {
+    let id = app.services.ids.new_id("pin");
+    let install = crate::ports::NewPluginInstall {
+        id: id.clone(),
+        source: canonical.to_owned(),
+        resolved_sha: fetched.resolved_sha.clone(),
+        name: plan.name.clone(),
+        parts: serde_json::json!({ "skills": skill_count, "mcpServers": mcp_server_count }),
+        skipped: skipped.clone(),
+        created_at: app.services.clock.now(),
+    };
+    app.stores.plugin_installs.record(context, install).await?;
+    Ok(crate::ports::PluginInstallOutcome {
+        id,
+        name: plan.name.clone(),
+        source: canonical.to_owned(),
+        resolved_sha: fetched.resolved_sha.clone(),
+        skill_count,
+        mcp_server_count,
+        skipped,
+    })
+}
+
 /// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors

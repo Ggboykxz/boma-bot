@@ -12,10 +12,10 @@ use crate::{
     ports::{
         AccountStore, AuditStore, BotStore, CardStore, Clock, ComputerStore, ConnectorStore,
         EffectStore, EventPublisher, EventStore, IdGenerator, InvitationStore, McpServerStore,
-        MemoryStore, MessageStore, PasswordHasher, PendingToolCallStore, PluginSubmissionStore,
-        RateLimitStore, ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore,
-        ScreenCapabilityStore, SecretStore, SessionStore, SkillStore, SpaceStore, ThreadStore,
-        TokenGenerator, ToolStore, UserStore,
+        MemoryStore, MessageStore, PasswordHasher, PendingToolCallStore, PluginInstallStore,
+        PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore, RosterStore,
+        RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore, SkillStore,
+        SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -60,6 +60,8 @@ pub struct Stores {
     pub audit: Arc<dyn AuditStore>,
     /// The connector installs of the space (REQ-032).
     pub connectors: Arc<dyn ConnectorStore>,
+    /// The plugin installs of the space (REQ-034).
+    pub plugin_installs: Arc<dyn PluginInstallStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
     /// The per-run tool catalogue.
@@ -109,6 +111,7 @@ impl Stores {
         mcp_servers: Arc<dyn McpServerStore>,
         audit: Arc<dyn AuditStore>,
         connectors: Arc<dyn ConnectorStore>,
+        plugin_installs: Arc<dyn PluginInstallStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -137,6 +140,7 @@ impl Stores {
             mcp_servers,
             audit,
             connectors,
+            plugin_installs,
             effects,
             tools,
             reactions,
@@ -174,11 +178,15 @@ pub struct Services {
     /// execute them. `None` means connector tools are never dispatched, and a call answers with
     /// a clear refusal rather than a fake success.
     pub connector_runner: Option<Arc<dyn crate::ports::ConnectorRunner>>,
+    /// The fetcher that resolves plugin sources (REQ-034). A test doubles it; a deployment
+    /// wires the GitHub fetcher.
+    pub plugin_fetcher: Arc<dyn crate::ports::PluginFetcher>,
 }
 
 impl Services {
     /// Builds the services from already-constructed adapters.
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // the composition root; the list is the contract
     pub fn new(
         publisher: Arc<dyn EventPublisher>,
         hasher: Arc<dyn PasswordHasher>,
@@ -187,6 +195,7 @@ impl Services {
         clock: Arc<dyn Clock>,
         models: boma_domain::model::DeploymentModels,
         mcp_transport: Arc<dyn crate::ports::McpTransport>,
+        plugin_fetcher: Arc<dyn crate::ports::PluginFetcher>,
     ) -> Self {
         Self {
             publisher,
@@ -198,6 +207,7 @@ impl Services {
             computer: None,
             mcp_transport,
             connector_runner: None,
+            plugin_fetcher,
         }
     }
 
@@ -295,6 +305,7 @@ impl From<AppError> for Failure {
             AppError::ScreenTaken => "screen_taken",
             AppError::InvalidCredentials => "invalid_credentials",
             AppError::StdioDisabled => "stdio_disabled",
+            AppError::RateLimited => "rate_limited",
             AppError::Unavailable => "dependency_unavailable",
             AppError::NotFound => "not_found",
         };

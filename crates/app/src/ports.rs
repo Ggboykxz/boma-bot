@@ -2194,6 +2194,129 @@ pub trait ConnectorRunner: Send + Sync {
     ) -> Result<serde_json::Value, AppError>;
 }
 
+/// One file inside a fetched plugin repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRepoFile {
+    /// The path relative to the fetched root (the skill folder, the manifest, …).
+    pub path: String,
+    /// The file's bytes. Binary components are simply not carried: the installer only needs text.
+    pub content: Vec<u8>,
+}
+
+/// What a fetched plugin looks like when it arrives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchedPlugin {
+    /// Every file the fetcher kept, paths relative to the fetched root.
+    pub files: Vec<PluginRepoFile>,
+    /// The commit SHA the tree resolved to; pinned, and verified when the ref was a full SHA.
+    pub resolved_sha: Option<String>,
+}
+
+/// Fetches a plugin from its source reference (REQ-034).
+///
+/// Implementations decide how a source is resolved; the installer never names a network client.
+#[async_trait]
+pub trait PluginFetcher: Send + Sync {
+    /// Fetches the plugin files for one source reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source cannot be resolved or fetched; nothing is installed on
+    /// an error — the caller does not write anything.
+    async fn fetch(&self, source: &boma_domain::PluginSourceRef)
+    -> Result<FetchedPlugin, AppError>;
+}
+
+/// What one installation of a plugin ended up doing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInstallOutcome {
+    /// The install id.
+    pub id: String,
+    /// The plugin's name from its manifest.
+    pub name: String,
+    /// The canonical source it came from (`url[@ref][#subdir]`).
+    pub source: String,
+    /// The commit SHA, when the fetcher reported one.
+    pub resolved_sha: Option<String>,
+    /// The number of skills installed.
+    pub skill_count: u32,
+    /// The number of MCP servers registered.
+    pub mcp_server_count: u32,
+    /// Every part left out, named, with the reason — the no-local-code rule made visible.
+    pub skipped: Vec<serde_json::Value>,
+}
+
+/// One stored plugin install summary (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInstallSummary {
+    /// The install's id.
+    pub id: String,
+    /// The plugin's name.
+    pub name: String,
+    /// The canonical source.
+    pub source: String,
+    /// The commit SHA, when one was resolved.
+    pub resolved_sha: Option<String>,
+    /// What was installed: `{skills, mcpServers}`.
+    pub parts: serde_json::Value,
+    /// What was left out, named with reasons.
+    pub skipped: serde_json::Value,
+    /// When it was installed or last replaced.
+    pub created_at: String,
+}
+
+/// What a caller hands in to record a plugin installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPluginInstall {
+    /// The install's id.
+    pub id: String,
+    /// The canonical source.
+    pub source: String,
+    /// The commit SHA, when one was resolved.
+    pub resolved_sha: Option<String>,
+    /// The plugin's name.
+    pub name: String,
+    /// What was installed: `{skills, mcpServers}`.
+    pub parts: serde_json::Value,
+    /// What was left out, named with reasons.
+    pub skipped: Vec<serde_json::Value>,
+    /// When it was recorded.
+    pub created_at: String,
+}
+
+/// Stores plugin installations for a space (REQ-034).
+#[async_trait]
+pub trait PluginInstallStore: Send + Sync {
+    /// The space's installs, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(&self, context: &TenantContext) -> Result<Vec<PluginInstallSummary>, AppError>;
+
+    /// Records (or replaces, same source) the install.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn record(
+        &self,
+        context: &TenantContext,
+        install: NewPluginInstall,
+    ) -> Result<(), AppError>;
+
+    /// Removes every plugin skill of the given source from the space. Returns how many went.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn remove_plugin_skills(
+        &self,
+        context: &TenantContext,
+        source: &str,
+    ) -> Result<u32, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

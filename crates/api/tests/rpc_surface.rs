@@ -2039,3 +2039,62 @@ async fn req_032_a_member_installs_lists_and_removes_a_connector() {
     let body = json(response).await;
     assert_eq!(body["removed"], serde_json::json!(true));
 }
+
+#[tokio::test]
+async fn req_034_a_member_submits_and_installs_a_plugin() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Submit: the reply carries an id and nothing about the submitter.
+    let response = post(
+        app_state.clone(),
+        "/rpc/marketplace/submit",
+        Some(&world.caller),
+        serde_json::json!({ "source": "https://example.test/acme/widget-pack.git#main" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["ok"], serde_json::json!(true));
+    assert!(body["id"].as_str().expect("an id").len() > 3);
+
+    // A malformed source is refused before anything happens.
+    let response = post(
+        app_state.clone(),
+        "/rpc/marketplace/submit",
+        Some(&world.caller),
+        serde_json::json!({ "source": "not a repository" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Install with an empty fixture fetcher errors instead of fabricating an install.
+    let response = post(
+        app_state,
+        "/rpc/marketplace/install",
+        Some(&world.caller),
+        serde_json::json!({ "source": "https://example.test/acme/widget-pack.git#main" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn req_034_the_marketplace_list_answers() {
+    let world = world().await;
+    let app_state = state(&world.app);
+    let response = post(
+        app_state,
+        "/rpc/marketplace/list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["connectors"].as_array().expect("a list").len(), 2);
+    assert_eq!(
+        body["installedPlugins"].as_array().expect("a list").len(),
+        0
+    );
+}

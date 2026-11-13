@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod memory;
 pub mod messages;
 pub mod pending_tool_calls;
+pub mod plugin_installs;
 pub mod plugin_submissions;
 pub mod rate_limits;
 pub mod reactions;

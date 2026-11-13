@@ -26,6 +26,8 @@ use boma_app::{
     ports::{Clock, EventPublisher, IdGenerator, PasswordHasher, TokenGenerator},
     service::{Services, Stores},
 };
+
+use crate::ScriptedPluginFetcher;
 use boma_domain::{BotId, Email, OrganizationId, SpaceId, TenantContext, ThreadId, UserId};
 
 use crate::{
@@ -275,6 +277,8 @@ pub struct TestAppBuilder {
     mcp_transport: Option<Arc<dyn boma_app::ports::McpTransport>>,
     /// The connector runner to use instead of a fresh scripted one.
     connector_runner: Option<Arc<dyn boma_app::ports::ConnectorRunner>>,
+    /// The plugin fetcher to use instead of a fresh scripted one.
+    plugin_fetcher: Option<Arc<dyn boma_app::ports::PluginFetcher>>,
 }
 
 impl Default for TestAppBuilder {
@@ -289,6 +293,7 @@ impl Default for TestAppBuilder {
             runtime: None,
             mcp_transport: None,
             connector_runner: None,
+            plugin_fetcher: None,
         }
     }
 }
@@ -345,6 +350,13 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with this plugin fetcher instead of a fresh scripted one.
+    #[must_use]
+    pub fn plugin_fetcher(mut self, fetcher: Arc<dyn boma_app::ports::PluginFetcher>) -> Self {
+        self.plugin_fetcher = Some(fetcher);
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -394,6 +406,7 @@ impl TestAppBuilder {
             Arc::new(database.mcp_servers()),
             Arc::new(database.audit()),
             Arc::new(database.connectors()),
+            Arc::new(database.plugin_installs()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -418,6 +431,9 @@ impl TestAppBuilder {
             self.mcp_transport
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::ScriptedMcpTransport::new())),
+            self.plugin_fetcher
+                .clone()
+                .unwrap_or_else(|| Arc::new(ScriptedPluginFetcher::new())),
         )
         .with_connectors(
             self.connector_runner
@@ -4439,5 +4455,247 @@ mod connector_tests {
                 .expect("the dispatch answers");
         assert!(result.ok, "{:?}", result.body);
         assert_eq!(result.body["result"], serde_json::json!({}));
+    }
+}
+
+#[cfg(test)]
+mod marketplace_tests {
+    // REQ-034 — plugins: install, no-local-code rule, omission naming.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+    use crate::ScriptedPluginFetcher;
+
+    async fn seeded(
+        fetcher: ScriptedPluginFetcher,
+    ) -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_app::usecases::BotCreated,
+    ) {
+        let test = TestApp::builder().plugin_fetcher(Arc::new(fetcher)).build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        (test, context, created)
+    }
+
+    fn plugin_files() -> Vec<boma_app::ports::PluginRepoFile> {
+        vec![
+            boma_app::ports::PluginRepoFile {
+                path: "plugin.json".to_owned(),
+                content: br#"{"name":"widget-pack","description":"A pack of widgets."}"#.to_vec(),
+            },
+            boma_app::ports::PluginRepoFile {
+                path: "skills/alpha/SKILL.md".to_owned(),
+                content: b"When asked about widgets, answer in bullet points.\n".to_vec(),
+            },
+            boma_app::ports::PluginRepoFile {
+                path: "skills/alpha/script.sh".to_owned(),
+                content: b"#!/bin/sh\necho nope\n".to_vec(),
+            },
+            boma_app::ports::PluginRepoFile {
+                path: "skills/interrogate/SKILL.md".to_owned(),
+                content: b"Shadow a built-in: must be refused.\n".to_vec(),
+            },
+            boma_app::ports::PluginRepoFile {
+                path: "skills/broken/SKILL.md".to_owned(),
+                content: b"   \n".to_vec(),
+            },
+            boma_app::ports::PluginRepoFile {
+                path: ".mcp.json".to_owned(),
+                content: br#"{"mcpServers":{"widgets":{"type":"streamable_http","url":"https://mcp.example.com/widgets"},"local":{"type":"stdio","command":"/opt/evil"}}}"#.to_vec(),
+            },
+            boma_app::ports::PluginRepoFile {
+                path: "README.md".to_owned(),
+                content: b"# widget-pack\n".to_vec(),
+            },
+            boma_app::ports::PluginRepoFile {
+                path: "rules/ruleset.yaml".to_owned(),
+                content: b"stuff: true\n".to_vec(),
+            },
+        ]
+    }
+
+    fn plugin_fixture() -> Vec<boma_app::ports::PluginRepoFile> {
+        plugin_files()
+    }
+
+    #[tokio::test]
+    async fn req_034_an_install_records_the_skills_and_names_the_omissions() {
+        let (test, context, _created) = seeded(ScriptedPluginFetcher::with_responses(vec![Ok(
+            boma_app::ports::FetchedPlugin {
+                files: plugin_files(),
+                resolved_sha: Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned()),
+            },
+        )]))
+        .await;
+
+        let outcome = boma_app::usecases::marketplace_install(
+            test.app(),
+            &context,
+            "https://example.test/acme/widget-pack.git#main",
+        )
+        .await
+        .expect("the install lands");
+
+        assert_eq!(outcome.name, "widget-pack");
+        assert_eq!(outcome.skill_count, 1, "exactly one skill was installed");
+        assert_eq!(
+            outcome.mcp_server_count, 1,
+            "exactly one MCP server was registered"
+        );
+
+        let kinds: Vec<&str> = outcome
+            .skipped
+            .iter()
+            .map(|entry| entry["kind"].as_str().expect("a kind"))
+            .collect();
+        for expected in [
+            "skill_non_text",
+            "name_taken",
+            "skill_invalid",
+            "mcp_stdio",
+            "editor_only",
+        ] {
+            assert!(
+                kinds.contains(&expected),
+                "{expected} named in the omissions: {kinds:?}"
+            );
+        }
+
+        // The installed skill loads, named with its plugin origin.
+        let skill = boma_app::usecases::skill_get(test.app(), &context, "alpha")
+            .await
+            .expect("the store answers");
+        assert_eq!(skill.origin, "plugin");
+        assert!(skill.instructions.contains("widgets"));
+
+        // The MCP server is registered without a credential and without private access.
+        let servers = boma_app::usecases::mcp_servers_list(test.app(), &context)
+            .await
+            .expect("the list answers");
+        let widgets = servers
+            .iter()
+            .find(|server| server.name == "widgets")
+            .expect("the plugin's server is registered");
+        assert!(!widgets.allow_private);
+
+        // The install is listed.
+        let (_connectors, installed) = boma_app::usecases::marketplace_list(test.app(), &context)
+            .await
+            .expect("the list answers");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, "widget-pack");
+        assert_eq!(
+            installed[0].resolved_sha.as_deref(),
+            Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        );
+        assert_eq!(installed[0].skipped.as_array().expect("an array").len(), 5);
+    }
+
+    #[tokio::test]
+    async fn req_034_a_malformed_source_nothing_is_installed() {
+        let fetcher = ScriptedPluginFetcher::new();
+        let (test, context, _created) = seeded(fetcher).await;
+        let outcome =
+            boma_app::usecases::marketplace_install(test.app(), &context, "not a repository").await;
+        assert!(outcome.is_err());
+        let installed = test.database().plugin_installs().recorded();
+        assert!(
+            installed.is_empty(),
+            "nothing is installed from a malformed source"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_034_a_plugin_without_a_manifest_installs_nothing() {
+        let fixture = vec![boma_app::ports::PluginRepoFile {
+            path: "skills/alpha/SKILL.md".to_owned(),
+            content: b"instructions\n".to_vec(),
+        }];
+        let (test, context, _created) = seeded(ScriptedPluginFetcher::with_responses(vec![Ok(
+            boma_app::ports::FetchedPlugin {
+                files: fixture,
+                resolved_sha: None,
+            },
+        )]))
+        .await;
+        let outcome = boma_app::usecases::marketplace_install(
+            test.app(),
+            &context,
+            "https://example.test/acme/pack.git#main",
+        )
+        .await;
+        assert!(outcome.is_err());
+        assert_eq!(test.database().plugin_installs().recorded().len(), 0);
+        assert!(
+            test.database()
+                .skills()
+                .recorded()
+                .into_iter()
+                .all(|skill| skill.origin != "plugin")
+        );
+    }
+
+    #[tokio::test]
+    async fn req_034_a_reinstall_replaces_what_the_plugin_owns() {
+        let install = |sha: &str| {
+            vec![Ok(boma_app::ports::FetchedPlugin {
+                files: plugin_fixture(),
+                resolved_sha: Some(sha.to_owned()),
+            })]
+        };
+        let (test, context, _created) = seeded(ScriptedPluginFetcher::with_responses(
+            install("aaaabbbbccccddddeeeeffff0000111122223333")
+                .into_iter()
+                .chain(install("ffffffffeeeeeeeedddddddccccccccbbbbbbbbbbbb"))
+                .collect::<Vec<_>>(),
+        ))
+        .await;
+
+        boma_app::usecases::marketplace_install(
+            test.app(),
+            &context,
+            "https://example.test/acme/widget-pack.git#main",
+        )
+        .await
+        .expect("the first install lands");
+        boma_app::usecases::marketplace_install(
+            test.app(),
+            &context,
+            "https://example.test/acme/widget-pack.git#main",
+        )
+        .await
+        .expect("the reinstall lands");
+
+        let installed = test.database().plugin_installs().recorded();
+        assert_eq!(installed.len(), 1, "one row per (space, source)");
+        assert_eq!(
+            installed[0].resolved_sha.as_deref(),
+            Some("ffffffffeeeeeeeedddddddccccccccbbbbbbbbbbbb"),
+        );
+        let alpha = test
+            .database()
+            .skills()
+            .recorded()
+            .into_iter()
+            .filter(|skill| skill.name == "alpha" && skill.origin == "plugin")
+            .count();
+        assert_eq!(alpha, 1, "the reinstall replaces the plugin's own skills");
     }
 }

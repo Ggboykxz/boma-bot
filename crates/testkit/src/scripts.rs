@@ -902,3 +902,63 @@ impl boma_app::ports::ConnectorRunner for ScriptedConnectorRunner {
             .unwrap_or_else(|| serde_json::json!({})))
     }
 }
+
+/// What the scripted plugin fetcher hands out, in order (REQ-034).
+///
+/// The fetcher is the plugin acquisition boundary; tests script it instead of the network.
+/// A fixture with no scripted response answers with an error, exactly like an unreachable
+/// source — the install then fails and nothing is stored.
+#[derive(Debug, Default)]
+pub struct ScriptedPluginFetcher {
+    responses: std::sync::Mutex<
+        std::collections::VecDeque<Result<boma_app::ports::FetchedPlugin, boma_app::AppError>>,
+    >,
+    sources: std::sync::Mutex<Vec<String>>,
+}
+
+impl ScriptedPluginFetcher {
+    /// A fetcher with nothing scripted: every fetch fails as unreachable.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Programs the fetches, in source-reference order, then on.
+    #[must_use]
+    pub fn with_responses(
+        responses: Vec<Result<boma_app::ports::FetchedPlugin, boma_app::AppError>>,
+    ) -> Self {
+        Self {
+            responses: std::sync::Mutex::new(responses.into()),
+            sources: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The sources the fetcher was asked to fetch, in order.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn sources(&self) -> Vec<String> {
+        lock(&self.sources).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::PluginFetcher for ScriptedPluginFetcher {
+    async fn fetch(
+        &self,
+        source: &boma_domain::PluginSourceRef,
+    ) -> Result<boma_app::ports::FetchedPlugin, boma_app::AppError> {
+        lock(&self.sources).push(source.canonical());
+        let mut responses = lock(&self.responses);
+        responses.pop_front().unwrap_or_else(|| {
+            Err(boma_app::AppError::Rule(
+                boma_domain::DomainError::InvalidName(
+                    "the scripted fetcher has no answer for this source".to_owned(),
+                ),
+            ))
+        })
+    }
+}

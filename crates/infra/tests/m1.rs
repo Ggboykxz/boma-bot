@@ -85,6 +85,7 @@ fn app(database: &Postgres) -> App {
                 pool.clone(),
                 boma_infra::SecretBox::ephemeral(),
             )),
+            Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -107,6 +108,7 @@ fn app(database: &Postgres) -> App {
                 default: "anthropic/claude-sonnet".to_owned(),
             },
             Arc::new(boma_testkit::ScriptedMcpTransport::new()),
+            Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
         ),
     )
 }
@@ -1995,4 +1997,94 @@ async fn req_032_a_connector_install_seals_its_credential_and_the_catalogue_flip
     assert!(!removed);
 
     common::cleanup(&pool, "cnct").await;
+}
+
+/// REQ-034: a plugin install and its skills survive a round trip to Postgres, and the
+/// wholesale revoke on reinstall removes exactly the plugin's own skills.
+#[tokio::test]
+async fn req_034_a_plugin_install_round_trips_through_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "plg").await;
+    let app = app(&fresh.database);
+    let context = fixture.context.clone();
+    let source = "https://example.test/acme/widget-pack.git#main";
+
+    // Seed two plugin skills and one taught skill.
+    for (id, name, origin) in [
+        ("psk1", "alpha", boma_domain::SkillOrigin::Plugin),
+        ("psk2", "beta", boma_domain::SkillOrigin::Plugin),
+        ("psk3", "keep-me", boma_domain::SkillOrigin::Taught),
+    ] {
+        app.stores
+            .skills
+            .put(
+                &context,
+                boma_app::ports::NewSkill {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    description: "desc".to_owned(),
+                    instructions: "instructions".to_owned(),
+                    origin,
+                    plugin_source: (origin == boma_domain::SkillOrigin::Plugin)
+                        .then(|| source.to_owned()),
+                    created_at: "2026-01-01T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the skill is stored");
+    }
+
+    app.stores
+        .plugin_installs
+        .record(
+            &context,
+            boma_app::ports::NewPluginInstall {
+                id: "pin_round_trip".to_owned(),
+                source: source.to_owned(),
+                resolved_sha: Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned()),
+                name: "widget-pack".to_owned(),
+                parts: serde_json::json!({ "skills": 2, "mcpServers": 1 }),
+                skipped: vec![
+                    serde_json::json!({"kind":"mcp_stdio","name":"local","reason":"stdio"}),
+                ],
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the install is recorded");
+
+    let installs = app
+        .stores
+        .plugin_installs
+        .list(&context)
+        .await
+        .expect("the list answers");
+    assert_eq!(installs.len(), 1);
+    assert_eq!(installs[0].name, "widget-pack");
+    assert_eq!(installs[0].parts["skills"], serde_json::json!(2));
+
+    // A reinstall revokes exactly the plugin's own skills, not the taught one.
+    let removed = app
+        .stores
+        .plugin_installs
+        .remove_plugin_skills(&context, source)
+        .await
+        .expect("the revoke answers");
+    assert_eq!(removed, 2, "exactly the two plugin skills are revoked");
+    let remaining = app
+        .stores
+        .skills
+        .list(&context)
+        .await
+        .expect("the list answers");
+    assert_eq!(remaining.len(), 1, "the taught skill survives");
+    assert_eq!(remaining[0].name, "keep-me");
+
+    sqlx::query("DELETE FROM plugin_installs WHERE id = $1")
+        .bind("pin_round_trip")
+        .execute(&pool)
+        .await
+        .expect("the row is removed");
+    common::cleanup(&pool, "plg").await;
 }

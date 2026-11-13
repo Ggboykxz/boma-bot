@@ -796,6 +796,55 @@ pub struct ConnectionsRemoveReply {
     pub removed: bool,
 }
 
+/// One plugin skipped part, named with its reason (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInstallView {
+    /// The plugin's name.
+    pub name: String,
+    /// The canonical source (`url[@ref][#subdir]`).
+    pub source: String,
+    /// The commit SHA, when one was resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_sha: Option<String>,
+    /// The number of skills installed.
+    pub skill_count: u32,
+    /// The number of MCP servers registered.
+    pub mcp_server_count: u32,
+    /// What was left out, named with reasons.
+    pub skipped: Vec<serde_json::Value>,
+    /// When it was installed or last replaced.
+    pub created_at: String,
+}
+
+/// The reply of `marketplace.list` (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceListReply {
+    /// The connector catalogue with this space's install state.
+    pub connectors: Vec<ConnectorView>,
+    /// The plugins this space installed.
+    pub installed_plugins: Vec<PluginInstallView>,
+}
+
+/// The reply of `marketplace.install` (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceInstallReply {
+    /// The installation's outcome.
+    pub install: PluginInstallView,
+}
+
+/// The reply of `marketplace.submit` (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceSubmitReply {
+    /// Always true: a submission is recorded, nothing about who submitted it is disclosed.
+    pub ok: bool,
+    /// The submission's id.
+    pub id: String,
+}
+
 /// One skill in a list (REQ-035). Built-ins carry no timestamps; taught and plugin skills do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

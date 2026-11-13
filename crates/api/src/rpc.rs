@@ -26,13 +26,14 @@ use crate::{
         AnswerReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
         ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
         ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
-        ConnectionsRemoveReply, ConnectorView, InvitationReply, McpServerReply, McpServerView,
+        ConnectionsRemoveReply, ConnectorView, InvitationReply, MarketplaceInstallReply,
+        MarketplaceListReply, MarketplaceSubmitReply, McpServerReply, McpServerView,
         McpServersListReply, McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply,
-        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply,
-        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
-        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
-        SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply,
-        SpaceReply, TeachSkillReply, ThreadHeadReply,
+        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, PluginInstallView,
+        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
+        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
+        SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply,
+        SnoozeReply, SpaceReply, TeachSkillReply, ThreadHeadReply,
     },
 };
 
@@ -60,6 +61,8 @@ pub mod namespaces {
     pub const MCP: &str = "mcp";
     /// Connectors: the builtin catalogue of integrations (REQ-032).
     pub const CONNECTIONS: &str = "connections";
+    /// Marketplace: submissions and installs of plugins (REQ-034).
+    pub const MARKETPLACE: &str = "marketplace";
 }
 
 /// Every procedure this deployment serves.
@@ -116,6 +119,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::CONNECTIONS, "list"),
         (namespaces::CONNECTIONS, "install"),
         (namespaces::CONNECTIONS, "remove"),
+        (namespaces::MARKETPLACE, "list"),
+        (namespaces::MARKETPLACE, "submit"),
+        (namespaces::MARKETPLACE, "install"),
     ]
 }
 
@@ -282,6 +288,15 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::CONNECTIONS, "remove") => connections_remove(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MARKETPLACE, "list") => marketplace_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MARKETPLACE, "submit") => marketplace_submit(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MARKETPLACE, "install") => marketplace_install(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -1753,4 +1768,97 @@ async fn connections_remove(
         usecases::connections_remove(state.app(), &auth.actor.context, &request.connector_id)
             .await?;
     Ok(ConnectionsRemoveReply { removed })
+}
+
+/// The body of `marketplace.list` (REQ-034): nothing, `{}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MarketplaceListRequest {}
+
+fn plugin_install_view(outcome: boma_app::ports::PluginInstallOutcome) -> PluginInstallView {
+    PluginInstallView {
+        name: outcome.name,
+        source: outcome.source,
+        resolved_sha: outcome.resolved_sha,
+        skill_count: outcome.skill_count,
+        mcp_server_count: outcome.mcp_server_count,
+        skipped: outcome.skipped,
+        created_at: String::new(),
+    }
+}
+
+/// `marketplace.list` — the catalogue and this space's installs.
+async fn marketplace_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MarketplaceListReply, ApiError> {
+    let _: MarketplaceListRequest = parse(&body)?;
+    let (connectors, installed) =
+        usecases::marketplace_list(state.app(), &auth.actor.context).await?;
+    Ok(MarketplaceListReply {
+        connectors: connectors.into_iter().map(connector_view).collect(),
+        installed_plugins: installed
+            .into_iter()
+            .map(|summary| PluginInstallView {
+                name: summary.name,
+                source: summary.source,
+                resolved_sha: summary.resolved_sha,
+                skill_count: summary
+                    .parts
+                    .get("skills")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(0, |count| u32::try_from(count).unwrap_or(u32::MAX)),
+                mcp_server_count: summary
+                    .parts
+                    .get("mcpServers")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(0, |count| u32::try_from(count).unwrap_or(u32::MAX)),
+                skipped: summary.skipped.as_array().cloned().unwrap_or_default(),
+                created_at: summary.created_at,
+            })
+            .collect(),
+    })
+}
+
+/// The body of `marketplace.submit` (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MarketplaceSubmitRequest {
+    /// The source reference; the reply carries an id and nothing about who submitted.
+    source: String,
+}
+
+/// `marketplace.submit` — submit a plugin for review (authed, ten per hour per submitter).
+async fn marketplace_submit(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MarketplaceSubmitReply, ApiError> {
+    let request: MarketplaceSubmitRequest = parse(&body)?;
+    let id =
+        usecases::marketplace_submit(state.app(), &auth.actor.context, &request.source).await?;
+    Ok(MarketplaceSubmitReply { ok: true, id })
+}
+
+/// The body of `marketplace.install` (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MarketplaceInstallRequest {
+    /// The source reference.
+    source: String,
+}
+
+/// `marketplace.install` — fetch, validate and install; the no-local-code rule applies.
+async fn marketplace_install(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MarketplaceInstallReply, ApiError> {
+    let request: MarketplaceInstallRequest = parse(&body)?;
+    let outcome =
+        usecases::marketplace_install(state.app(), &auth.actor.context, &request.source).await?;
+    Ok(MarketplaceInstallReply {
+        install: plugin_install_view(outcome),
+    })
 }

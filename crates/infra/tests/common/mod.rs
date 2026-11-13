@@ -518,6 +518,7 @@ pub async fn computer_app(
             default: "anthropic/claude-sonnet".to_owned(),
         },
         Arc::new(boma_testkit::ScriptedMcpTransport::new()),
+        Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
     )
     .with_computers(runtime);
     let app = boma_app::App::new(
@@ -552,6 +553,7 @@ pub async fn computer_app(
                 pool.clone(),
                 boma_infra::SecretBox::ephemeral(),
             )),
+            Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReactionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReadStateStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresRosterStore::new(pool.clone())),

@@ -10,11 +10,11 @@ use boma_infra::{
     PostgresAuditStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
     PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresInvitationStore,
     PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresPendingToolCallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
-    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
-    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
-    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresPendingToolCallStore, PostgresPluginInstallStore, PostgresPluginSubmissionStore,
+    PostgresRateLimitStore, PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore,
+    PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore,
+    PostgresSessionStore, PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -91,6 +91,9 @@ fn build_app(
         boma_infra::HttpConnectorRunner::new()
             .context("the connector runner could not be built")?,
     );
+    let plugin_fetcher = Arc::new(
+        boma_infra::GitHubPluginFetcher::new().context("the plugin fetcher could not be built")?,
+    );
     Ok(App::new(
         Stores::new(
             Arc::new(PostgresAccountStore::new(pool.clone())),
@@ -114,6 +117,7 @@ fn build_app(
             Arc::new(PostgresMcpServerStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresAuditStore::new(pool.clone())),
             Arc::new(PostgresConnectorStore::new(pool.clone(), secrets_vault()?)),
+            Arc::new(PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -137,6 +141,7 @@ fn build_app(
                     default: "anthropic/claude-sonnet".to_owned(),
                 },
                 mcp_transport,
+                plugin_fetcher,
             )
             .with_connectors(connector_runner);
             match computer {

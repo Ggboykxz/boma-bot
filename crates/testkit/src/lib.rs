@@ -40,15 +40,16 @@ pub use memory::{
     MemoryAccountStore, MemoryAuditStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore,
     MemoryConnectorStore, MemoryDatabase, MemoryEffectStore, MemoryEventPublisher,
     MemoryEventStore, MemoryInvitationStore, MemoryMcpServerStore, MemoryMemoryStore,
-    MemoryMessageStore, MemoryPendingToolCallStore, MemoryPluginSubmissionStore,
-    MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
-    MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,
-    MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore,
-    MemoryUserStore, Organization, RecordedSubmission,
+    MemoryMessageStore, MemoryPendingToolCallStore, MemoryPluginInstallStore,
+    MemoryPluginSubmissionStore, MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore,
+    MemoryRosterStore, MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore,
+    MemorySecretStore, MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore,
+    MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall, RecordedSkill,
+    RecordedSubmission,
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedConnectorRunner,
-    ScriptedIds, ScriptedMcpTransport, ScriptedProvider, ScriptedTokens,
+    ScriptedIds, ScriptedMcpTransport, ScriptedPluginFetcher, ScriptedProvider, ScriptedTokens,
 };
 
 /// The application crate, re-exported so that a test needs only one dependency.
