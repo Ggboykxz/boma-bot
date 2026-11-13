@@ -1571,6 +1571,37 @@ pub trait PendingToolCallStore: Send + Sync {
     ) -> Result<PendingToolCall, AppError>;
 }
 
+/// What one rate-limit hit recorded (D-01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimitDecision {
+    /// Hits registered in this window, including this one.
+    pub count: u64,
+    /// The window this hit belongs to, in seconds since the epoch, aligned.
+    pub bucket: i64,
+}
+
+/// A shared counter for rate limits, shared across replicas (D-01).
+///
+/// The expensive part of "rate limit" is remembering how many hits there were. This store is
+/// the cheapest honest answer: a bucket per key, a row per bucket, an upsert per hit. Process
+/// memory is not a correct answer for a replicated deployment; this is the same counter no
+/// matter which replica serves the request.
+#[async_trait]
+pub trait RateLimitStore: Send + Sync {
+    /// Registers one hit for `key` in the `window_seconds`-aligned bucket of `now` (RFC 3339),
+    /// and answers with the count it recorded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend cannot answer.
+    async fn hit(
+        &self,
+        key: &str,
+        now: &str,
+        window_seconds: u64,
+    ) -> Result<RateLimitDecision, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

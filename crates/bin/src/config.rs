@@ -144,7 +144,7 @@ impl Config {
             &env,
             "BOMA_SESSION_TTL_SECONDS",
             HttpConfig::DEFAULT_SESSION_TTL_SECONDS,
-        )?)
+        )?)?
         .with_secure_cookies(optional_parsed(&env, "BOMA_SECURE_COOKIES", true)?);
 
         let format = match optional(&env, "BOMA_LOG_FORMAT").as_deref() {

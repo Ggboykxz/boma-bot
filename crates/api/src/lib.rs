@@ -9,6 +9,7 @@
 pub mod auth;
 pub mod authcap;
 pub mod authroutes;
+pub mod client;
 pub mod config;
 pub mod error;
 pub mod health;

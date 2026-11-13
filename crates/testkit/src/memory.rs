@@ -253,6 +253,17 @@ struct CardRow {
     space_id: SpaceId,
 }
 
+/// One rate-limit bucket: how many hits this key recorded, in this window (D-01).
+#[derive(Debug, Clone)]
+struct RateLimitBucketRow {
+    /// The client key the counter belongs to.
+    key: String,
+    /// The window bucket, in seconds since the epoch.
+    bucket: i64,
+    /// Hits registered in this bucket so far.
+    hits: u64,
+}
+
 /// A tool call waiting on an approval (REQ-017).
 #[derive(Debug, Clone)]
 struct PendingToolCallRow {
@@ -342,6 +353,8 @@ struct State {
     cards: Vec<CardRow>,
     /// The tool calls waiting on an approval (REQ-017).
     pending_tool_calls: Vec<PendingToolCallRow>,
+    /// The rate-limit buckets shared across the process (D-01).
+    rate_limits: Vec<RateLimitBucketRow>,
     /// The reactions people left on messages.
     reactions: Vec<ReactionRow>,
     /// The read position of each person, per conversation.
@@ -519,6 +532,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn pending_tool_calls(&self) -> MemoryPendingToolCallStore {
         MemoryPendingToolCallStore::new(self)
+    }
+
+    /// The store of rate-limit buckets (D-01).
+    #[must_use]
+    pub fn rate_limits(&self) -> MemoryRateLimitStore {
+        MemoryRateLimitStore::new(self)
     }
 
     /// The store of effects.
@@ -2154,6 +2173,73 @@ impl CardStore for MemoryCardStore {
         row.card.answered_at = Some("2026-01-01T00:00:00Z".to_owned());
         Ok(row.card.clone())
     }
+}
+
+/// The store of shared rate-limit buckets (D-01).
+///
+/// Fixed window buckets, one per `(key, bucket)`. Two processes sharing the same database see
+/// the same count; the in-memory adapter is the single-process equivalent used by tests.
+#[derive(Debug, Clone)]
+pub struct MemoryRateLimitStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryRateLimitStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryRateLimitStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::RateLimitStore for MemoryRateLimitStore {
+    async fn hit(
+        &self,
+        key: &str,
+        now: &str,
+        window_seconds: u64,
+    ) -> Result<boma_app::ports::RateLimitDecision, AppError> {
+        let bucket = bucket_of(now, window_seconds)?;
+        let mut state = write(&self.state);
+        let entry = state
+            .rate_limits
+            .iter_mut()
+            .find(|row| row.key == key && row.bucket == bucket);
+        if let Some(row) = entry {
+            row.hits += 1;
+            Ok(boma_app::ports::RateLimitDecision {
+                count: row.hits,
+                bucket,
+            })
+        } else {
+            state.rate_limits.push(RateLimitBucketRow {
+                key: key.to_owned(),
+                bucket,
+                hits: 1,
+            });
+            Ok(boma_app::ports::RateLimitDecision { count: 1, bucket })
+        }
+    }
+}
+
+/// The window a moment belongs to, in seconds aligned to `window_seconds`.
+fn bucket_of(now: &str, window_seconds: u64) -> Result<i64, AppError> {
+    let at = time::OffsetDateTime::parse(now, &time::format_description::well_known::Rfc3339)
+        .map_err(|_| AppError::Unavailable)?;
+    let window = i64::try_from(window_seconds).map_err(|_| AppError::Unavailable)?;
+    if window <= 0 {
+        return Err(AppError::Unavailable);
+    }
+    Ok(at.unix_timestamp() / window)
 }
 
 /// The store of pending tool calls (REQ-017).

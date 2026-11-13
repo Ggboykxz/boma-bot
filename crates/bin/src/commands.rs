@@ -9,10 +9,10 @@ use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresEffectStore,
     PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresPendingToolCallStore, PostgresReactionStore, PostgresReadStateStore,
-    PostgresRosterStore, PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore,
-    PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore, PostgresToolStore,
-    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresPendingToolCallStore, PostgresRateLimitStore, PostgresReactionStore,
+    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
+    PostgresScreenCapabilityStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -61,10 +61,13 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         "boma is listening"
     );
 
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("the HTTP server stopped with an error")
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("the HTTP server stopped with an error")
 }
 
 /// Builds the application from the Postgres pool, with the selected computer backend attached.
@@ -87,6 +90,7 @@ fn build_app(database: &Postgres, computer: Option<Arc<dyn ComputerRuntime>>) ->
             Arc::new(PostgresPendingToolCallStore::new(pool.clone())),
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
+            Arc::new(PostgresRateLimitStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

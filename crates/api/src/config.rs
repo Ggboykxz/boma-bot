@@ -28,6 +28,16 @@ pub enum HttpConfigError {
     /// The readiness deadline is longer than the whole request deadline.
     #[error("the readiness timeout must not exceed the request timeout")]
     ReadinessTimeoutTooLong,
+    /// `BOMA_SESSION_TTL_SECONDS` is outside the accepted bounds.
+    #[error("`BOMA_SESSION_TTL_SECONDS` must be between {min} and {max}, got {value}")]
+    SessionLifetimeOutOfRange {
+        /// Value the operator supplied.
+        value: i64,
+        /// Smallest accepted value.
+        min: i64,
+        /// Largest accepted value.
+        max: i64,
+    },
 }
 
 /// How the HTTP server behaves.
@@ -52,6 +62,10 @@ impl HttpConfig {
     pub const MAX_BODY_BYTES: usize = 1024 * 1024;
     /// How long a session lives when the operator does not say: 30 days.
     pub const DEFAULT_SESSION_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
+    /// Smallest accepted session lifetime: five minutes.
+    pub const MIN_SESSION_TTL_SECONDS: i64 = 300;
+    /// Largest accepted session lifetime: sixty days.
+    pub const MAX_SESSION_TTL_SECONDS: i64 = 60 * 24 * 60 * 60;
     /// How long an invitation stays valid when the operator does not say: 7 days.
     pub const DEFAULT_INVITATION_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 
@@ -104,11 +118,23 @@ impl HttpConfig {
     /// Sets how long a session lives.
     ///
     /// A session is a credential, so its lifetime is a security setting, not a default to be
-    /// forgotten: the operator states it (D-08).
-    #[must_use]
-    pub const fn with_session_ttl_seconds(mut self, seconds: i64) -> Self {
+    /// forgotten: the operator states it (D-08), and the accepted range is bounded rather than
+    /// any number passing silently.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpConfigError::SessionLifetimeOutOfRange`] when `seconds` is outside the
+    /// accepted bounds.
+    pub fn with_session_ttl_seconds(mut self, seconds: i64) -> Result<Self, HttpConfigError> {
+        if !(Self::MIN_SESSION_TTL_SECONDS..=Self::MAX_SESSION_TTL_SECONDS).contains(&seconds) {
+            return Err(HttpConfigError::SessionLifetimeOutOfRange {
+                value: seconds,
+                min: Self::MIN_SESSION_TTL_SECONDS,
+                max: Self::MAX_SESSION_TTL_SECONDS,
+            });
+        }
         self.session_ttl_seconds = seconds;
-        self
+        Ok(self)
     }
 
     /// Sets whether the session cookie carries the `Secure` attribute.
@@ -224,6 +250,54 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(outcome, Err(HttpConfigError::ReadinessTimeoutTooLong));
+    }
+
+    #[test]
+    fn d_08_the_session_lifetime_is_bounded() {
+        for seconds in [
+            0,
+            HttpConfig::MIN_SESSION_TTL_SECONDS - 1,
+            HttpConfig::MAX_SESSION_TTL_SECONDS + 1,
+        ] {
+            let outcome = HttpConfig::new(
+                loopback(),
+                Duration::from_secs(30),
+                Duration::from_secs(5),
+                8192,
+                Vec::new(),
+            )
+            .expect("the fixture is valid")
+            .with_session_ttl_seconds(seconds);
+            assert!(matches!(
+                outcome,
+                Err(HttpConfigError::SessionLifetimeOutOfRange { .. })
+            ));
+        }
+        let config = HttpConfig::new(
+            loopback(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            8192,
+            Vec::new(),
+        )
+        .expect("the fixture is valid")
+        .with_session_ttl_seconds(86_400)
+        .expect("a day is accepted");
+        assert_eq!(config.session_ttl_seconds(), 86_400);
+        assert_eq!(HttpConfig::DEFAULT_SESSION_TTL_SECONDS, 30 * 24 * 60 * 60);
+    }
+
+    #[test]
+    fn d_08_the_secure_cookies_default_to_true() {
+        let config = HttpConfig::new(
+            loopback(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            8192,
+            Vec::new(),
+        )
+        .expect("the fixture is valid");
+        assert!(config.secure_cookies());
     }
 
     #[test]

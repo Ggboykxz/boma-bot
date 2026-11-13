@@ -91,6 +91,7 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryPendingToolCallStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryEffectStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryToolStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryRateLimitStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReactionStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReadStateStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryRosterStore::default()),
@@ -234,6 +235,41 @@ async fn req_054_every_health_answer_carries_a_request_id_and_no_store() {
             "{path}"
         );
     }
+}
+
+async fn post_bytes(state: AppState, path: &str, bytes: usize) -> Response {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-length", bytes.to_string())
+        .header("content-type", "application/octet-stream")
+        .body(Body::from(vec![b'x'; bytes]))
+        .expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+#[tokio::test]
+async fn d_07_the_global_rpc_cap_refuses_an_oversized_body() {
+    // 128 KiB is past the fixture's 64 KiB global limit; the body never reaches the handler.
+    let response = post_bytes(state(true), "/rpc/threads/send", 128 * 1024).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn d_07_per_procedure_caps_hold() {
+    // The screen route is capped at 16 KiB even though the global limit is higher in this
+    // fixture: per-procedure caps are enforced before the handler runs.
+    let response = post_bytes(state(true), "/api/internal/screen-target", 32 * 1024).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let response = post_bytes(state(true), "/api/internal/screen-target", 8 * 1024).await;
+    assert_ne!(
+        response.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "a body within the cap reaches the handler"
+    );
 }
 
 #[tokio::test]

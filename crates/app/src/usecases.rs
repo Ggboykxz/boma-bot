@@ -313,6 +313,24 @@ pub async fn find_bot(app: &App, context: &TenantContext, bot_id: &str) -> Resul
         .ok_or(AppError::NotFound)
 }
 
+/// Registers one hit against a shared rate limit and answers with the recorded count (D-01).
+///
+/// The count comes from the backend all replicas share — never from this process' memory — so
+/// refusing an over-limit caller is an honest decision no matter which replica serves them.
+/// The decision itself belongs to the caller: the auth endpoints own their limits.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+pub async fn hit_rate_limit(
+    app: &App,
+    key: &str,
+    window_seconds: u64,
+) -> Result<crate::ports::RateLimitDecision, AppError> {
+    let now = app.services.clock.now();
+    app.stores.rate_limits.hit(key, &now, window_seconds).await
+}
+
 /// A message to send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendMessage {

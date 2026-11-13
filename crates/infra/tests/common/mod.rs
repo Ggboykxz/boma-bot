@@ -535,6 +535,7 @@ pub async fn computer_app(
             Arc::new(boma_infra::PostgresPendingToolCallStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresEffectStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresToolStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresRateLimitStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReactionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReadStateStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresRosterStore::new(pool.clone())),

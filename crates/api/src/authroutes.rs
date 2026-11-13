@@ -7,10 +7,44 @@
 use axum::{
     Json,
     extract::State,
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use boma_app::usecases;
+
+use crate::client::ClientAddr;
+
+/// The rate limit for auth endpoints: how many attempts an IP gets per window (D-01).
+/// Ten sign-in attempts per five minutes is strict enough against credential stuffing and
+/// lenient enough for a person mistyping; sign-up is rarer, so fewer and a wider window.
+const SIGN_IN_WINDOW_SECONDS: u64 = 300;
+const SIGN_IN_MAX_ATTEMPTS: u64 = 10;
+const SIGN_UP_WINDOW_SECONDS: u64 = 600;
+const SIGN_UP_MAX_ATTEMPTS: u64 = 5;
+
+/// Refusing an over-limit caller before any password or account check happens.
+async fn over_limit(
+    state: &AppState,
+    peer: Option<std::net::SocketAddr>,
+    headers: &HeaderMap,
+    bucket: &str,
+    window: u64,
+    max: u64,
+) -> Result<(), ApiError> {
+    let client_ip = crate::client::resolve_client_ip(peer, headers, state.http().trusted_proxies());
+    let key = format!("auth:{bucket}:{client_ip}");
+    let decision = match usecases::hit_rate_limit(state.app(), &key, window).await {
+        Ok(decision) => decision,
+        Err(error) => return Err(ApiError::from(error)),
+    };
+    if decision.count > max {
+        return Err(ApiError::new(
+            crate::error::ErrorCode::TooManyRequests,
+            "Too many attempts; wait and try again.",
+        ));
+    }
+    Ok(())
+}
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -73,8 +107,19 @@ pub struct SessionReply {
 /// use case raises when the address is refused or already taken.
 pub async fn sign_up(
     State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
+    over_limit(
+        &state,
+        peer,
+        &headers,
+        "sign-up",
+        SIGN_UP_WINDOW_SECONDS,
+        SIGN_UP_MAX_ATTEMPTS,
+    )
+    .await?;
     let request: SignUpRequest = parse(&body)?;
     let name = request
         .name
@@ -111,8 +156,19 @@ pub async fn sign_up(
 /// [`ApiError::InvalidCredentials`] when the pair does not match an account.
 pub async fn sign_in(
     State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
+    over_limit(
+        &state,
+        peer,
+        &headers,
+        "sign-in",
+        SIGN_IN_WINDOW_SECONDS,
+        SIGN_IN_MAX_ATTEMPTS,
+    )
+    .await?;
     let request: SignInRequest = parse(&body)?;
     let grant = usecases::sign_in(
         state.app(),

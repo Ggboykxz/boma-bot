@@ -562,6 +562,105 @@ async fn req_041_a_sign_in_sets_a_session_cookie_that_carries_no_token_in_the_bo
 }
 
 #[tokio::test]
+async fn d_01_sign_in_is_refused_after_the_rate_limit_for_one_ip() {
+    let test_app = TestApp::builder().build();
+    test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+
+    // Ten wrong attempts pass through the password check (and are refused with 401); the
+    // eleventh must be refused before the password is ever checked, with 429 and the shared
+    // envelope. The frozen test clock keeps every attempt in one bucket.
+    for attempt in 1..=10 {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/sign-in")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"email":"person@example.com","password":"wrong password entirely"}"#,
+            ))
+            .expect("the request builds");
+        let response = router(state(&test_app))
+            .oneshot(request)
+            .await
+            .expect("the router answers");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "attempt {attempt} is still served"
+        );
+    }
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/auth/sign-in")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"email":"person@example.com","password":"wrong password entirely"}"#,
+        ))
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = json(response).await;
+    assert_eq!(body["code"], serde_json::json!("TOO_MANY_REQUESTS"));
+    // The person is told why without saying which half was wrong.
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|message| !message.contains("password"))
+    );
+}
+
+#[tokio::test]
+async fn d_01_sign_up_has_a_tighter_limit_than_sign_in() {
+    let test_app = TestApp::builder().build();
+    // Five sign-ups pass with the validation the request meets; the sixth must be refused
+    // before any validation runs, with 429.
+    for attempt in 1..=5 {
+        let email = format!("person{attempt}@example.com");
+        let body = serde_json::json!({
+            "email": email,
+            "password": "correct horse battery",
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/sign-up")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("the request builds");
+        let response = router(state(&test_app))
+            .oneshot(request)
+            .await
+            .expect("the router answers");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "attempt {attempt} is still served"
+        );
+    }
+
+    let body = serde_json::json!({
+        "email": "person6@example.com",
+        "password": "correct horse battery",
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/auth/sign-up")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
 async fn req_041_a_sign_in_with_the_wrong_password_is_refused_without_saying_why() {
     let test_app = TestApp::builder().build();
     test_app

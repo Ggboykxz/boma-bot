@@ -39,10 +39,10 @@ pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
     MemoryAccountStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryDatabase,
     MemoryEffectStore, MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore,
-    MemoryMemoryStore, MemoryMessageStore, MemoryPendingToolCallStore, MemoryReactionStore,
-    MemoryReadStateStore, MemoryRosterStore, MemoryRoutineStore, MemoryRunStore,
-    MemoryScreenCapabilityStore, MemorySessionStore, MemorySpaceStore, MemoryThreadStore,
-    MemoryToolStore, MemoryUserStore, Organization,
+    MemoryMemoryStore, MemoryMessageStore, MemoryPendingToolCallStore, MemoryRateLimitStore,
+    MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore, MemoryRoutineStore,
+    MemoryRunStore, MemoryScreenCapabilityStore, MemorySessionStore, MemorySpaceStore,
+    MemoryThreadStore, MemoryToolStore, MemoryUserStore, Organization,
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedIds,

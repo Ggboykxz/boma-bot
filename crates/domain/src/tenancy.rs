@@ -161,4 +161,31 @@ mod tests {
             "a free-text reason is refused"
         );
     }
+
+    #[test]
+    fn d_09_a_caller_supplied_reason_string_is_refused() {
+        // The escape hatch is a typed enum; a caller who hands-writes a reason from outside the
+        // vocabulary cannot smuggle a system context past the parser (D-09).
+        for entry in [
+            "",
+            "boots",
+            "admin",
+            "root",
+            "SCHEDULED_JOB",
+            "scheduled-job",
+            "scheduled job",
+            "data_migration ",
+        ] {
+            assert!(
+                SystemReason::parse(entry).is_err(),
+                "the reason {entry:?} must not enter a system context"
+            );
+        }
+        for reason in SystemReason::ALL {
+            assert_eq!(
+                SystemReason::parse(reason.as_str()).expect("a known reason parses"),
+                reason
+            );
+        }
+    }
 }

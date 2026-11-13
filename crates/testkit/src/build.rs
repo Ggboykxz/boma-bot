@@ -355,6 +355,7 @@ impl TestAppBuilder {
             Arc::new(database.pending_tool_calls()),
             Arc::new(database.effects()),
             Arc::new(database.tools()),
+            Arc::new(database.rate_limits()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
