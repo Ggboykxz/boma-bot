@@ -329,6 +329,7 @@ impl ComputerRuntime for DockerComputerRuntime {
         external_id: &str,
         command: &str,
         output_cap: usize,
+        env: &[(String, String)],
     ) -> Result<String, AppError> {
         let exec = self
             .docker
@@ -339,6 +340,11 @@ impl ComputerRuntime for DockerComputerRuntime {
                     attach_stdout: Some(true),
                     attach_stdin: Some(false),
                     attach_stderr: Some(false),
+                    env: Some(
+                        env.iter()
+                            .map(|(key, value)| format!("{key}={value}"))
+                            .collect(),
+                    ),
                     ..Default::default()
                 },
             )
@@ -559,6 +565,7 @@ impl ComputerRuntime for NoneComputerRuntime {
         _external_id: &str,
         _command: &str,
         _output_cap: usize,
+        _env: &[(String, String)],
     ) -> Result<String, AppError> {
         Err(AppError::Unavailable)
     }

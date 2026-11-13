@@ -57,11 +57,13 @@ maintenance, licence, simplicity).
 | `reqwest` | 0.13.5 | MIT OR Apache-2.0 | the BYOK HTTP client (REQ-015); `rustls` for TLS, no default features pulled, 60s timeout, minimal features |
 | `secrecy` | 0.10.3 | Apache-2.0 OR MIT | the operator's provider key and the passkey material never log or format (REQ-015, REQ-040); `zeroize` on drop |
 | `wiremock` | 0.6.5 | MIT OR Apache-2.0 | loopback wire server for the BYOK fixture replay tests (REQ-015); dev-dependency only, never in a release binary |
+| `aes-gcm` | 0.11.1 | Apache-2.0 OR MIT | AES-256-GCM seal for bot secrets and the per-space data keys (REQ-046, ADR-020); `aes`, `cipher`, `aead` come with it |
+| `getrandom` | 0.4.3 | MIT OR Apache-2.0 | fresh nonces and the per-space DEKs (REQ-046); direct `getrandom::fill`, no rand-wrapper needed |
 
-Deliberately **not** added yet, so no unused dependency rots in the tree: `aes-gcm`, `proptest`,
-`testcontainers`, `criterion`, `cargo-llvm-cov`. Each arrives with the milestone that needs it
-(M6/M8 for crypto, M14/M16 for tooling). `wiremock`, `secrecy` and `reqwest` landed with the BYOK
-adapter in before-M5 Phase 3.
+Deliberately **not** added yet, so no unused dependency rots in the tree: `proptest`,
+`testcontainers`, `criterion`, `cargo-llvm-cov`. Each arrives with the milestone that needs it.
+`wiremock`, `secrecy` and `reqwest` landed with the BYOK adapter in before-M5 Phase 3; `aes-gcm`
+and `getrandom` landed with the bot-secrets slice (REQ-046).
 
 **YAML parser (deliberate).** The contract test parses the spec's OpenAPI document, so one YAML
 parser is needed. `serde_yaml_ng` was replaced by **`serde-saphyr` 2.1.1** (published 2026-11-05,

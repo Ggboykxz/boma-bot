@@ -1210,7 +1210,8 @@ pub trait ComputerRuntime: Send + Sync {
     /// Runs a shell command inside the computer and returns stdout (REQ-028).
     ///
     /// Output is capped at `output_cap` bytes. The exit code is not an error condition: the
-    /// caller reads stdout or nothing, exactly like a shell tool.
+    /// caller reads stdout or nothing, exactly like a shell tool. Environment variables are
+    /// passed to the process; values that cross this boundary never enter a message or the log.
     ///
     /// # Errors
     ///
@@ -1220,6 +1221,7 @@ pub trait ComputerRuntime: Send + Sync {
         external_id: &str,
         command: &str,
         output_cap: usize,
+        env: &[(String, String)],
     ) -> Result<String, AppError>;
 
     /// Whether a frame command is configured for the images this runtime boots.
@@ -1600,6 +1602,92 @@ pub trait RateLimitStore: Send + Sync {
         now: &str,
         window_seconds: u64,
     ) -> Result<RateLimitDecision, AppError>;
+}
+
+/// What a store keeps for a sealed secret: the ciphertext and its own nonce.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedSecret {
+    /// The AES-256-GCM ciphertext.
+    pub ciphertext: Vec<u8>,
+    /// The 12-byte nonce this ciphertext was sealed under.
+    pub nonce: Vec<u8>,
+}
+
+/// A secret as the store exposes it: a name, never the value (REQ-046).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretSummary {
+    /// The identifier stored under the bot (e.g. `OPENAI_KEY`).
+    pub name: String,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// What a caller hands in to seal and store (REQ-046).
+///
+/// The plaintext crosses the port boundary in-process (same address space, never the log or a
+/// socket); the store seals it under the space's data-encryption key before anything persists.
+#[derive(Debug, Clone)]
+pub struct NewBotSecret {
+    /// The secret's id.
+    pub id: String,
+    /// The bot the secret belongs to.
+    pub bot_id: boma_domain::BotId,
+    /// The name the secret will be stored under.
+    pub name: String,
+    /// The value to seal.
+    pub value: secrecy::SecretString,
+    /// When the secret was written.
+    pub created_at: String,
+}
+
+/// Stores bot secrets write-only (REQ-046).
+#[async_trait]
+pub trait SecretStore: Send + Sync {
+    /// Seals and stores a value under the bot-scoped name, replacing any previous one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and an
+    /// error when the database refuses the write.
+    async fn put(&self, context: &TenantContext, secret: NewBotSecret) -> Result<(), AppError>;
+
+    /// The names of the bot's secrets, newest first. Never values, never ciphertexts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Vec<SecretSummary>, AppError>;
+
+    /// Removes a secret. Deleting a name that is not there is a success, not an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn delete(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+        name: &str,
+    ) -> Result<bool, AppError>;
+
+    /// The value, for the computer executor only.
+    ///
+    /// Never called for an API response: the only caller is the shell-out path, which places the
+    /// value in the process environment (REQ-046). Returns `None` for an unknown secret.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer or the seal does not authenticate.
+    async fn reveal(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+        name: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError>;
 }
 
 /// A memory document carried into a provider turn (REQ-022).

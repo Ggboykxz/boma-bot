@@ -264,6 +264,143 @@ struct RateLimitBucketRow {
     hits: u64,
 }
 
+/// One stored bot secret (REQ-046). The fake keeps the value like the real store seals it:
+/// in RAM, never exposed through list.
+#[derive(Debug, Clone)]
+struct SecretRow {
+    /// The bot the secret belongs to.
+    bot_id: BotId,
+    /// The name the secret is stored under.
+    name: String,
+    /// The value, held as a secret string.
+    value: secrecy::SecretString,
+    /// When it was written.
+    created_at: String,
+}
+
+/// The store of bot secrets (REQ-046). Write-only: the summaries never carry the value.
+#[derive(Debug, Clone)]
+pub struct MemorySecretStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemorySecretStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemorySecretStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::SecretStore for MemorySecretStore {
+    async fn put(
+        &self,
+        context: &TenantContext,
+        secret: boma_app::ports::NewBotSecret,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let Some(bot) = state.bots.iter().find(|row| row.bot.id == secret.bot_id) else {
+            return Err(AppError::NotFound);
+        };
+        let space_id = bot.bot.space_id.clone();
+        if !visible(context, &space_id) {
+            return Err(AppError::NotFound);
+        }
+        let existing = state
+            .bot_secrets
+            .iter_mut()
+            .find(|row| row.bot_id == secret.bot_id && row.name == secret.name);
+        match existing {
+            Some(row) => {
+                row.value = secret.value;
+                row.created_at = secret.created_at;
+            }
+            None => state.bot_secrets.push(SecretRow {
+                bot_id: secret.bot_id,
+                name: secret.name,
+                value: secret.value,
+                created_at: secret.created_at,
+            }),
+        }
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        context: &TenantContext,
+        bot_id: &BotId,
+    ) -> Result<Vec<boma_app::ports::SecretSummary>, AppError> {
+        let state = read(&self.state);
+        let Some(bot) = state.bots.iter().find(|row| row.bot.id == *bot_id) else {
+            return Ok(Vec::new());
+        };
+        let space_id = bot.bot.space_id.clone();
+        if !visible(context, &space_id) {
+            return Ok(Vec::new());
+        }
+        let mut summaries: Vec<boma_app::ports::SecretSummary> = state
+            .bot_secrets
+            .iter()
+            .filter(|row| row.bot_id == *bot_id)
+            .map(|row| boma_app::ports::SecretSummary {
+                name: row.name.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect();
+        summaries.reverse();
+        Ok(summaries)
+    }
+
+    async fn delete(
+        &self,
+        context: &TenantContext,
+        bot_id: &BotId,
+        name: &str,
+    ) -> Result<bool, AppError> {
+        let mut state = write(&self.state);
+        let Some(bot) = state.bots.iter().find(|row| row.bot.id == *bot_id) else {
+            return Ok(false);
+        };
+        if !visible(context, &bot.bot.space_id) {
+            return Ok(false);
+        }
+        let before = state.bot_secrets.len();
+        state
+            .bot_secrets
+            .retain(|row| !(row.bot_id == *bot_id && row.name == name));
+        Ok(state.bot_secrets.len() != before)
+    }
+
+    async fn reveal(
+        &self,
+        context: &TenantContext,
+        bot_id: &BotId,
+        name: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        let state = read(&self.state);
+        let Some(bot) = state.bots.iter().find(|row| row.bot.id == *bot_id) else {
+            return Ok(None);
+        };
+        if !visible(context, &bot.bot.space_id) {
+            return Ok(None);
+        }
+        Ok(state
+            .bot_secrets
+            .iter()
+            .find(|row| row.bot_id == *bot_id && row.name == name)
+            .map(|row| row.value.clone()))
+    }
+}
+
 /// A tool call waiting on an approval (REQ-017).
 #[derive(Debug, Clone)]
 struct PendingToolCallRow {
@@ -355,6 +492,8 @@ struct State {
     pending_tool_calls: Vec<PendingToolCallRow>,
     /// The rate-limit buckets shared across the process (D-01).
     rate_limits: Vec<RateLimitBucketRow>,
+    /// The bot secrets, sealed (REQ-046).
+    bot_secrets: Vec<SecretRow>,
     /// The reactions people left on messages.
     reactions: Vec<ReactionRow>,
     /// The read position of each person, per conversation.
@@ -538,6 +677,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn rate_limits(&self) -> MemoryRateLimitStore {
         MemoryRateLimitStore::new(self)
+    }
+
+    /// The store of bot secrets (REQ-046).
+    #[must_use]
+    pub fn secrets(&self) -> MemorySecretStore {
+        MemorySecretStore::new(self)
     }
 
     /// The store of effects.

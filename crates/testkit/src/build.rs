@@ -268,6 +268,8 @@ pub struct TestAppBuilder {
     computers: bool,
     /// The answers the computer runtime hands out, when one is scripted.
     computer_answers: Vec<crate::ComputerAnswer>,
+    /// The computer runtime to use instead of a fresh scripted one.
+    runtime: Option<Arc<crate::ScriptedComputerRuntime>>,
 }
 
 impl Default for TestAppBuilder {
@@ -279,6 +281,7 @@ impl Default for TestAppBuilder {
             fixed_instant: None,
             computers: true,
             computer_answers: Vec::new(),
+            runtime: None,
         }
     }
 }
@@ -310,6 +313,14 @@ impl TestAppBuilder {
     pub fn computer_answers(mut self, answers: Vec<crate::ComputerAnswer>) -> Self {
         self.computers = true;
         self.computer_answers = answers;
+        self
+    }
+
+    /// Builds the application with this runtime instead of a fresh scripted one.
+    #[must_use]
+    pub fn computers_runtime(mut self, runtime: Arc<crate::ScriptedComputerRuntime>) -> Self {
+        self.computers = true;
+        self.runtime = Some(runtime);
         self
     }
 
@@ -356,6 +367,7 @@ impl TestAppBuilder {
             Arc::new(database.effects()),
             Arc::new(database.tools()),
             Arc::new(database.rate_limits()),
+            Arc::new(database.secrets()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -378,7 +390,9 @@ impl TestAppBuilder {
                 default: "anthropic/claude-sonnet".to_owned(),
             },
         );
-        let services = if self.computers {
+        let services = if let Some(runtime) = self.runtime {
+            services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
+        } else if self.computers {
             if self.computer_answers.is_empty() {
                 services.with_computers(Arc::new(crate::ScriptedComputerRuntime::default())
                     as Arc<dyn boma_app::ports::ComputerRuntime>)
@@ -3014,4 +3028,368 @@ async fn req_031_a_team_computer_is_shared_within_a_space() {
     assert_eq!(team_one.computer.screen_generation, 1);
     assert!(!team_two.started);
     assert_eq!(team_two.computer.screen_generation, 1);
+}
+
+#[cfg(test)]
+mod secrets_tests {
+    //! Secrets for bots (REQ-046): write-only storage, environment injection for shells.
+
+    use std::sync::Arc;
+
+    use secrecy::ExposeSecret;
+
+    use super::TestApp;
+
+    // REQ-046 — secrets for bots: write-only storage, environment injection for shells.
+
+    /// The usually-expected seed ids: user, org, space, bot, thread, computer.
+    fn req_046_seed_ids() -> Vec<String> {
+        vec![
+            "usr_1".to_owned(),
+            "org_1".to_owned(),
+            "spc_1".to_owned(),
+            "bot_1".to_owned(),
+            "thr_1".to_owned(),
+            "cmp_1".to_owned(),
+        ]
+    }
+
+    #[tokio::test]
+    async fn req_046_a_bot_secret_reaches_the_tool_environment_but_never_a_reply() {
+        let runtime = Arc::new(crate::ScriptedComputerRuntime::new(vec![
+            crate::ComputerAnswer::Started {
+                external_id: "ctr_1".to_owned(),
+                home_id: "vol_1".to_owned(),
+            },
+        ]));
+        let test = TestApp::builder()
+            .ids(req_046_seed_ids())
+            .computers_runtime(runtime.clone())
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the space exists");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = bot.bot.id.as_str().to_owned();
+
+        boma_app::usecases::bot_secret_set(
+            test.app(),
+            &context,
+            &bot_id,
+            "OPENAI_KEY",
+            secrecy::SecretString::from("s3cr3t-value".to_owned()),
+        )
+        .await
+        .expect("the secret is stored");
+
+        // The list answers names only, and nothing in the summary carries the value.
+        let secrets = boma_app::usecases::bot_secret_list(test.app(), &context, &bot_id)
+            .await
+            .expect("the list answers");
+        assert_eq!(secrets.len(), 1);
+        assert_eq!(secrets[0].name, "OPENAI_KEY");
+        assert!(!format!("{:?}", secrets[0]).contains("s3cr3t-value"));
+
+        // A shell runs with the variable present, the value never in the transcript of the call.
+        boma_app::usecases::ensure_computer(test.app(), &context, &bot_id, true)
+            .await
+            .expect("the computer answers");
+        boma_app::usecases::computer_shell(test.app(), &context, &bot_id, "env")
+            .await
+            .expect("the shell answers");
+        {
+            let requests = runtime.requests.lock().expect("the requests are recorded");
+            let env_line = requests
+                .iter()
+                .find(|line| line.starts_with("env="))
+                .expect("the shell call recorded its environment")
+                .clone();
+            assert_eq!(env_line, "env=BOMA_SECRET_OPENAI_KEY");
+            assert!(
+                !env_line.contains("s3cr3t-value"),
+                "the value never crosses in cleartext"
+            );
+        }
+
+        // A forgotten secret is gone from the environment too (REQ-046).
+        let removed =
+            boma_app::usecases::bot_secret_forget(test.app(), &context, &bot_id, "OPENAI_KEY")
+                .await
+                .expect("the forget answers");
+        assert!(removed);
+        let secrets = boma_app::usecases::bot_secret_list(test.app(), &context, &bot_id)
+            .await
+            .expect("the list answers");
+        assert_eq!(secrets.len(), 0, "no secret remains after the forget");
+        boma_app::usecases::computer_shell(test.app(), &context, &bot_id, "env")
+            .await
+            .expect("the shell answers");
+        {
+            let requests = runtime.requests.lock().expect("the requests are recorded");
+            let env_lines: Vec<&String> = requests
+                .iter()
+                .filter(|line| line.starts_with("env="))
+                .collect();
+            assert_eq!(
+                env_lines.last().map(|line| line.as_str()),
+                Some("env="),
+                "after forgetting, the shell sees an empty environment"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn req_046_setting_the_same_name_twice_replaces_the_value() {
+        let test = TestApp::builder()
+            .ids(req_046_seed_ids())
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the space exists");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = bot.bot.id.as_str().to_owned();
+
+        boma_app::usecases::bot_secret_set(
+            test.app(),
+            &context,
+            &bot_id,
+            "SERVICE_TOKEN",
+            secrecy::SecretString::from("first-value".to_owned()),
+        )
+        .await
+        .expect("the first value is stored");
+        boma_app::usecases::bot_secret_set(
+            test.app(),
+            &context,
+            &bot_id,
+            "SERVICE_TOKEN",
+            secrecy::SecretString::from("second-value".to_owned()),
+        )
+        .await
+        .expect("the replacement is stored");
+
+        let secrets = boma_app::usecases::bot_secret_list(test.app(), &context, &bot_id)
+            .await
+            .expect("the list answers");
+        assert_eq!(secrets.len(), 1, "replacing a name keeps one row");
+
+        let bot_id_ref = boma_domain::BotId::new(bot_id.clone()).expect("the id is valid");
+        let value = test
+            .app()
+            .stores
+            .secrets
+            .reveal(&context, &bot_id_ref, "SERVICE_TOKEN")
+            .await
+            .expect("the reveal answers")
+            .expect("the secret is there");
+        assert_eq!(value.expose_secret(), "second-value");
+    }
+
+    #[tokio::test]
+    async fn req_046_secrets_of_another_space_are_neither_writable_nor_listed() {
+        let test = TestApp::builder()
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let first_user = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the first person exists");
+        let second_user = test
+            .seed_user("other@example.com", "correct horse battery")
+            .await
+            .expect("the second person exists");
+        let first_space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&first_user)
+            .await
+            .expect("the store answers")
+            .expect("the space exists");
+        let second_space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&second_user)
+            .await
+            .expect("the store answers")
+            .expect("the second space exists");
+        let first_context = TestApp::member_context(&first_space.id, &first_user);
+        let second_context = TestApp::member_context(&second_space.id, &second_user);
+        let bot = boma_app::usecases::create_bot(test.app(), &first_context, "Analyst", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = bot.bot.id.as_str().to_owned();
+
+        let error = boma_app::usecases::bot_secret_list(test.app(), &second_context, &bot_id)
+            .await
+            .expect_err("another tenant cannot list the secret names");
+        assert!(matches!(error, boma_app::AppError::NotFound));
+        let error = boma_app::usecases::bot_secret_set(
+            test.app(),
+            &second_context,
+            &bot_id,
+            "OPENAI_KEY",
+            secrecy::SecretString::from("cross-tenant".to_owned()),
+        )
+        .await
+        .expect_err("another tenant cannot write the secret");
+        assert!(matches!(error, boma_app::AppError::NotFound));
+        let error = boma_app::usecases::bot_secret_forget(
+            test.app(),
+            &second_context,
+            &bot_id,
+            "OPENAI_KEY",
+        )
+        .await
+        .expect_err("another tenant cannot forget the secret");
+        assert!(matches!(error, boma_app::AppError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn req_046_the_name_must_look_like_an_environment_variable() {
+        let test = TestApp::builder()
+            .ids(req_046_seed_ids())
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the space exists");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = bot.bot.id.as_str().to_owned();
+
+        for bad in [
+            "openai_key",
+            "OpenAI",
+            "1KEY",
+            "OPENAI KEY",
+            "OPENAI-KEY",
+            "_KEY",
+        ] {
+            let outcome = boma_app::usecases::bot_secret_set(
+                test.app(),
+                &context,
+                &bot_id,
+                bad,
+                secrecy::SecretString::from("value".to_owned()),
+            )
+            .await;
+            assert!(
+                matches!(outcome, Err(boma_app::AppError::Rule(_))),
+                "{bad} is refused"
+            );
+        }
+        let too_long = "A".repeat(65);
+        let outcome = boma_app::usecases::bot_secret_set(
+            test.app(),
+            &context,
+            &bot_id,
+            &too_long,
+            secrecy::SecretString::from("value".to_owned()),
+        )
+        .await;
+        assert!(matches!(outcome, Err(boma_app::AppError::Rule(_))));
+
+        let just_right = "A".repeat(64);
+        boma_app::usecases::bot_secret_set(
+            test.app(),
+            &context,
+            &bot_id,
+            &just_right,
+            secrecy::SecretString::from("value".to_owned()),
+        )
+        .await
+        .expect("a 64-character name is stored");
+    }
+
+    #[tokio::test]
+    async fn req_046_forgetting_a_missing_secret_is_a_success() {
+        let test = TestApp::builder()
+            .ids(req_046_seed_ids())
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the space exists");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = bot.bot.id.as_str().to_owned();
+
+        // Forgetting something that was never stored succeeds quietly.
+        let removed =
+            boma_app::usecases::bot_secret_forget(test.app(), &context, &bot_id, "NEVER_STORED")
+                .await
+                .expect("the forget answers");
+        assert!(!removed);
+
+        boma_app::usecases::bot_secret_set(
+            test.app(),
+            &context,
+            &bot_id,
+            "TO_FORGET",
+            secrecy::SecretString::from("value".to_owned()),
+        )
+        .await
+        .expect("the secret is stored");
+        let removed =
+            boma_app::usecases::bot_secret_forget(test.app(), &context, &bot_id, "TO_FORGET")
+                .await
+                .expect("the forget answers");
+        assert!(removed);
+        // Deleting twice is not an error, and the second delete reports nothing there.
+        let removed =
+            boma_app::usecases::bot_secret_forget(test.app(), &context, &bot_id, "TO_FORGET")
+                .await
+                .expect("the forget answers");
+        assert!(!removed);
+    }
 }

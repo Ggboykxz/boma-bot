@@ -11,8 +11,9 @@ use boma_infra::{
     PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
     PostgresPendingToolCallStore, PostgresRateLimitStore, PostgresReactionStore,
     PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresScreenCapabilityStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
-    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSpaceStore,
+    PostgresThreadStore, PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock,
+    TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -43,7 +44,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             config.computer,
         )
     })?);
-    let app = build_app(&database, computer);
+    let app = build_app(&database, computer)?;
     let state = AppState::new(
         readiness,
         config.capabilities.clone(),
@@ -70,11 +71,19 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     .context("the HTTP server stopped with an error")
 }
 
-/// Builds the application from the Postgres pool, with the selected computer backend attached.
-fn build_app(database: &Postgres, computer: Option<Arc<dyn ComputerRuntime>>) -> App {
+/// The vault the deployment seals bot secrets with, read from `BOMA_MASTER_KEY` (REQ-046).
+fn secrets_vault() -> anyhow::Result<boma_infra::SecretBox> {
+    boma_infra::SecretBox::from_env(&std::env::vars().collect())
+        .context("the secret vault could not be built")
+}
+
+fn build_app(
+    database: &Postgres,
+    computer: Option<Arc<dyn ComputerRuntime>>,
+) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
-    App::new(
+    Ok(App::new(
         Stores::new(
             Arc::new(PostgresAccountStore::new(pool.clone())),
             Arc::new(PostgresUserStore::new(pool.clone())),
@@ -91,6 +100,7 @@ fn build_app(database: &Postgres, computer: Option<Arc<dyn ComputerRuntime>>) ->
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresRateLimitStore::new(pool.clone())),
+            Arc::new(PostgresSecretStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -119,7 +129,7 @@ fn build_app(database: &Postgres, computer: Option<Arc<dyn ComputerRuntime>>) ->
                 None => services,
             }
         },
-    )
+    ))
 }
 
 /// Drains the job queue until the process is asked to stop.
@@ -140,7 +150,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
             config.computer,
         )
     })?);
-    let app = Arc::new(build_app(&database, computer));
+    let app = Arc::new(build_app(&database, computer)?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);
     // otherwise the scripted provider keeps the deployment exercisable end to end.
@@ -195,6 +205,42 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
 /// It carries the process id, so two workers on the same box never share a lease.
 fn worker_owner() -> String {
     format!("worker-{}", std::process::id())
+}
+
+/// Re-wraps every space's data key under a new master key (REQ-046, DEC-10 option (a)).
+///
+/// Reads `BOMA_MASTER_KEY` (the current key) and `BOMA_NEW_MASTER_KEY` (the new one). Secret
+/// ciphertexts are never re-encrypted; only the wrapping rows change. The operator swaps
+/// `BOMA_MASTER_KEY` to the new value in the deployment after this command exits 0.
+///
+/// # Errors
+///
+/// Returns an error when either key is absent or malformed, the database is unreachable, or a
+/// row does not unwrap under the old key.
+pub async fn rekey(config: Config) -> anyhow::Result<()> {
+    let new_key = std::env::var("BOMA_NEW_MASTER_KEY")
+        .context("BOMA_NEW_MASTER_KEY is required (the new 64-hex master key)")?;
+    let old = secrets_vault()?;
+    anyhow::ensure!(
+        old.stable_key(),
+        "BOMA_MASTER_KEY must be set: re-wrapping under an ephemeral key is a no-op masquerading as a rotation"
+    );
+    let new = boma_infra::SecretBox::from_env(&std::collections::BTreeMap::from([(
+        "BOMA_MASTER_KEY".to_owned(),
+        new_key,
+    )]))
+    .context("BOMA_NEW_MASTER_KEY is not a valid 64-hex master key")?;
+    let database = Postgres::connect(&config.database)
+        .await
+        .context("cannot reach the database")?;
+    let updated = boma_infra::rekey_space_keys(database.pool(), &old, &new)
+        .await
+        .context("the re-wrap failed")?;
+    tracing::info!(
+        updated,
+        "space data keys re-wrapped under the new master key"
+    );
+    Ok(())
 }
 
 /// Applies every pending migration and exits.

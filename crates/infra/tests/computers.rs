@@ -16,8 +16,9 @@ use boma_infra::{
     PostgresEffectStore, PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore,
     PostgresMessageStore, PostgresPendingToolCallStore, PostgresRateLimitStore,
     PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSessionStore, PostgresSpaceStore,
-    PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock,
+    TokenGenerator,
 };
 use common::{cleanup, fixture, fresh_database};
 
@@ -59,6 +60,10 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresRateLimitStore::new(pool.clone())),
+            Arc::new(PostgresSecretStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

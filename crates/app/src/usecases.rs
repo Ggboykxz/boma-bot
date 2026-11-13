@@ -778,6 +778,105 @@ pub async fn memory_remove(
     })
 }
 
+/// The shape a secret's name must follow: it becomes an env var name (REQ-046).
+fn validate_secret_name(name: &str) -> Result<(), AppError> {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the secret's name is empty".to_owned(),
+        )));
+    };
+    if !first.is_ascii_uppercase()
+        || !chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        || name.len() > 64
+    {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the secret's name must look like an environment variable (A-Z, digits, underscore)"
+                .to_owned(),
+        )));
+    }
+    Ok(())
+}
+
+/// Sets a secret for a bot, write-only (REQ-046).
+///
+/// The plaintext never reaches the database, the log, an event or a message: it is sealed
+/// immediately and only the ciphertext is stored. The value is *never* echoed back — not in a
+/// response, not in an error, not in any later read (`REQ-046`).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist or the caller cannot see it, and
+/// [`AppError::Rule`] when the name is refused.
+pub async fn bot_secret_set(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    name: &str,
+    value: secrecy::SecretString,
+) -> Result<(), AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    validate_secret_name(name)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores
+        .secrets
+        .put(
+            context,
+            crate::ports::NewBotSecret {
+                id: app.services.ids.new_id("sec"),
+                bot_id,
+                name: name.to_owned(),
+                value,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+}
+
+/// Lists the names of a bot's secrets, newest first. Never the values or the ciphertexts (REQ-046).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist or the caller cannot see it.
+pub async fn bot_secret_list(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<Vec<crate::ports::SecretSummary>, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores.secrets.list(context, &bot_id).await
+}
+
+/// Forgets a secret. Deleting a name that is not there is a success, not an error (REQ-046).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist or the caller cannot see it.
+pub async fn bot_secret_forget(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    name: &str,
+) -> Result<bool, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    validate_secret_name(name)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores.secrets.delete(context, &bot_id, name).await
+}
+
 /// Resolves the `bot` or `shared` scope from the wire, checking what it names (REQ-022).
 async fn resolve_memory_scope(
     app: &App,
@@ -2014,7 +2113,39 @@ pub async fn computer_shell(
     let Some(external_id) = computer.external_id else {
         return Err(AppError::Unavailable);
     };
-    runtime.exec(&external_id, command, 64 * 1024).await
+    // The bot's secrets are available to its computer as environment, and nowhere else: the
+    // values never enter a message, the event stream or any tool result (REQ-046).
+    let env = secrets_env(app, context, &computer.bot_id).await?;
+    runtime.exec(&external_id, command, 64 * 1024, &env).await
+}
+
+/// The environment a shell call sees: each of the bot's secrets as its own env var.
+///
+/// The naming is public on purpose (`BOMA_SECRET_OPENAI_KEY`), the values are not. A secret the
+/// member forgot shows up as absent — the shell sees an empty environment, never an error
+/// naming which secret existed.
+async fn secrets_env(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &boma_domain::BotId,
+) -> Result<Vec<(String, String)>, AppError> {
+    use secrecy::ExposeSecret;
+    let mut env = Vec::new();
+    for summary in app.stores.secrets.list(context, bot_id).await? {
+        let Some(value) = app
+            .stores
+            .secrets
+            .reveal(context, bot_id, &summary.name)
+            .await?
+        else {
+            continue;
+        };
+        env.push((
+            format!("BOMA_SECRET_{}", summary.name),
+            value.expose_secret().to_owned(),
+        ));
+    }
+    Ok(env)
 }
 
 /// Reads a file from the bot's computer (REQ-028).

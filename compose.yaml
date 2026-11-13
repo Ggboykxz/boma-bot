@@ -20,6 +20,9 @@ x-app-environment: &app-environment
   BOMA_JOBS: postgres
   BOMA_REALTIME: postgres
   BOMA_DEGRADED: ${BOMA_DEGRADED:-false}
+  # Bot secrets vault (REQ-046). Empty means an ephemeral per-process key (a warning is logged):
+  # fine for a first boot, never for a real deployment. Losing this key loses every secret.
+  BOMA_MASTER_KEY: ${BOMA_MASTER_KEY:-}
 
 services:
   db:

@@ -677,6 +677,42 @@ pub struct RunsReply {
     pub next_cursor: Option<String>,
 }
 
+/// The reply of `botSecrets.set` (REQ-046). Write-only: never carries the value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretSetReply {
+    /// The name the secret is stored under.
+    pub name: String,
+}
+
+/// One stored secret's public face (REQ-046): a name, never a value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretView {
+    /// The identifier stored under the bot.
+    pub name: String,
+    /// When the secret was written.
+    pub created_at: String,
+}
+
+/// The reply of `botSecrets.list` (REQ-046): names only, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretsReply {
+    /// The stored secrets.
+    pub secrets: Vec<SecretView>,
+}
+
+/// The reply of `botSecrets.forget` (REQ-046). Deleting a missing name is a success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretForgetReply {
+    /// The name that was forgotten.
+    pub name: String,
+    /// Whether anything was there.
+    pub removed: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use boma_domain::{Block, MessageId, MessageRole, RunId, ThreadId};

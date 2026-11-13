@@ -28,8 +28,8 @@ use crate::{
         ComputerTakeoverReply, InvitationReply, MemoryDocumentReply, MemoryDocumentsReply,
         MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, ReactReply,
         RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
-        RoutinesReply, RunRetryReply, RunView, RunsReply, SendReply, SnoozeReply, SpaceReply,
-        ThreadHeadReply,
+        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
+        SecretView, SecretsReply, SendReply, SnoozeReply, SpaceReply, ThreadHeadReply,
     },
 };
 
@@ -49,6 +49,8 @@ pub mod namespaces {
     pub const ROUTINES: &str = "routines";
     /// The computer: a bot's sandbox (REQ-026..031).
     pub const COMPUTER: &str = "computer";
+    /// Secrets for bots, write-only (REQ-046).
+    pub const BOT_SECRETS: &str = "botSecrets";
 }
 
 /// Every procedure this deployment serves.
@@ -92,6 +94,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::COMPUTER, "release"),
         (namespaces::COMPUTER, "settings"),
         (namespaces::COMPUTER, "provider"),
+        (namespaces::BOT_SECRETS, "set"),
+        (namespaces::BOT_SECRETS, "list"),
+        (namespaces::BOT_SECRETS, "forget"),
     ]
 }
 
@@ -221,6 +226,15 @@ async fn dispatch(
         (namespaces::COMPUTER, "provider") => {
             Ok::<_, ApiError>(Json(computer_provider(state.app())).into_response())
         }
+        (namespaces::BOT_SECRETS, "set") => secrets_set(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOT_SECRETS, "list") => secrets_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOT_SECRETS, "forget") => secrets_forget(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
     };
 
@@ -1302,4 +1316,94 @@ pub fn requested_space(headers: &axum::http::HeaderMap) -> Option<String> {
         .or_else(|| headers.get(SPACE_HEADER_PREFIXED))
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+// Secrets for bots (REQ-046). Member-side only: the value the member sends is write-only, it is
+// sealed under the space's data-encryption key and is never echoed back — not in a reply, not in
+// an error, not in a log line. The list answers names and timestamps only.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SecretsSetRequest {
+    /// The bot the secret belongs to.
+    bot_id: String,
+    /// The name the secret is stored under; must look like an environment variable.
+    name: String,
+    /// The value to seal. Plaintext in the wire body, ciphertext at rest.
+    value: String,
+}
+
+/// `botSecrets.set` — seal and store a value under a bot-scoped name (REQ-046).
+async fn secrets_set(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SecretSetReply, ApiError> {
+    let request: SecretsSetRequest = parse(&body)?;
+    usecases::bot_secret_set(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.name,
+        secrecy::SecretString::from(request.value),
+    )
+    .await?;
+    Ok(SecretSetReply { name: request.name })
+}
+
+/// The body of `botSecrets.list` and of a bot-scoped forget (REQ-046).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SecretsBotRequest {
+    /// The bot whose secrets to answer for.
+    bot_id: String,
+}
+
+/// `botSecrets.list` — the names of the bot's secrets, newest first (REQ-046).
+async fn secrets_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SecretsReply, ApiError> {
+    let request: SecretsBotRequest = parse(&body)?;
+    let summaries =
+        usecases::bot_secret_list(state.app(), &auth.actor.context, &request.bot_id).await?;
+    Ok(SecretsReply {
+        secrets: summaries
+            .into_iter()
+            .map(|summary| SecretView {
+                name: summary.name,
+                created_at: summary.created_at,
+            })
+            .collect(),
+    })
+}
+
+/// The body of `botSecrets.forget` (REQ-046).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SecretsForgetRequest {
+    /// The bot whose secret is forgotten.
+    bot_id: String,
+    /// The name to forget.
+    name: String,
+}
+
+/// `botSecrets.forget` — remove a secret; forgetting a missing one succeeds (REQ-046).
+async fn secrets_forget(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SecretForgetReply, ApiError> {
+    let request: SecretsForgetRequest = parse(&body)?;
+    let removed = usecases::bot_secret_forget(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.name,
+    )
+    .await?;
+    Ok(SecretForgetReply {
+        name: request.name,
+        removed,
+    })
 }

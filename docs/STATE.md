@@ -2,7 +2,53 @@
 
 ## Current milestone
 
-**Before-M5 correctness fix — migration 0024 (memory_documents shared rows).** The first full
+**Before-M5 — complete.** All three phases landed and pushed (`d9762a4` [P1],
+`7ebd427`+`1a19a24` [P2], `38e886a` [P3, BYOK]). Migration 0024 fixed the shared-memory FK
+defect end to end (`9dca0cc`). 258 tests green at every push.
+
+**M-completed plan (in order, nothing skipped, nothing started early).**
+- M5 — Integrations: REQ-032 (connector catalogue + per-space installs), REQ-033 (MCP remote +
+  opt-in stdio), REQ-034 (plugins, no-local-code), REQ-035 (skills, SHOULD), REQ-046 (write-only
+  secrets), plus deferred defects D-05 (MCP private endpoints, per-space allow-list + audit event),
+  D-06 (plugin submissions require an account + shared counter).
+- M6 — Artifacts, pages, board: REQ-036/037/038/039 + D-03 (magic-byte sniff).
+- M7 — Channels: REQ-047 (inbound mail), REQ-048 (messaging), REQ-050 (bot webhooks).
+- M8 — Money and models: REQ-018 (caps + purchase card), REQ-051 (billing credits), REQ-052 (model catalogue).
+- M9 — Operate: REQ-044 (export/import/delete), REQ-045 (audit JSONL, security events, SCIM),
+  REQ-054 (structured logs + metrics + CSP reports), REQ-058 (admin surfaces).
+- M10 — UI complete + desktop: REQ-055 (all screens from `spec/08-ui-ux.md`, 7 UI goldens, axe,
+  RTL, Tauri shell, plus REQ-011's remaining pieces of the strict list).
+- M11 — Harden and release: regression across the workspace, all defects closed, budgets measured,
+  ADRs complete, upgrade guide, signed release notes.
+
+REQ-010 (group chats) and REQ-011 (activity view) arrive with M11 alongside their regression set,
+as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay out, recorded.
+Every milestone ships test-first at the API/use-case level, then PG/functional proof, then docs +
+STATE; gates re-run at each push (fmt, clippy -D warnings, cargo test workspace).
+
+**M5 — in flight, secrets done (REQ-046).** Bot secrets are write-only and encrypted at rest
+(envelope AES-256-GCM per DEC-10 option (a), ADR-020): every space owns a random DEK wrapped under
+`BOMA_MASTER_KEY` (migration 0026; 0025 keeps its original recorded checksum — see the note below);
+every secret is sealed under its space DEK; the rekey path re-wraps DEKs only, proven by
+`req_046_a_secret_round_trips_through_postgres_and_survives_a_rekey` against
+`rekey_space_keys`. RPC surface added (parity with the reference's namespace): `botSecrets.set`
+`/list` `/forget` under `/rpc/botSecrets/{procedure}` — write-only, names-only list. The operator
+rotation is `boma rekey` (reads `BOMA_MASTER_KEY` current + `BOMA_NEW_MASTER_KEY` new, re-wraps DEKs
+only, refuses to run under an ephemeral key; wired in the CLI, documented in `.env.example` and
+`compose.yaml`). The shell
+executor injects `BOMA_SECRET_<NAME>` into `computer_shell` only; values never enter a message,
+an event, a reply or the log. GUESS (owner to veto): the environment injection surface (computer
+shell is today's only tool runner) and the namespace name `botSecrets`. 272 tests green at this
+revision, trace ratchet tightened 21 → 20.
+
+**Incident — migration 0025 edited after it was recorded (my error, no data lost).** The secrets
+slice recorded `0025_bot_secrets.sql` in the dev DB, then the file was edited to add `space_keys`,
+producing `VersionMismatch(25)` across the shared-DB suite (39 tests failed at once). The file was
+restored byte-exact (`req_053_the_migrations_apply_and_are_recorded` passes again) and the envelope
+columns land as a separate **0026_space_keys.sql** — no data left the machine. Lesson re-applied:
+new schema, new migration. The dev DB carries migrations through 0026.
+
+Before-M5 correctness fix — migration 0024 (memory_documents shared rows).** The first full
 run of the worker against Postgres caught a live defect: 0013 stored shared-memory rows with
 `bot_id = ''` and `FOREIGN KEY REFERENCES bots (id)`, so every "shared" document violated the FK
 and NO shared memory could ever be written on a real deployment — the in-memory adapter, which
@@ -655,67 +701,4 @@ Raised by the M0–M4 audit, no recommendation yet:
 
 | Id | Question | Recommendation | ADR |
 |---|---|---|---|
-| DEC-15 | REQ-019's "the parent receives the helper's result and continues" is unimplemented. It was deferred from M2 to M3 and M3 shipped without it. Should it land with the agent engine (when a run can call tools), or as a small worker rule now (helper completes → write a `tool` message to the parent → resume the parent)? | The small worker rule now: it is a state-machine change with no model dependency, and it makes REQ-019's only unmet acceptance criterion observable | — |
-
-## Deferred requirements
-
-| REQ | Why | Where recorded |
-|---|---|---|
-| REQ-049 (voice, COULD) | Not needed for a functional core; interfaces stay additive | PLAN §5 |
-| REQ-055 (desktop, SHOULD) | Tauri shell lands at M10, after screens and signed releases exist | ADR-016, `apps/desktop/README.md` |
-| REQ-056 (mobile, SHOULD) | PWA ships in M1; the Expo shell waits until device pairing is exercised | ADR-016, PLAN §5 |
-
-## Proposals outside the spec
-
-None. Anything proposed during the build goes here first, with the REQ it would touch.
-
-## Known GUESS (to confirm)
-
-- No runtime observation of the reference exists (the original was never installed or run). Every
-  `spec/` claim is static or documentation-backed; `spec/TRACE.md` marks the two doc-only rows.
-- The reference's run-state table was read from its source (`packages/core/src/run-state.ts`), which
-  is stronger than documentation but still not a runtime observation.
-- BoardUI Pro is not activated on this machine (`license_status`: none). The UI uses free-tier
-  components; a Pro template would be an owner decision plus a licence check before any public repo.
-- The JSON Schema validation of `opencode.json` never ran; the file was edited by hand and reviewed,
-  not validated by a tool.
-- The Compose stack and the Docker image are built and probed **in CI** (job `compose`); this box
-  cannot run them (no disk for the builder image), so the local observation is still absent.
-
-## What was consulted in the original
-
-| Path | Why |
-|---|---|
-| `../re-workspace/notes/ARCHITECTURE.md` | entry points, flows, trust boundaries |
-| `../re-workspace/notes/validation-audit.md` | V-01…V-09 → defects D-01…D-09 |
-| `../re-workspace/notes/open-questions.md` | injection findings, rebuild questions |
-| `../re-workspace/notes/spec/**` | the contract itself |
-| `../re-workspace/target/rakazo/packages/core/src/run-state.ts` | the authoritative run-state table, to settle the `leased → queued` transition (2026-11-12) |
-| `../re-workspace/target/rakazo` (other paths) | only through the citations already recorded in the spec; not re-read in this session |
-- **REQ-024 (dispatch, retry, coalescing, MUST)** is done, including the two acceptance criteria
-  the first cut missed. The worker's poll loop sweeps due routines before claiming runs
-  (`boma_app::usecases::dispatch_routines`), creates a `trigger: routine` run per fire,
-  reschedules to the next cron occurrence (`next_run_at` on the routine row), deactivates a spent
-  `@once`, and resets the failure counter on completion. A routine whose previous run is still
-  open is **not** fired a second time: the wake is recorded as `coalesced` and the schedule
-  advances (no stampede). A failed routine-woken run whose failure is **retryable** retries with
-  backoff (migration `0016_run_not_before.sql`; `runs.not_before` gates the claim): up to
-  [`MAX_ATTEMPTS`] = 3 attempts, 60 s × 2^(n-1) capped at 1800 s
-  (`boma_domain::run::retry_delay_seconds`); only then does the failure count toward
-  `account_failures`. Past a threshold of 5 consecutive failures the routine pauses itself and
-  **the owner is told** — a `System` message lands in the thread with the failure story, always
-  on pause, and per run for routines created with `notify: true`. Failures reset on a clean
-  completion via `record_completed`. A run ending `failed` whose failure is **not** retryable
-  counts immediately. Routine-woken runs carry `routine_id` on `runs` (migration
-  `0015_run_routine_id.sql`) — and the Postgres `INSERT INTO runs` forgot to write it (fixed in
-  the same slice; the in-memory adapter masked the omission, so dispatch/coalescing/attribution
-  only ever worked in tests). The single-flight check is `find_open_routine`: a co-worker may
-  skip a wake whose run is already open elsewhere.
-- **REQ-025 (run now, SHOULD)** is done: `routines.runNow` fires a routine once as a normal
-  turn. The trial run is attributed to the routine (`routine_id`, trigger `User` so the failure
-  counters do not move) but it does not depend on or advance the cron schedule — the routine
-  keeps its `active` state and `nextRunAt` untouched. The provider pass uses the routine's
-  prompt when a run carries `routine_id`, because a routine-woken history carries no person
-  message. The wire body is `{routineId}`; the reply is `{routineId, runId, status}`.
-
-Row order matches implementation order.
+| DEC-15 | REQ-019's "the parent receives the helper's result and continues" is unimplemented. It was deferred from M2 to M3 and M3 shipped without it. Should it land with the agent engine (when a run can

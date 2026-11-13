@@ -510,7 +510,15 @@ impl boma_app::ports::ComputerRuntime for ScriptedComputerRuntime {
         _external_id: &str,
         _command: &str,
         _output_cap: usize,
+        env: &[(String, String)],
     ) -> Result<String, boma_app::AppError> {
+        lock(&self.requests).push(format!(
+            "env={}",
+            env.iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
         Ok(String::new())
     }
 

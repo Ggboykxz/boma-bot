@@ -62,7 +62,7 @@ Status values:
 | REQ-043 | M1 | `crates/testkit/src/memory.rs::req_043_a_member_context_cannot_read_another_tenants_bot` | `crates/infra/src/tenant.rs`, `crates/app/src/usecases.rs::resolve_actor` |
 | REQ-044 | M9 | — | — |
 | REQ-045 | M9 | — | — |
-| REQ-046 | M5 | — | — |
+| REQ-046 | M5 | `crates/testkit/src/build.rs::req_046_a_bot_secret_reaches_the_tool_environment_but_never_a_reply`, `crates/testkit/src/build.rs::req_046_setting_the_same_name_twice_replaces_the_value`, `crates/testkit/src/build.rs::req_046_secrets_of_another_space_are_neither_writable_nor_listed`, `crates/testkit/src/build.rs::req_046_the_name_must_look_like_an_environment_variable`, `crates/testkit/src/build.rs::req_046_forgetting_a_missing_secret_is_a_success`, `crates/api/tests/rpc_surface.rs::req_046_a_member_sets_lists_and_forgets_a_bot_secret_without_ever_seeing_the_value`, `crates/api/tests/rpc_surface.rs::req_046_a_secret_name_that_is_not_an_env_var_is_refused`, `crates/infra/src/secret_box.rs::req_046_*` (6 unit tests), `crates/infra/tests/m1.rs::req_046_a_secret_round_trips_through_postgres_and_survives_a_rekey` | `crates/infra/src/secret_box.rs`, `crates/infra/src/stores/secrets.rs`, `crates/app/src/usecases.rs` (secret use cases + tool environment), `crates/api/src/rpc.rs` (`botSecrets.set`/`list`/`forget`), `crates/api/src/wire.rs`, `crates/bin/src/commands.rs` (`rekey`), `crates/bin/src/cli.rs`, `migrations/0025_bot_secrets.sql`, `migrations/0026_space_keys.sql`, `docs/adr/020-secrets.md` |
 | REQ-047 | M7 | — | — |
 | REQ-048 | M7 | — | — |
 | REQ-049 | deferred | — | — (COULD; recorded in `docs/STATE.md`) |

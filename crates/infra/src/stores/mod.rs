@@ -21,6 +21,7 @@ pub mod routines;
 pub mod rows;
 pub mod runs;
 pub mod screen;
+pub mod secrets;
 pub mod sessions;
 pub mod spaces;
 pub mod threads;

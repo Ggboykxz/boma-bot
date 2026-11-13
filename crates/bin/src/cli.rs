@@ -32,6 +32,11 @@ enum Command {
     Worker,
     /// Apply database migrations in order and exit.
     Migrate,
+    /// Re-wrap every space's data key under a new master key (REQ-046).
+    ///
+    /// Reads `BOMA_MASTER_KEY` (the current key) and `BOMA_NEW_MASTER_KEY` (the new one).
+    /// Secret ciphertexts are never re-encrypted; only the wrapping rows change.
+    Rekey,
     /// Operator tools; never reachable over HTTP by a member.
     Admin {
         #[command(subcommand)]
@@ -74,6 +79,7 @@ pub async fn run() -> anyhow::Result<()> {
         Command::Serve => commands::serve(load_config()?).await,
         Command::Worker => commands::worker(load_config()?).await,
         Command::Migrate => commands::migrate(load_config()?).await,
+        Command::Rekey => commands::rekey(load_config()?).await,
     }
 }
 
@@ -95,6 +101,7 @@ mod tests {
             (vec!["boma", "serve"], "serve"),
             (vec!["boma", "worker"], "worker"),
             (vec!["boma", "migrate"], "migrate"),
+            (vec!["boma", "rekey"], "rekey"),
             (vec!["boma", "probe"], "probe"),
         ] {
             let cli = Cli::try_parse_from(&arguments).expect("the command parses");
@@ -102,6 +109,7 @@ mod tests {
                 Command::Serve => "serve",
                 Command::Worker => "worker",
                 Command::Migrate => "migrate",
+                Command::Rekey => "rekey",
                 Command::Probe { .. } => "probe",
                 Command::Admin { .. } => "admin",
             };

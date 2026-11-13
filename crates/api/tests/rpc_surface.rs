@@ -1688,3 +1688,90 @@ async fn req_029_a_member_takes_control_and_releases_it() {
     .await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn req_046_a_member_sets_lists_and_forgets_a_bot_secret_without_ever_seeing_the_value() {
+    let world = world().await;
+    let state = state(&world.app);
+
+    // Set: the value goes in, the reply carries the name only.
+    let response = post(
+        state.clone(),
+        "/rpc/botSecrets/set",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "name": "OPENAI_KEY",
+            "value": "s3cr3t-value",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["name"], serde_json::json!("OPENAI_KEY"));
+    assert!(
+        !body.to_string().contains("s3cr3t-value"),
+        "the reply never echoes the value"
+    );
+
+    // List: names only.
+    let response = post(
+        state.clone(),
+        "/rpc/botSecrets/list",
+        Some(&world.caller),
+        serde_json::json!({"botId": world.bot_id}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["secrets"][0]["name"], serde_json::json!("OPENAI_KEY"));
+    assert!(
+        !body.to_string().contains("s3cr3t-value"),
+        "the list never carries the value"
+    );
+
+    // Forget: idempotent success.
+    let response = post(
+        state.clone(),
+        "/rpc/botSecrets/forget",
+        Some(&world.caller),
+        serde_json::json!({"botId": world.bot_id, "name": "OPENAI_KEY"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(true));
+
+    let response = post(
+        state,
+        "/rpc/botSecrets/list",
+        Some(&world.caller),
+        serde_json::json!({"botId": world.bot_id}),
+    )
+    .await;
+    let body = json(response).await;
+    assert_eq!(body["secrets"].as_array().expect("a list").len(), 0);
+}
+
+#[tokio::test]
+async fn req_046_a_secret_name_that_is_not_an_env_var_is_refused() {
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/botSecrets/set",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "name": "not a name",
+            "value": "s3cr3t-value",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json(response).await;
+    assert_eq!(body["code"], serde_json::json!("BAD_REQUEST"));
+    assert!(
+        !body.to_string().contains("s3cr3t-value"),
+        "the error never echoes the value"
+    );
+}

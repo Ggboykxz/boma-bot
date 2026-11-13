@@ -22,3 +22,4 @@ tracing = { workspace = true }
 
 boma-domain = { workspace = true }
 serde_json.workspace = true
+secrecy = "0.10.3"

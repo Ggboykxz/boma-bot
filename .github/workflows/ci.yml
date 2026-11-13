@@ -75,7 +75,7 @@ jobs:
 
       - name: traceability
         # Ratchet: the budget only decreases, milestone by milestone (docs/STATE.md).
-        run: python3 tools/trace_check.py spec . --max-missing 21
+        run: python3 tools/trace_check.py spec . --max-missing 20
 
       - name: secret scan
         run: python3 tools/secret_scan.py .

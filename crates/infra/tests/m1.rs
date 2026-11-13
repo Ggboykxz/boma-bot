@@ -9,7 +9,7 @@
 // once and in writing.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use boma_app::ports::IdGenerator as _;
 use boma_app::{App, ports::*};
@@ -23,8 +23,8 @@ use boma_infra::{
     PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
     PostgresPendingToolCallStore, PostgresRateLimitStore, PostgresReactionStore,
     PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresScreenCapabilityStore, PostgresSessionStore, PostgresSpaceStore, PostgresThreadStore,
-    PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
+    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSpaceStore,
+    PostgresThreadStore, PostgresToolStore, PostgresUserStore, SystemClock, TokenGenerator,
 };
 
 mod common;
@@ -70,6 +70,10 @@ fn app(database: &Postgres) -> App {
             Arc::new(PostgresEffectStore::new(pool.clone())),
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresRateLimitStore::new(pool.clone())),
+            Arc::new(PostgresSecretStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -1553,4 +1557,128 @@ async fn req_022_the_worker_injects_only_memory_of_the_runs_space_in_postgres() 
     cleanup(database, &organization_id, &email).await;
     cleanup(database, &organization_id_other, &email_other).await;
     fresh.dispose().await;
+}
+
+const CREATED_AT: &str = "2026-01-01T00:00:00Z";
+
+fn test_master_key() -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "BOMA_MASTER_KEY".to_owned(),
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".to_owned(),
+    )])
+}
+
+fn test_new_master_key() -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "BOMA_MASTER_KEY".to_owned(),
+        "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100".to_owned(),
+    )])
+}
+
+#[tokio::test]
+async fn req_046_a_secret_round_trips_through_postgres_and_survives_a_rekey() {
+    use secrecy::ExposeSecret;
+
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "sek").await;
+    let outsider = common::fixture(&pool, "otx").await;
+    // The tenant pool acts as the unprivileged role: the row level security applies to it.
+    let tenant = common::tenant_pool(&fresh.database).await;
+
+    let old_box = boma_infra::SecretBox::from_env(&test_master_key()).expect("the key is valid");
+    let store = boma_infra::PostgresSecretStore::new(tenant.clone(), old_box.clone());
+
+    store
+        .put(
+            &fixture.context,
+            NewBotSecret {
+                id: "segreq046".to_owned(),
+                bot_id: fixture.bot_id.clone(),
+                name: "OPENAI_KEY".to_owned(),
+                value: secrecy::SecretString::from("s3cr3t-value".to_owned()),
+                created_at: CREATED_AT.to_owned(),
+            },
+        )
+        .await
+        .expect("the secret is stored");
+
+    // The summary carries no value.
+    let list = store
+        .list(&fixture.context, &fixture.bot_id)
+        .await
+        .expect("the list answers");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "OPENAI_KEY");
+    assert!(!format!("{:?}", list[0]).contains("s3cr3t-value"));
+
+    // The row holds no plaintext: the bytes never carry the value verbatim.
+    let ciphertext: Vec<u8> = sqlx::query_scalar(
+        "SELECT ciphertext FROM bot_secrets WHERE bot_id = $1 AND name = 'OPENAI_KEY'",
+    )
+    .bind(fixture.bot_id.as_str())
+    .fetch_one(&pool)
+    .await
+    .expect("the row is there");
+    assert!(
+        !ciphertext
+            .windows("s3cr3t-value".len())
+            .any(|window| window == b"s3cr3t-value"),
+        "the stored bytes are not the plaintext"
+    );
+
+    // The value comes back for the executor.
+    let value = store
+        .reveal(&fixture.context, &fixture.bot_id, "OPENAI_KEY")
+        .await
+        .expect("the reveal answers")
+        .expect("the value is there");
+    assert_eq!(value.expose_secret(), "s3cr3t-value");
+
+    // Another tenant sees nothing: not listed, not readable, not deletable.
+    let list = store
+        .list(&outsider.context, &fixture.bot_id)
+        .await
+        .expect("the list answers");
+    assert_eq!(list.len(), 0, "another tenant sees no secret names");
+    let value = store
+        .reveal(&outsider.context, &fixture.bot_id, "OPENAI_KEY")
+        .await
+        .expect("the reveal answers");
+    assert!(value.is_none());
+    let deleted = store
+        .delete(&outsider.context, &fixture.bot_id, "OPENAI_KEY")
+        .await
+        .expect("the delete answers");
+    assert!(!deleted);
+
+    // Rotating the master key re-wraps the data-encryption keys only; the secret survives.
+    let new_box =
+        boma_infra::SecretBox::from_env(&test_new_master_key()).expect("the key is valid");
+    let rotated = boma_infra::rekey_space_keys(&tenant, &old_box, &new_box)
+        .await
+        .expect("the rekey answers");
+    assert_eq!(rotated, 1, "exactly this test's space key is re-wrapped");
+    let rotated_store = boma_infra::PostgresSecretStore::new(tenant.clone(), new_box);
+    let value = rotated_store
+        .reveal(&fixture.context, &fixture.bot_id, "OPENAI_KEY")
+        .await
+        .expect("the reveal answers")
+        .expect("the secret still reads after the rotation");
+    assert_eq!(value.expose_secret(), "s3cr3t-value");
+
+    // Forgetting removes the row exactly once.
+    let deleted = store
+        .delete(&fixture.context, &fixture.bot_id, "OPENAI_KEY")
+        .await
+        .expect("the delete answers");
+    assert!(deleted);
+    let deleted = store
+        .delete(&fixture.context, &fixture.bot_id, "OPENAI_KEY")
+        .await
+        .expect("the delete answers");
+    assert!(!deleted);
+
+    common::cleanup(&pool, "sek").await;
+    common::cleanup(&pool, "otx").await;
 }
