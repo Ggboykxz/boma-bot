@@ -1158,6 +1158,290 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_019_the_parent_receives_the_helper_result_and_continues() {
+        use std::sync::Arc;
+
+        use crate::ScriptedProvider;
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise the commits.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let run_id = outcome.run.id.clone();
+
+        // Parent: delegate. Helper: its answer. Parent: the final reply.
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "delegate.helper".to_owned(),
+                arguments: serde_json::json!({ "prompt": "Research the commits." }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["The helper found Friday.".to_owned()]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["Final: Friday.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+
+        // Pass 1: the parent delegates and parks on the approval card.
+        assert!(worker.step().await.expect("the worker answers"));
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(run.status, RunStatus::WaitingInput);
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 10)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+
+        // The person approves: the helper run starts, and the parent must not answer yet.
+        boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(
+            run.status,
+            RunStatus::WaitingInput,
+            "the parent waits for the helper, it does not answer first"
+        );
+
+        // Pass 2: the helper answers; the internal text goes to role=tool only.
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // The helper completing re-queues the parent.
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(
+            run.status,
+            RunStatus::Queued,
+            "the completed helper re-queues the parent"
+        );
+
+        // Pass 3: the parent continues with the helper's outcome in its history.
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers");
+        let bot_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Bot)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert_eq!(
+            bot_texts,
+            vec!["Final: Friday."],
+            "exactly one bot reply, after the helper"
+        );
+        let tool_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Tool)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert!(
+            tool_texts
+                .iter()
+                .any(|text| text.contains("The helper found Friday.")),
+            "the helper's structured result is in a tool message"
+        );
+
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(run.status, RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn req_019_the_helper_internal_steps_do_not_surface_in_the_parent_chat() {
+        use std::sync::Arc;
+
+        use crate::ScriptedProvider;
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Summarise the commits.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "delegate.helper".to_owned(),
+                arguments: serde_json::json!({ "prompt": "Research the commits." }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["The helper found Friday.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+
+        // Delegate, approve, let the helper finish.
+        assert!(worker.step().await.expect("the worker answers"));
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 10)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+        boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // The helper's internal text never appears as a bot message.
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 10)
+            .await
+            .expect("the page answers");
+        let bot_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Bot)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert!(
+            bot_texts.is_empty(),
+            "the helper's answer is not a chat reply: {bot_texts:?}"
+        );
+
+        let helper_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Tool)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert!(
+            helper_texts
+                .iter()
+                .any(|text| text.contains("The helper found Friday.")),
+            "the helper outcome is recorded as a tool message"
+        );
+    }
+
+    #[tokio::test]
     async fn req_016_the_catalogue_carries_only_granted_tools() {
         let test = TestApp::builder().build();
         let user_id = test

@@ -104,7 +104,8 @@ impl Worker {
         let mut passes: u32 = 0;
         let mut tool_passes: u32 = 0;
         loop {
-            match self.provider_pass(&context, &claimed).await? {
+            let outcome = self.provider_pass(&context, &claimed).await?;
+            match outcome {
                 PassOutcome::Answered {
                     text: chunk_text,
                     latest_seq,
@@ -136,10 +137,19 @@ impl Worker {
                         )));
                         tracing::warn!(run = %claimed.run.id, %error, "the tool loop hit its cap");
                         self.fail_run(&context, &run, error).await?;
+                        self.helper_finished(&context, &run, "the helper run failed")
+                            .await;
                         return Ok(true);
                     }
                 }
-                PassOutcome::Suspended | PassOutcome::Cancelled | PassOutcome::Failed => {
+                PassOutcome::Suspended => return Ok(true),
+                PassOutcome::Cancelled | PassOutcome::Failed => {
+                    let outcome = if matches!(outcome, PassOutcome::Cancelled) {
+                        "the helper run was stopped"
+                    } else {
+                        "the helper run failed"
+                    };
+                    self.helper_finished(&context, &run, outcome).await;
                     return Ok(true);
                 }
             }
@@ -170,6 +180,11 @@ impl Worker {
         // A routine that woke this run: reset its failure counter, so one clean run unpauses
         // the routine at the next threshold crossing (REQ-024).
         usecases::record_routine_completed(&self.app, &run).await?;
+        // A helper run reports its outcome to the parent thread as a tool message, and the
+        // parent re-enters the worker (REQ-019).
+        if run.is_helper() {
+            usecases::complete_helper_run(&self.app, &context, &run, &text).await?;
+        }
 
         Ok(true)
     }
@@ -396,6 +411,24 @@ impl Worker {
             return Ok(PassOutcome::Suspended);
         }
         Ok(PassOutcome::ToolsDispatched)
+    }
+
+    /// Records a helper run's outcome on the parent thread (REQ-019).
+    ///
+    /// Never propagates: a failure to write the tool message is logged, the helper's own state is
+    /// already recorded, and the parent stays suspended visibly rather than silently "fine".
+    async fn helper_finished(
+        &self,
+        context: &TenantContext,
+        run: &boma_domain::Run,
+        outcome: &str,
+    ) {
+        if !run.is_helper() {
+            return;
+        }
+        if let Err(error) = usecases::complete_helper_run(&self.app, context, run, outcome).await {
+            tracing::warn!(run = %run.id, %error, "the helper outcome could not be recorded on the parent");
+        }
     }
 
     /// Whether the run has not reached a terminal state yet.

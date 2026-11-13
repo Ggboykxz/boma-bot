@@ -2690,6 +2690,10 @@ async fn refuse_pending_tool_calls(
 /// the row applied with a note instead, because the effect really happened already. When the
 /// answer refuses, the calls are marked refused and never execute.
 ///
+/// Returns whether any executed call created an asynchronous child run the parent must wait for
+/// (today: `delegate.helper`). The caller leaves the parent suspended in that case; the helper
+/// completion re-queues it.
+///
 /// # Errors
 ///
 /// Returns [`AppError::Unavailable`] when a store cannot answer.
@@ -2700,7 +2704,7 @@ async fn apply_pending_tool_calls(
     bot: &Bot,
     thread: &Thread,
     approve: bool,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let now = app.services.clock.now();
     let pending = app
         .stores
@@ -2709,8 +2713,9 @@ async fn apply_pending_tool_calls(
         .await?;
     if !approve {
         refuse_pending_tool_calls(app, context, run_id, bot, thread, pending).await?;
-        return Ok(());
+        return Ok(false);
     }
+    let mut child_created = false;
     for call in pending {
         let effect_key = format!("tool:{}:{}", run_id.as_str(), call.call_id);
         let already_applied = match app
@@ -2761,7 +2766,8 @@ async fn apply_pending_tool_calls(
             .await?;
             continue;
         }
-        let body = execute_approved_tool(app, context, &call).await;
+        let (body, created) = execute_approved_tool(app, context, &call).await;
+        child_created |= created;
         let ok = body
             .get("ok")
             .and_then(serde_json::Value::as_bool)
@@ -2789,10 +2795,11 @@ async fn apply_pending_tool_calls(
         )
         .await?;
     }
-    Ok(())
+    Ok(child_created)
 }
 
-/// Runs one approved tool call and reports what happened in a body shaped `{ ok, body }`.
+/// Runs one approved tool call and reports what happened in a body shaped `{ ok, body }`,
+/// plus whether the call created an asynchronous child run the parent must wait for.
 ///
 /// An approval never fakes a success: the only tool whose effects are implemented here is
 /// `memory.write`; anything else is refused inside the tool message instead of skipped silently.
@@ -2800,7 +2807,7 @@ async fn execute_approved_tool(
     app: &App,
     context: &TenantContext,
     call: &crate::ports::PendingToolCall,
-) -> serde_json::Value {
+) -> (serde_json::Value, bool) {
     let string = |key: &str| -> Option<String> {
         call.arguments
             .get(key)
@@ -2812,29 +2819,67 @@ async fn execute_approved_tool(
             let scope = string("scope").unwrap_or_else(|| "shared".to_owned());
             let bot_id = string("botId");
             let Some(path) = string("path") else {
-                return serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `path` argument" } });
+                return (
+                    serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `path` argument" } }),
+                    false,
+                );
             };
             let Some(text) = string("text") else {
-                return serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `text` argument" } });
+                return (
+                    serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `text` argument" } }),
+                    false,
+                );
             };
-            match memory_write(app, context, &scope, bot_id.as_deref(), &path, &text).await {
-                Ok(outcome) => serde_json::json!({
-                    "ok": true,
-                    "body": {
-                        "path": outcome.document.path,
-                        "revision": outcome.document.revision,
-                    },
-                }),
-                Err(error) => serde_json::json!({
-                    "ok": false,
-                    "body": { "error": format!("the write did not happen: {error}") },
-                }),
+            let body =
+                match memory_write(app, context, &scope, bot_id.as_deref(), &path, &text).await {
+                    Ok(outcome) => serde_json::json!({
+                        "ok": true,
+                        "body": {
+                            "path": outcome.document.path,
+                            "revision": outcome.document.revision,
+                        },
+                    }),
+                    Err(error) => serde_json::json!({
+                        "ok": false,
+                        "body": { "error": format!("the write did not happen: {error}") },
+                    }),
+                };
+            (body, false)
+        }
+        "delegate.helper" => {
+            let Some(prompt) = string("prompt") else {
+                return (
+                    serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `prompt` argument" } }),
+                    false,
+                );
+            };
+            match delegate_helper_run(app, context, call.run_id.as_str(), &prompt).await {
+                Ok(helper) => (
+                    serde_json::json!({
+                        "ok": true,
+                        "body": {
+                            "helperRunId": helper.id.as_str(),
+                            "status": helper.status.as_str(),
+                        },
+                    }),
+                    true,
+                ),
+                Err(error) => (
+                    serde_json::json!({
+                        "ok": false,
+                        "body": { "error": format!("the helper could not be created: {error}") },
+                    }),
+                    false,
+                ),
             }
         }
-        other => serde_json::json!({
-            "ok": false,
-            "body": { "error": format!("the tool {other} cannot be applied yet") },
-        }),
+        other => (
+            serde_json::json!({
+                "ok": false,
+                "body": { "error": format!("the tool {other} cannot be applied yet") },
+            }),
+            false,
+        ),
     }
 }
 
@@ -2922,13 +2967,18 @@ pub async fn answer_card(
             .ok_or(AppError::Unavailable)?;
         // Parked calls apply only from the card that parked them: approve applies, anything else
         // refuses; question cards have no parked calls.
+        let mut child_created = false;
         if is_approval {
-            apply_pending_tool_calls(app, context, run_id, &bot, &thread, answer == "approve")
-                .await?;
+            child_created =
+                apply_pending_tool_calls(app, context, run_id, &bot, &thread, answer == "approve")
+                    .await?;
         }
-        // The run that was waiting on the card resumes (REQ-017): parked on the queue, not
-        // `running`, so the claim picks it up again.
-        set_run_status(app, context, run_id.as_str(), RunStatus::Queued, None, None).await?;
+        // The run that was waiting on the card resumes (REQ-017): parked on the queue, so the
+        // claim picks it up again. A child run created by an approval re-queues the parent when
+        // it completes (REQ-019); resuming now would race its result.
+        if !child_created {
+            set_run_status(app, context, run_id.as_str(), RunStatus::Queued, None, None).await?;
+        }
     }
 
     Ok(AnswerCardOutcome {
@@ -3093,6 +3143,96 @@ pub async fn delegate_helper_run(
 
     tracing::info!(run = %run.id, parent = %parent.id, "the parent delegated to a helper run");
     Ok(run)
+}
+
+/// A helper run finished (or failed): record its outcome as a `role=tool` message on the
+/// parent thread and re-queue the parent so the worker re-enters it (REQ-019).
+///
+/// The parent is re-queued only when it is still waiting for input; a parent that was
+/// cancelled or already answered is left alone. Returns whether the parent was re-queued.
+///
+/// `outcome` is the structured result the helper reported: the answer text for a completed
+/// helper, or a refusal-safe failure summary. Helper internals still do not surface as chat:
+/// the message role is `tool` (REQ-019).
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when a store cannot answer.
+pub async fn complete_helper_run(
+    app: &App,
+    context: &TenantContext,
+    helper: &Run,
+    outcome: &str,
+) -> Result<bool, AppError> {
+    let Some(parent_run_id) = helper.parent_run_id.clone() else {
+        return Ok(false);
+    };
+    let Some(parent) = app.stores.runs.find(context, &parent_run_id).await? else {
+        return Ok(false);
+    };
+    let Some(thread) = app.stores.threads.for_bot(context, &parent.bot_id).await? else {
+        return Ok(false);
+    };
+    let now = app.services.clock.now();
+    let body = serde_json::json!({
+        "tool": "delegate.helper",
+        "helperRunId": helper.id.as_str(),
+        "result": outcome,
+    });
+    let stored = app
+        .stores
+        .messages
+        .insert(
+            context,
+            NewMessage {
+                id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                space_id: thread.space_id.clone(),
+                thread_id: thread.id.clone(),
+                role: boma_domain::MessageRole::Tool,
+                blocks: vec![boma_domain::Block::Text {
+                    text: body.to_string(),
+                }],
+                bot_id: Some(parent.bot_id.clone()),
+                author_user_id: None,
+                run_id: Some(parent.id.clone()),
+                client_nonce: None,
+                created_at: now.clone(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await?;
+    app.stores
+        .events
+        .append(
+            context,
+            crate::ports::NewEvent {
+                space_id: thread.space_id.clone(),
+                thread_id: thread.id.clone(),
+                kind: boma_domain::EventType::Message,
+                payload: serde_json::json!({
+                    "messageId": stored.message.id.as_str(),
+                    "seq": stored.message.seq,
+                }),
+                created_at: now,
+            },
+        )
+        .await?;
+
+    if parent.status == RunStatus::WaitingInput {
+        set_run_status(
+            app,
+            context,
+            parent.id.as_str(),
+            RunStatus::Queued,
+            None,
+            None,
+        )
+        .await?;
+        tracing::info!(parent = %parent.id, helper = %helper.id, "the helper completed; the parent is re-queued");
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// The tool catalogue of one run: the built-ins plus the tools the bot may use (REQ-016).
