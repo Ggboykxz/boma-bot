@@ -11,8 +11,9 @@ are released (`BOMA_COMPUTER_IDLE_MINUTES`, default 10), and the provider confor
 capability sealing/private isolation; the suite is the contract any provider answers to). Full
 gate suite green at push (`fmt`, `clippy -D warnings`, `nextest` 221/221, `deny`, `machete`, trace
 budget 21/40, secret scan). The REQ-028 push takes the suite to 224/224 (two configuration tests
-for the browser computer and the real-Chromium end-to-end test); the same gates are green locally,
-coverage runs in CI.
+for the browser computer and the real-Chromium end-to-end test). CONFIRMED on CI run
+43338876264 (`a35c82e`, rust and web jobs green): 224/224 tests, including the Chromium test,
+and `cargo llvm-cov` at 84.42 % of lines (gate: 80 %).
 
 **REQ-028 observe-and-act is done against a real browser.** The supervisor now talks CDP over the
 websocket of the computer's headless Chromium: observe (PNG through `Page.captureScreenshot`),
@@ -525,8 +526,9 @@ Any other externally visible difference would be a DEVIATION needing owner appro
 2. The agent loop still makes no tool calls (the scripted provider answers text only; BYOK is
    deferred to M8), so the computer tools are proved at the use-case and provider boundaries, not
    by an agent run, and the observe/act use cases are not yet exposed on the RPC surface.
-3. Coverage (80 % lines) is a CI job and runs on every push; this machine's `/tmp` cannot hold a
-   fresh instrumented rebuild across sessions, so the number is read from CI output.
+3. Coverage (80 % lines) is a CI job and runs on every push: 84.42 % of lines on `a35c82e`. This
+   machine's `/tmp` cannot hold a fresh instrumented rebuild across sessions, so the number is
+   read from CI output rather than measured here.
 4. Owner reviews `docs/PLAN.md` §2 (stack table) and vetoes any row; answers DEC-01…DEC-03 if they
    have runtime knowledge. DEC-14 (the licence) is resolved: MIT.
 5. Restart opencode after a BoardUI kit change, so the skill and the always-on rules reload.
