@@ -93,6 +93,7 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryToolStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryRateLimitStore::default()),
                 std::sync::Arc::new(boma_testkit::MemorySecretStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryPluginSubmissionStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReactionStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReadStateStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryRosterStore::default()),
@@ -280,4 +281,126 @@ async fn req_058_internal_health_reports_a_worker_without_a_job_yet() {
     let body = json(response).await;
     assert_eq!(body["ok"], serde_json::json!(true));
     assert_eq!(body["lastCompletedAt"], serde_json::Value::Null);
+}
+
+fn fresh_state() -> AppState {
+    let app = boma_testkit::TestApp::builder().build().app().clone();
+    AppState::new(
+        Readiness::new(vec![Arc::new(Probe { healthy: true })]),
+        capabilities(),
+        auth_capabilities(),
+        http_config(),
+        app,
+    )
+}
+
+async fn post_plugin_submission(state: AppState, body: &str) -> Response {
+    router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/plugin-submissions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ORIGIN, "https://example.test")
+                .body(Body::from(body.to_owned()))
+                .expect("the request builds"),
+        )
+        .await
+        .expect("the router answers")
+}
+
+async fn body_string(response: Response) -> String {
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is in memory")
+        .to_bytes();
+    String::from_utf8(bytes.to_vec()).expect("the body is UTF-8")
+}
+
+/// REQ-034, D-06: the eleventh submission from the same address in an hour is refused.
+#[tokio::test]
+async fn req_034_an_over_limit_ip_is_refused_with_429() {
+    // A fresh app: the twelve posts share one in-memory database, like twelve replicas on one.
+    let shared = fresh_state();
+    let body = r#"{"source": "https://example.test/plugin.git#main", "name": "Example", "contact": "author@example.test"}"#;
+    for attempt in 1..=10 {
+        let response = post_plugin_submission(shared.clone(), body).await;
+        assert_eq!(response.status(), StatusCode::OK, "attempt {attempt}");
+    }
+    let response = post_plugin_submission(shared, body).await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .expect("retry-after"),
+        "3600"
+    );
+}
+
+/// REQ-034, D-06: the browser preflight for a cross-origin POST is answered.
+#[tokio::test]
+async fn req_034_options_preflight_is_answered_with_cors() {
+    let response = router(fresh_state())
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/plugin-submissions")
+                .body(Body::empty())
+                .expect("the request builds"),
+        )
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .expect("allow-origin"),
+        "*"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .expect("allow-methods"),
+        "POST, OPTIONS"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .expect("allow-headers"),
+        "content-type"
+    );
+}
+
+/// REQ-034: a body larger than 32 KiB is refused by the handler with the fixed wording.
+///
+/// Bodies above the route's outer cap (33 KiB) are rejected by the HTTP layer before they reach
+/// the handler; the interesting boundary is the one the handler owns: just over 32 KiB.
+#[tokio::test]
+async fn req_034_a_body_over_the_cap_is_refused() {
+    let source = format!("https://example.test/plugin.git#{}", "a".repeat(32 * 1024));
+    let body = serde_json::json!({ "source": source }).to_string();
+    assert!(
+        body.len() > 32 * 1024 && body.len() < 33 * 1024,
+        "{}",
+        body.len()
+    );
+    let response = post_plugin_submission(fresh_state(), &body).await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = body_string(response).await;
+    assert!(body.contains("too large"), "{body}");
+}
+
+/// REQ-034: a malformed source is refused with the words the golden fixture pins.
+#[tokio::test]
+async fn req_034_an_invalid_source_is_refused_with_the_fixed_message() {
+    let response = post_plugin_submission(fresh_state(), r#"{"source": "not a repository"}"#).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(response).await;
+    assert_eq!(body, r#"{"error": "Invalid source."}"#);
 }

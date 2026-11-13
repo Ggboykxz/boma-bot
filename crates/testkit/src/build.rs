@@ -368,6 +368,7 @@ impl TestAppBuilder {
             Arc::new(database.tools()),
             Arc::new(database.rate_limits()),
             Arc::new(database.secrets()),
+            Arc::new(database.plugin_submissions()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -3391,5 +3392,66 @@ mod secrets_tests {
                 .await
                 .expect("the forget answers");
         assert!(!removed);
+    }
+}
+
+mod plugin_submission_tests {
+    use super::TestApp;
+
+    // REQ-034 — plugin marketplace: the submission is recorded with the canonical source.
+
+    #[tokio::test]
+    async fn req_034_an_anonymous_submission_is_recorded_with_the_canonical_source() {
+        let test = TestApp::builder()
+            .ids(vec!["sub_atomic".to_owned()])
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let source = boma_domain::parse_plugin_source("https://example.test/plugin.git#main")
+            .expect("the source parses");
+        let id = boma_app::usecases::submit_plugin(
+            test.app(),
+            &source,
+            Some("  Example  ".to_owned()),
+            Some("".to_owned()),
+            None,
+        )
+        .await
+        .expect("the submission is recorded");
+        assert_eq!(id, "sub_atomic");
+        let recorded = test.database().plugin_submissions().recorded();
+        assert_eq!(recorded.len(), 1);
+        let row = &recorded[0];
+        assert_eq!(row.source, "https://example.test/plugin#main");
+        assert_eq!(row.name.as_deref(), Some("Example"));
+        assert_eq!(row.contact, None, "an empty contact is stored as absent");
+        assert_eq!(
+            row.submitter_user_id, None,
+            "an anonymous row carries no submitter"
+        );
+        assert_eq!(row.status, "pending");
+        assert_eq!(row.created_at, "2026-01-01T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn req_034_a_submission_with_an_oversized_field_is_capped() {
+        let test = TestApp::builder()
+            .ids(vec!["sub_capped".to_owned()])
+            .fixed_clock("2026-01-01T00:00:00Z")
+            .build();
+        let source = boma_domain::parse_plugin_source("https://example.test/plugin.git")
+            .expect("the source parses");
+        let id = boma_app::usecases::submit_plugin(
+            test.app(),
+            &source,
+            Some("n".repeat(500)),
+            Some("c".repeat(500)),
+            None,
+        )
+        .await
+        .expect("the submission is recorded");
+        assert_eq!(id, "sub_capped");
+        let recorded = test.database().plugin_submissions().recorded();
+        assert_eq!(recorded[0].name.as_ref().map(String::len), Some(120));
+        assert_eq!(recorded[0].contact.as_ref().map(String::len), Some(320));
     }
 }

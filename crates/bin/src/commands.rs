@@ -9,11 +9,11 @@ use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresEffectStore,
     PostgresEventStore, PostgresInvitationStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresPendingToolCallStore, PostgresRateLimitStore, PostgresReactionStore,
-    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSpaceStore,
-    PostgresThreadStore, PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock,
-    TokenGenerator,
+    PostgresPendingToolCallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
+    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
+    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore,
+    ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -101,6 +101,7 @@ fn build_app(
             Arc::new(PostgresToolStore::new(pool.clone())),
             Arc::new(PostgresRateLimitStore::new(pool.clone())),
             Arc::new(PostgresSecretStore::new(pool.clone(), secrets_vault()?)),
+            Arc::new(PostgresPluginSubmissionStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

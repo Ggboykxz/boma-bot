@@ -13,6 +13,7 @@ pub mod invitations;
 pub mod memory;
 pub mod messages;
 pub mod pending_tool_calls;
+pub mod plugin_submissions;
 pub mod rate_limits;
 pub mod reactions;
 pub mod read_states;

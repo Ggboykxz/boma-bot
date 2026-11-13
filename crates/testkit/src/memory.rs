@@ -278,6 +278,25 @@ struct SecretRow {
     created_at: String,
 }
 
+/// One stored plugin submission (REQ-034). Anonymous rows carry no submitter.
+#[derive(Debug, Clone)]
+struct PluginSubmissionRow {
+    /// The submission's id.
+    id: String,
+    /// The source reference, canonical.
+    source: String,
+    /// The display name, when the author gave one.
+    name: Option<String>,
+    /// The contact address, when the author gave one.
+    contact: Option<String>,
+    /// The submitting member, when there was one.
+    submitter_user_id: Option<UserId>,
+    /// The review status; always `pending` when recorded.
+    status: String,
+    /// When the submission was recorded.
+    created_at: String,
+}
+
 /// The store of bot secrets (REQ-046). Write-only: the summaries never carry the value.
 #[derive(Debug, Clone)]
 pub struct MemorySecretStore {
@@ -494,6 +513,8 @@ struct State {
     rate_limits: Vec<RateLimitBucketRow>,
     /// The bot secrets, sealed (REQ-046).
     bot_secrets: Vec<SecretRow>,
+    /// The plugin submissions awaiting review (REQ-034).
+    plugin_submissions: Vec<PluginSubmissionRow>,
     /// The reactions people left on messages.
     reactions: Vec<ReactionRow>,
     /// The read position of each person, per conversation.
@@ -683,6 +704,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn secrets(&self) -> MemorySecretStore {
         MemorySecretStore::new(self)
+    }
+
+    /// The store of plugin submissions (REQ-034).
+    #[must_use]
+    pub fn plugin_submissions(&self) -> MemoryPluginSubmissionStore {
+        MemoryPluginSubmissionStore::new(self)
     }
 
     /// The store of effects.
@@ -4311,5 +4338,88 @@ impl boma_app::ports::ScreenCapabilityStore for MemoryScreenCapabilityStore {
                 space_id: row.space_id.clone(),
                 screen_generation: row.screen_generation,
             }))
+    }
+}
+
+/// The store of plugin submissions (REQ-034). Submissions are not tenant data.
+#[derive(Debug, Clone)]
+pub struct MemoryPluginSubmissionStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryPluginSubmissionStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+impl Default for MemoryPluginSubmissionStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+impl MemoryPluginSubmissionStore {
+    /// What the store recorded, oldest first. Test scaffolding: the review queue reads the
+    /// rows through its own port when it lands.
+    #[must_use]
+    pub fn recorded(&self) -> Vec<RecordedSubmission> {
+        let state = read(&self.state);
+        state
+            .plugin_submissions
+            .iter()
+            .map(|row| RecordedSubmission {
+                id: row.id.clone(),
+                source: row.source.clone(),
+                name: row.name.clone(),
+                contact: row.contact.clone(),
+                submitter_user_id: row.submitter_user_id.clone(),
+                status: row.status.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect()
+    }
+}
+
+/// A submission as the fake stores it, exposed for tests that need to look at what was recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedSubmission {
+    /// The submission's id.
+    pub id: String,
+    /// The source reference, canonical.
+    pub source: String,
+    /// The display name, when the author gave one.
+    pub name: Option<String>,
+    /// The contact address, when the author gave one.
+    pub contact: Option<String>,
+    /// The submitting member, when there was one.
+    pub submitter_user_id: Option<UserId>,
+    /// The review status; always `pending`.
+    pub status: String,
+    /// When the submission was recorded.
+    pub created_at: String,
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::PluginSubmissionStore for MemoryPluginSubmissionStore {
+    async fn record(
+        &self,
+        submission: boma_app::ports::NewPluginSubmission,
+    ) -> Result<boma_app::ports::PluginSubmissionSummary, AppError> {
+        let mut state = write(&self.state);
+        state.plugin_submissions.push(PluginSubmissionRow {
+            id: submission.id.clone(),
+            source: submission.source,
+            name: submission.name,
+            contact: submission.contact,
+            submitter_user_id: submission.submitter_user_id,
+            status: "pending".to_owned(),
+            created_at: submission.created_at,
+        });
+        Ok(boma_app::ports::PluginSubmissionSummary { id: submission.id })
     }
 }

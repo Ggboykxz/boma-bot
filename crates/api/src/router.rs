@@ -13,7 +13,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{authroutes, error::ApiError, health, rpc, screen, state::AppState};
+use crate::{authroutes, error::ApiError, health, public, rpc, screen, state::AppState};
 
 /// Builds the HTTP surface.
 ///
@@ -46,6 +46,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/internal/screen-target",
             post(screen::screen_target).route_layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        // Public and cookieless: the 32 KiB cap is the route's own (D-07), like screen-target.
+        .route(
+            "/api/v1/plugin-submissions",
+            post(public::plugin_submissions)
+                .options(public::plugin_submissions_preflight)
+                .route_layer(DefaultBodyLimit::max(33 * 1024)),
         )
         .merge(rpc::router())
         .fallback(not_found)

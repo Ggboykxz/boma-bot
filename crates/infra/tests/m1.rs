@@ -74,6 +74,7 @@ fn app(database: &Postgres) -> App {
                 pool.clone(),
                 boma_infra::SecretBox::ephemeral(),
             )),
+            Arc::new(boma_infra::PostgresPluginSubmissionStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -1681,4 +1682,41 @@ async fn req_046_a_secret_round_trips_through_postgres_and_survives_a_rekey() {
 
     common::cleanup(&pool, "sek").await;
     common::cleanup(&pool, "otx").await;
+}
+
+/// REQ-034: an anonymous submission survives a round trip to Postgres, verbatim.
+#[tokio::test]
+async fn req_034_a_plugin_submission_round_trips_through_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let store = boma_infra::PostgresPluginSubmissionStore::new(pool.clone());
+    let source = boma_domain::parse_plugin_source("https://example.test/plugin.git#main")
+        .expect("the source parses");
+    let submission = boma_app::ports::NewPluginSubmission {
+        id: "sub_postgres_round_trip".to_owned(),
+        source: source.canonical(),
+        name: Some("Example".to_owned()),
+        contact: Some("author@example.test".to_owned()),
+        submitter_user_id: None,
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+    };
+    let summary = store.record(submission).await.expect("the row is written");
+    assert_eq!(summary.id, "sub_postgres_round_trip");
+    let (source, name, contact, status): (String, Option<String>, Option<String>, String) =
+        sqlx::query_as(
+            "SELECT source, name, contact, status FROM plugin_submissions WHERE id = $1",
+        )
+        .bind("sub_postgres_round_trip")
+        .fetch_one(&pool)
+        .await
+        .expect("the row is there");
+    assert_eq!(source, "https://example.test/plugin#main");
+    assert_eq!(name.as_deref(), Some("Example"));
+    assert_eq!(contact.as_deref(), Some("author@example.test"));
+    assert_eq!(status, "pending");
+    sqlx::query("DELETE FROM plugin_submissions WHERE id = $1")
+        .bind("sub_postgres_round_trip")
+        .execute(&pool)
+        .await
+        .expect("the row is removed");
 }

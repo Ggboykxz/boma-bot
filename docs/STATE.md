@@ -26,6 +26,31 @@ as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay
 Every milestone ships test-first at the API/use-case level, then PG/functional proof, then docs +
 STATE; gates re-run at each push (fmt, clippy -D warnings, cargo test workspace).
 
+**M5 — in flight. Two slices committed: REQ-046 (secrets, `835d8e7`) and REQ-034, part 1
+(plugin submissions).**
+
+1. **REQ-046 (write-only bot secrets, MUST)** — see the previous block; committed `835d8e7`,
+   `boma rekey` operator command wired and documented, 272 tests green at that revision.
+2. **REQ-034 (plugin marketplace, MUST), slice 1 — anonymous submissions.** `POST
+   /api/v1/plugin-submissions` (cookieless, CORS `*`, OPTIONS preflight, 32 KiB cap checked by
+   the handler with a fixed wording, outer 33 KiB gate), per-IP shared counter from D-01 (10/hour,
+   `429` + `retry-after: 3600` past the cap), source grammar in the domain
+   (`crates/domain/src/plugin.rs`, HTTPS only, no credentials/query/port, safe path segments,
+   `.git` dropped, `@ref` and `#subdir`), row recorded in `plugin_submissions` (migration 0027,
+   tenant-less by design, like `rate_limits`). Goldens `plugin-submission` and
+   `plugin-submission-invalid` replay byte for byte; the invalid fixture's wording
+   (`Invalid source.`) is asserted exactly. **289 tests green**, trace 39/58, both goldens marked
+   `implemented`, ratchet tightened 20 → 19.
+   **D-06 ruling:** the "shared counter from D-01" half is done (it is the counter the endpoint
+   uses); the "require an account or a challenge" half is NOT done, because the spec's own golden
+   pins this path as cookieless and public — enforcing an account or a challenge would change the
+   documented public contract, which is a DEVIATION needing your approval. Recorded under
+   Decisions needed (DEC-16).
+   **REQ-034 slice 2 — `marketplace.list|install|submit` RPC, the no-local-code installer (skills
+   without scripts, omissions named, remote-only MCP parts, nothing installed on a malformed
+   source)** — not done yet; the install pipeline and the skill store it persists into are the
+   next slice.
+
 **M5 — in flight, secrets done (REQ-046).** Bot secrets are write-only and encrypted at rest
 (envelope AES-256-GCM per DEC-10 option (a), ADR-020): every space owns a random DEK wrapped under
 `BOMA_MASTER_KEY` (migration 0026; 0025 keeps its original recorded checksum — see the note below);
@@ -701,4 +726,86 @@ Raised by the M0–M4 audit, no recommendation yet:
 
 | Id | Question | Recommendation | ADR |
 |---|---|---|---|
-| DEC-15 | REQ-019's "the parent receives the helper's result and continues" is unimplemented. It was deferred from M2 to M3 and M3 shipped without it. Should it land with the agent engine (when a run can
+| DEC-15 | REQ-019's "the parent receives the helper's result and continues" is unimplemented. Should it land now or with the agent engine? | **Resolved** — landed now as the structured helper outcome (`role=tool`, parent resumed), `e8c3bc9`, before M5 | — |
+| DEC-16 | REQ-034 / D-06: the spec's own golden pins `POST /api/v1/plugin-submissions` as cookieless and public (`plugin-submission.json`, 200 `{ok, id}`), but D-06 asks to "require an account or a challenge". Should the endpoint require one (a DEVIATION from the golden), or stay cookieless with the D-01 shared counter as the only control? | Keep cookieless per the golden (it is the spec's documented public contract); 10/hour per IP via the shared Postgres counter (D-01); challenge leg deferred to you | — |
+
+
+## Deferred requirements
+
+| REQ | Why | Where recorded |
+|---|---|---|
+| REQ-049 (voice, COULD) | Not needed for a functional core; interfaces stay additive | PLAN §5 |
+| REQ-055 (desktop, SHOULD) | Tauri shell lands at M10, after screens and signed releases exist | ADR-016, `apps/desktop/README.md` |
+| REQ-056 (mobile, SHOULD) | PWA ships in M1; the Expo shell waits until device pairing is exercised | ADR-016, PLAN §5 |
+
+## Proposals outside the spec
+
+None. Anything proposed during the build goes here first, with the REQ it would touch.
+
+## Known GUESS (to confirm)
+
+- No runtime observation of the reference exists (the original was never installed or run). Every
+  `spec/` claim is static or documentation-backed; `spec/TRACE.md` marks the two doc-only rows.
+- The reference's run-state table was read from its source (`packages/core/src/run-state.ts`), which
+  is stronger than documentation but still not a runtime observation.
+- BoardUI Pro is not activated on this machine (`license_status`: none). The UI uses free-tier
+  components; a Pro template would be an owner decision plus a licence check before any public repo.
+- The JSON Schema validation of `opencode.json` never ran; the file was edited by hand and reviewed,
+  not validated by a tool.
+- The Compose stack and the Docker image are built and probed **in CI** (job `compose`); this box
+  cannot run them, so the local observation is still absent.
+- The plugin-submission golden (`spec/golden/plugin-submission*.json`) disagrees with the reference
+  source for `plugin-submissions.ts` (the fixture accepts a synthetic single-segment host source and
+  pins cookieless access; the source code requires a GitHub hostname and emails a confirmation
+  address). The rebuild follows the fixture: HTTPS grammar, no GitHub-only restriction, no account,
+  shared counter as the only control. The divergence is recorded under DEC-16.
+
+## What was consulted in the original
+
+| Path | Why |
+|---|---|
+| `../re-workspace/notes/ARCHITECTURE.md` | entry points, flows, trust boundaries |
+| `../re-workspace/notes/validation-audit.md` | V-01…V-09 → defects D-01…D-09 |
+| `../re-workspace/notes/open-questions.md` | injection findings, rebuild questions |
+| `../re-workspace/notes/spec/**` | the contract itself |
+| `../re-workspace/target/rakazo/packages/core/src/run-state.ts` | the authoritative run-state table, to settle the `leased → queued` transition (2026-11-12) |
+| `../re-workspace/target/rakazo/apps/api/src/plugin-submissions.ts` | the endpoint the plugin-submission golden was captured against (2026-11-13) |
+| `../re-workspace/target/rakazo/packages/adapters/src/plugin-connectors.ts` | the source grammar, the no-local-code installer and the skipped-parts vocabulary (2026-11-13) |
+| `../re-workspace/target/rakazo/packages/adapters/src/builtin-skills.ts` | what a built-in skill looks like (2026-11-13) |
+| `../re-workspace/target/rakazo/apps/api/src/routes/connections.ts` | the connector catalogue and per-space install shape (2026-11-13) |
+| `../re-workspace/target/rakazo` (other paths) | only through the citations already recorded in the spec; not re-read in this session |
+
+**Credentials seen in chat.** A GitHub PAT was pasted in chat on 2026-11-13 for a push. It was used
+for that session's pushes only, never written to any file, log or commit; the owner should rotate it.
+
+
+## Implementation notes carried over from the M3 session (verbatim, 2026-11-13)
+
+- **REQ-024 (dispatch, retry, coalescing, MUST)** is done, including the two acceptance criteria
+  the first cut missed. The worker's poll loop sweeps due routines before claiming runs
+  (`boma_app::usecases::dispatch_routines`), creates a `trigger: routine` run per fire,
+  reschedules to the next cron occurrence (`next_run_at` on the routine row), deactivates a spent
+  `@once`, and resets the failure counter on completion. A routine whose previous run is still
+  open is **not** fired a second time: the wake is recorded as `coalesced` and the schedule
+  advances (no stampede). A failed routine-woken run whose failure is **retryable** retries with
+  backoff (migration `0016_run_not_before.sql`; `runs.not_before` gates the claim): up to
+  [`MAX_ATTEMPTS`] = 3 attempts, 60 s × 2^(n-1) capped at 1800 s
+  (`boma_domain::run::retry_delay_seconds`); only then does the failure count toward
+  `account_failures`. Past a threshold of 5 consecutive failures the routine pauses itself and
+  **the owner is told** — a `System` message lands in the thread with the failure story, always
+  on pause, and per run for routines created with `notify: true`. Failures reset on a clean
+  completion via `record_completed`. A run ending `failed` whose failure is **not** retryable
+  counts immediately. Routine-woken runs carry `routine_id` on `runs` (migration
+  `0015_run_routine_id.sql`) — and the Postgres `INSERT INTO runs` forgot to write it (fixed in
+  the same slice; the in-memory adapter masked the omission, so dispatch/coalescing/attribution
+  only ever worked in tests). The single-flight check is `find_open_routine`: a co-worker may
+  skip a wake whose run is already open elsewhere.
+- **REQ-025 (run now, SHOULD)** is done: `routines.runNow` fires a routine once as a normal
+  turn. The trial run is attributed to the routine (`routine_id`, trigger `User` so the failure
+  counters do not move) but it does not depend on or advance the cron schedule — the routine
+  keeps its `active` state and `nextRunAt` untouched. The provider pass uses the routine's
+  prompt when a run carries `routine_id`, because a routine-woken history carries no person
+  message. The wire body is `{routineId}`; the reply is `{routineId, runId, status}`.
+
+Row order matches implementation order.
+

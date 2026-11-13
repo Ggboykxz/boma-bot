@@ -1690,6 +1690,47 @@ pub trait SecretStore: Send + Sync {
     ) -> Result<Option<secrecy::SecretString>, AppError>;
 }
 
+/// What a caller hands in to submit a plugin for review (REQ-034).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPluginSubmission {
+    /// The submission's id.
+    pub id: String,
+    /// The source reference, exactly as submitted (parse or not).
+    pub source: String,
+    /// The plugin's display name, when the author gave one.
+    pub name: Option<String>,
+    /// The contact address, when the author gave one. Never returned by any API.
+    pub contact: Option<String>,
+    /// The submitting member, when there was one (anonymous submissions carry `None`).
+    pub submitter_user_id: Option<boma_domain::UserId>,
+    /// When the submission was recorded.
+    pub created_at: String,
+}
+
+/// What the API exposes about a submission: an id. Nothing about the submitter is returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSubmissionSummary {
+    /// The submission's id.
+    pub id: String,
+}
+
+/// Stores plugin submissions (REQ-034).
+///
+/// Submissions are not tenant data: the anonymous submission path has no space. The review is
+/// an admin concern; this store records rows, nothing more.
+#[async_trait]
+pub trait PluginSubmissionStore: Send + Sync {
+    /// Records a submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database refuses the write.
+    async fn record(
+        &self,
+        submission: NewPluginSubmission,
+    ) -> Result<PluginSubmissionSummary, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

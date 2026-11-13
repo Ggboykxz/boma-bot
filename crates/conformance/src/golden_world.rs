@@ -82,6 +82,8 @@ pub struct GoldenWorld {
 #[must_use]
 pub fn created_ids(fixture: &str) -> Vec<String> {
     let ids: &[&str] = match fixture {
+        "plugin-submission" => &["sub_golden"],
+        "plugin-submission-invalid" => &[],
         "routine-create" => &["rtn_golden"],
         "routine-once" => &["rtn_once_golden"],
         "send-message" | "send-message-replay" => &["msg_golden", "run_golden"],
@@ -120,6 +122,8 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "routine-once"
             | "computer-status"
             | "computer-takeover-conflict"
+            | "plugin-submission"
+            | "plugin-submission-invalid"
     );
     if !needs_world {
         return None;
@@ -196,6 +200,9 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             let _ = (bot, thread);
             seed_other_space(&app, &user_id).await;
         }
+        // The submission endpoint is cookieless and touches no tenant data; the world exists
+        // only so the replay can mint the scripted id the fixture pins.
+        "plugin-submission" | "plugin-submission-invalid" => {}
         _ => return None,
     }
 

@@ -331,6 +331,50 @@ pub async fn hit_rate_limit(
     app.stores.rate_limits.hit(key, &now, window_seconds).await
 }
 
+/// Records a plugin submission for review (REQ-034).
+///
+/// `source` arrives already parsed: the callers decide how to report a malformed reference,
+/// because the public endpoint pins the exact body `Invalid source.` while the authed RPC uses
+/// the ordinary boundary rules. An empty `name` or `contact` is stored as nothing.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn submit_plugin(
+    app: &App,
+    source: &boma_domain::PluginSourceRef,
+    name: Option<String>,
+    contact: Option<String>,
+    submitter: Option<boma_domain::UserId>,
+) -> Result<String, AppError> {
+    let id = app.services.ids.new_id("sub");
+    app.stores
+        .plugin_submissions
+        .record(crate::ports::NewPluginSubmission {
+            id: id.clone(),
+            source: source.canonical(),
+            name: normalize_optional(name, MAX_PLUGIN_NAME_LENGTH),
+            contact: normalize_optional(contact, MAX_PLUGIN_CONTACT_LENGTH),
+            submitter_user_id: submitter,
+            created_at: app.services.clock.now(),
+        })
+        .await?;
+    Ok(id)
+}
+
+/// The longest display name a submission carries.
+const MAX_PLUGIN_NAME_LENGTH: usize = 120;
+
+/// The longest contact address a submission carries.
+const MAX_PLUGIN_CONTACT_LENGTH: usize = 320;
+
+/// Trims and caps an optional free-text field; empty becomes absent.
+fn normalize_optional(value: Option<String>, max: usize) -> Option<String> {
+    value
+        .map(|value| value.trim().chars().take(max).collect::<String>())
+        .filter(|value| !value.is_empty())
+}
+
 /// A message to send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendMessage {

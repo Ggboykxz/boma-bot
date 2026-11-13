@@ -12,9 +12,9 @@ use crate::{
     ports::{
         AccountStore, BotStore, CardStore, Clock, ComputerStore, EffectStore, EventPublisher,
         EventStore, IdGenerator, InvitationStore, MemoryStore, MessageStore, PasswordHasher,
-        PendingToolCallStore, RateLimitStore, ReactionStore, ReadStateStore, RosterStore,
-        RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore, SpaceStore,
-        ThreadStore, TokenGenerator, ToolStore, UserStore,
+        PendingToolCallStore, PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore,
+        RosterStore, RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore,
+        SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -49,6 +49,8 @@ pub struct Stores {
     pub rate_limits: Arc<dyn RateLimitStore>,
     /// The bot secrets vault (REQ-046).
     pub secrets: Arc<dyn SecretStore>,
+    /// Anonymous plugin submissions awaiting review (REQ-034).
+    pub plugin_submissions: Arc<dyn PluginSubmissionStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
     /// The per-run tool catalogue.
@@ -93,6 +95,7 @@ impl Stores {
         tools: Arc<dyn ToolStore>,
         rate_limits: Arc<dyn RateLimitStore>,
         secrets: Arc<dyn SecretStore>,
+        plugin_submissions: Arc<dyn PluginSubmissionStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -116,6 +119,7 @@ impl Stores {
             pending_tool_calls,
             rate_limits,
             secrets,
+            plugin_submissions,
             effects,
             tools,
             reactions,

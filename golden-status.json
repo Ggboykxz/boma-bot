@@ -66,14 +66,14 @@
       "reason": "M8 - the model catalogue and BYOK credentials arrive with money and models"
     },
     "plugin-submission": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-034",
-      "reason": "M5 - plugin submissions belong to the integrations milestone"
+      "reason": null
     },
     "plugin-submission-invalid": {
-      "status": "pending",
+      "status": "implemented",
       "req": "REQ-034",
-      "reason": "M5 - the submission parser and its validation are not implemented"
+      "reason": null
     },
     "ready": {
       "status": "implemented",

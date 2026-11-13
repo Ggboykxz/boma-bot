@@ -42,6 +42,7 @@ pub use stores::invitations::PostgresInvitationStore;
 pub use stores::memory::PostgresMemoryStore;
 pub use stores::messages::PostgresMessageStore;
 pub use stores::pending_tool_calls::PostgresPendingToolCallStore;
+pub use stores::plugin_submissions::PostgresPluginSubmissionStore;
 pub use stores::rate_limits::PostgresRateLimitStore;
 pub use stores::reactions::PostgresReactionStore;
 pub use stores::read_states::PostgresReadStateStore;

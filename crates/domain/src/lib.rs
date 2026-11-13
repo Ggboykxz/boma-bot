@@ -19,6 +19,7 @@ pub mod ids;
 pub mod memory;
 pub mod message;
 pub mod model;
+pub mod plugin;
 pub mod routine;
 pub mod run;
 pub mod tenancy;
@@ -47,6 +48,7 @@ pub use message::{
     validate_message_text,
 };
 pub use model::{DeploymentModels, ModelChoice, ModelPreferences, resolve};
+pub use plugin::{PluginSourceError, PluginSourceRef, parse_plugin_source};
 pub use routine::{
     MAX_CRONS, MAX_ROUTINE_NAME_LENGTH, MAX_ROUTINE_PROMPT_LENGTH, ONCE, next_run_at,
     parse_trigger, validate_routine_name, validate_routine_prompt, validate_timezone,
