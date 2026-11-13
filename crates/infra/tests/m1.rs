@@ -1434,3 +1434,123 @@ async fn req_024_a_backoff_queued_run_waits_for_its_window_in_postgres() {
     cleanup(database, &organization_id, &email).await;
     fresh.dispose().await;
 }
+
+/// A provider that records every request it was handed, then answers with one chunk.
+#[derive(Default)]
+struct CapturingProvider {
+    requests: std::sync::Mutex<Vec<boma_app::ports::ProviderRequest>>,
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ModelProvider for CapturingProvider {
+    async fn complete(
+        &self,
+        request: boma_app::ports::ProviderRequest,
+    ) -> Result<boma_app::ports::ProviderTurn, boma_app::AppError> {
+        self.requests
+            .lock()
+            .expect("the requests are captured")
+            .push(request);
+        Ok(boma_app::ports::ProviderTurn::Chunks(vec![
+            "Answered.".to_owned(),
+        ]))
+    }
+}
+
+#[tokio::test]
+async fn req_022_the_worker_injects_only_memory_of_the_runs_space_in_postgres() {
+    let fresh = common::fresh_database().await;
+    let database = &fresh.database;
+    let app = app(database);
+    let (_user_id, _space_id, context, email, organization_id) = space(&app, "memory-scope").await;
+    let bot = boma_app::usecases::create_bot(&app, &context, "Assistant", None, None)
+        .await
+        .expect("the bot is created");
+    let bot_id = bot.bot.id.clone();
+
+    boma_app::usecases::memory_write(
+        &app,
+        &context,
+        "bot",
+        Some(bot_id.as_str()),
+        "notes/strategy.md",
+        "This space's strategy.",
+    )
+    .await
+    .expect("the bot memory is written");
+    boma_app::usecases::memory_write(
+        &app,
+        &context,
+        "shared",
+        None,
+        "shared/manifesto.md",
+        "This space's manifesto.",
+    )
+    .await
+    .expect("the shared memory is written");
+
+    // A second space, with its own shared document the run knows nothing about.
+    let (_, _, context_other, email_other, organization_id_other) =
+        space(&app, "memory-scope-other").await;
+    boma_app::usecases::memory_write(
+        &app,
+        &context_other,
+        "shared",
+        None,
+        "shared/secret.md",
+        "Other space's secret.",
+    )
+    .await
+    .expect("the other shared memory is written");
+
+    boma_app::usecases::send_message(
+        &app,
+        &context,
+        &boma_app::usecases::SendMessage {
+            bot_id: bot_id.to_string(),
+            text: "Summarise my week.".to_owned(),
+            client_nonce: None,
+            reply_to_message_id: None,
+            reply_quote: None,
+        },
+    )
+    .await
+    .expect("the message is sent");
+
+    let provider = Arc::new(CapturingProvider::default());
+    let worker = boma_app::worker::Worker::new(
+        Arc::new(app.clone()),
+        provider.clone(),
+        "worker-1".to_owned(),
+    );
+    assert!(worker.step().await.expect("the worker answers"));
+
+    let request = provider
+        .requests
+        .lock()
+        .expect("the requests are captured")
+        .first()
+        .cloned()
+        .expect("the provider was asked");
+    let contents: Vec<&str> = request
+        .memory
+        .iter()
+        .map(|document| document.content.as_str())
+        .collect();
+    assert!(
+        contents.contains(&"This space's strategy."),
+        "the bot's own document reaches the turn: {contents:?}"
+    );
+    assert!(
+        contents.contains(&"This space's manifesto."),
+        "this space's shared document reaches the turn: {contents:?}"
+    );
+    assert!(
+        !contents.contains(&"Other space's secret."),
+        "the other space's shared document never reaches the turn: {contents:?}"
+    );
+
+    cleanup(database, &organization_id, &email).await;
+    cleanup(database, &organization_id_other, &email_other).await;
+    fresh.dispose().await;
+}

@@ -181,16 +181,23 @@ impl Worker {
 
     /// Builds the scoped memory context for one turn: bot documents first, then the
     /// space-shared ones (REQ-022).
+    ///
+    /// The memory store derives the tenant from the caller's context; a system context carries
+    /// no space, so the worker reads as the member whose run asked — the same space the run
+    /// belongs to, and notably not every tenant's shared memory.
     async fn memory_context(
         &self,
-        context: &TenantContext,
         claimed: &usecases::ClaimedRun,
     ) -> Result<Vec<crate::ports::MemoryContext>, AppError> {
+        let scoped = TenantContext::Member {
+            space_id: claimed.bot.space_id.clone(),
+            user_id: claimed.run.user_id.clone(),
+        };
         let bot_memory = self
             .app
             .stores
             .memory
-            .list(context, Some(&claimed.bot.id))
+            .list(&scoped, Some(&claimed.bot.id))
             .await?
             .into_iter()
             .map(|document| crate::ports::MemoryContext {
@@ -202,7 +209,7 @@ impl Worker {
             .app
             .stores
             .memory
-            .list(context, None)
+            .list(&scoped, None)
             .await?
             .into_iter()
             .map(|document| crate::ports::MemoryContext {
@@ -249,7 +256,7 @@ impl Worker {
         let tools = usecases::tool_catalogue(&self.app, context, claimed.bot.id.as_str()).await?;
         // REQ-022: scoped memory rides into the turn. Bot documents first, then the
         // space-shared ones; the provider logs what it was given, so a test can assert it.
-        let memory = self.memory_context(context, claimed).await?;
+        let memory = self.memory_context(claimed).await?;
         let request = ProviderRequest {
             bot: claimed.bot.clone(),
             thread: claimed.thread.clone(),

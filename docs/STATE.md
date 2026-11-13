@@ -2,6 +2,20 @@
 
 ## Current milestone
 
+**Before-M5 correctness fix — migration 0024 (memory_documents shared rows).** The first full
+run of the worker against Postgres caught a live defect: 0013 stored shared-memory rows with
+`bot_id = ''` and `FOREIGN KEY REFERENCES bots (id)`, so every "shared" document violated the FK
+and NO shared memory could ever be written on a real deployment — the in-memory adapter, which
+models `Option<BotId>`, had masked it for months. Migration 0024 moves the shared marker to
+`NULL` (bot_id nullable, dropped default, NULL-shaped CHECK replacing `memory_documents_check`,
+partial unique index `memory_documents_shared_key` for the upsert arbiter). The PG adapter now
+binds NULL, matches with `IS NOT DISTINCT FROM`, parses `Option<String>` into `Option<BotId>`,
+and the `req_022_a_memory_entry_is_available...` invariants hold against real Postgres now
+(`req_022_the_worker_injects_only_memory_of_the_runs_space_in_postgres`). The worker also reads
+scoped memory as the run's *member* context instead of the system context, so the space is a
+real barrier on the PG path (a defect the memory adapter cannot express). Gates at this revision:
+258 tests green, clippy, fmt, deny, machete. Dev DB `boma` carries migrations through 0024.
+
 **Before-M5 Phase 3 (BYOK provider) — done.** `boma-infra::OpenAiCompatibleAdapter` implements the
 `ModelProvider` port against an OpenAI-compatible HTTP surface (REQ-015): `finish_reason`/`tool_calls`
 map to `ProviderTurn` exactly like the scripted provider, memory rides as a scoped system message,

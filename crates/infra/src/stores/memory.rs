@@ -47,21 +47,20 @@ impl MemoryStore for PostgresMemoryStore {
         } else {
             "shared"
         };
-        let bot_key = document
-            .bot_id
-            .as_ref()
-            .map(|id| id.as_str().to_owned())
-            .unwrap_or_default();
+        let bot_key = document.bot_id.as_ref().map(|id| id.as_str().to_owned());
         let path = document.path.clone();
         let payload = document.content;
         let updated_at = document.updated_at;
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
-                let id = document_id(&space_key, scope, &bot_key, &path);
+                let id = document_id(&space_key, scope, bot_key.as_deref().unwrap_or(""), &path);
                 // The row level security policy is the defense in depth; the path is
                 // validated inside the tenant before anything touches the database, and the
                 // rows are keyed by the tenant's space_id.
-                let row = sqlx::query_as::<_, MemoryDocumentRow>("INSERT INTO memory_documents (id, space_id, scope, bot_id, path, content, revision, updated_at)
+                // The shared arbiter is the partial index (the table UNIQUE cannot discriminate
+                // NULLs); the bot arbiter is the table UNIQUE itself.
+                let query = if bot_key.is_some() {
+                    "INSERT INTO memory_documents (id, space_id, scope, bot_id, path, content, revision, updated_at)
                      VALUES ($1, $2, $3, $4, $5, $6, 1, $7::timestamptz)
                      ON CONFLICT (space_id, scope, bot_id, path) DO UPDATE
                          SET content = EXCLUDED.content,
@@ -69,11 +68,21 @@ impl MemoryStore for PostgresMemoryStore {
                              updated_at = EXCLUDED.updated_at
                      RETURNING space_id, bot_id, path, content, revision,
                                boma.rfc3339(updated_at) AS updated_at"
-                )
+                } else {
+                    "INSERT INTO memory_documents (id, space_id, scope, bot_id, path, content, revision, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, 1, $7::timestamptz)
+                     ON CONFLICT (space_id, path) WHERE scope = 'shared' AND bot_id IS NULL DO UPDATE
+                         SET content = EXCLUDED.content,
+                             revision = memory_documents.revision + 1,
+                             updated_at = EXCLUDED.updated_at
+                     RETURNING space_id, bot_id, path, content, revision,
+                               boma.rfc3339(updated_at) AS updated_at"
+                };
+                let row = sqlx::query_as::<_, MemoryDocumentRow>(query)
                 .bind(id.as_str())
                 .bind(space_key.as_str())
                 .bind(scope)
-                .bind(bot_key.as_str())
+                .bind(bot_key.as_deref())
                 .bind(path.as_str())
                 .bind(payload.as_str())
                 .bind(updated_at.as_str())
@@ -110,18 +119,18 @@ impl MemoryStore for PostgresMemoryStore {
         let path = path.to_owned();
         let space_key = space_id.as_str().to_owned();
         let scope = if bot_id.is_some() { "bot" } else { "shared" };
-        let bot_key = bot_id.map(|id| id.as_str().to_owned()).unwrap_or_default();
+        let bot_key = bot_id.map(|id| id.as_str().to_owned());
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
                 let row = sqlx::query_as::<_, MemoryDocumentRow>(
                     "SELECT space_id, bot_id, path, content, revision,
                                boma.rfc3339(updated_at) AS updated_at
                      FROM memory_documents
-                     WHERE space_id = $1 AND scope = $2 AND bot_id = $3 AND path = $4",
+                     WHERE space_id = $1 AND scope = $2 AND bot_id IS NOT DISTINCT FROM $3 AND path = $4",
                 )
                 .bind(space_key.as_str())
                 .bind(scope)
-                .bind(bot_key.as_str())
+                .bind(bot_key.as_deref())
                 .bind(path)
                 .fetch_optional(&mut *conn)
                 .await
@@ -140,19 +149,19 @@ impl MemoryStore for PostgresMemoryStore {
         let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
         let space_key = space_id.as_str().to_owned();
         let scope = if bot_id.is_some() { "bot" } else { "shared" };
-        let bot_key = bot_id.map(|id| id.as_str().to_owned()).unwrap_or_default();
+        let bot_key = bot_id.map(|id| id.as_str().to_owned());
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
                 let rows = sqlx::query_as::<_, MemoryDocumentRow>(
                     "SELECT space_id, bot_id, path, content, revision,
                                boma.rfc3339(updated_at) AS updated_at
                      FROM memory_documents
-                     WHERE space_id = $1 AND scope = $2 AND bot_id = $3
+                     WHERE space_id = $1 AND scope = $2 AND bot_id IS NOT DISTINCT FROM $3
                      ORDER BY path",
                 )
                 .bind(space_key.as_str())
                 .bind(scope)
-                .bind(bot_key.as_str())
+                .bind(bot_key.as_deref())
                 .fetch_all(&mut *conn)
                 .await
                 .map_err(tenant::unavailable)?;
@@ -172,16 +181,16 @@ impl MemoryStore for PostgresMemoryStore {
         let path = path.to_owned();
         let space_key = space_id.as_str().to_owned();
         let scope = if bot_id.is_some() { "bot" } else { "shared" };
-        let bot_key = bot_id.map(|id| id.as_str().to_owned()).unwrap_or_default();
+        let bot_key = bot_id.map(|id| id.as_str().to_owned());
         tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
                 let deleted = sqlx::query(
                     "DELETE FROM memory_documents
-                     WHERE space_id = $1 AND scope = $2 AND bot_id = $3 AND path = $4",
+                     WHERE space_id = $1 AND scope = $2 AND bot_id IS NOT DISTINCT FROM $3 AND path = $4",
                 )
                 .bind(space_key.as_str())
                 .bind(scope)
-                .bind(bot_key.as_str())
+                .bind(bot_key.as_deref())
                 .bind(path)
                 .execute(&mut *conn)
                 .await
