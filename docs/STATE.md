@@ -2,6 +2,19 @@
 
 ## Current milestone
 
+**Before-M5 Phase 2 (defects) — done and pushed.** D-01 (shared auth rate limiting across
+replicas via migration 0023's bucket table, 10 sign-in / 5 sign-up per IP per window, 429 with
+the stable envelope), D-04 re-verified (unlisted proxies cannot steer the resolved address; a
+trusted proxy steers by left-most valid XFF entry; empty trusted list by default), D-07
+re-verified (global cap plus per-procedure caps enforced before the handler), D-08 (session
+lifetime now bounded, 5 min..=60 days; secure cookies pinned by test; the linking policy does not
+apply yet because the rebuilt auth has no second provider), D-09 (typed enum enforced by a
+workspace scanner test), D-02 (already closed). Deferred to their owning milestones: D-03
+(attachment type sniffing — needs the artifact upload pipeline), D-05 (MCP private endpoints —
+needs the MCP integration surface), D-06 (plugin submissions — needs the plugin endpoint).
+Counts CONFIRMED on this machine at `7ebd427`: 250 tests (cargo test --workspace --all-features
+--locked --no-fail-fast), clippy, fmt, deny, machete, secret scan, trace ratchet 21.
+
 **Before-M5 Phase 1 — M0–M4 closure for the agent loop is done and pushed (`d9762a4`).** REQ-016/017/019/022
 improved materially: a write/spend tool turn parks the run on one approval card per run (`cards_thread_run_key`),
 the person answers, the parked call applies exactly once behind the effect key `tool:{run}:{call}`, and the run
