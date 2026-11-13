@@ -2006,6 +2006,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn req_019_the_tool_loop_is_bounded() {
+        use std::sync::Arc;
+
+        use crate::ScriptedProvider;
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let bot_id = created.bot.id.clone();
+
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Loop.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let outcome = test
+            .app()
+            .stores
+            .runs
+            .list(&context, Some(&bot_id), None, 1)
+            .await
+            .expect("the store answers");
+        let run_id = outcome.runs[0].run.id.clone();
+
+        // The model keeps asking for the same read tool forever; the loop must terminate.
+        let call = || boma_app::ports::ToolCallRequest {
+            id: "call_1".to_owned(),
+            name: "memory.read".to_owned(),
+            arguments: serde_json::json!({ "scope": "shared", "path": "never-ends.md" }),
+        };
+        let provider = Arc::new(ScriptedProvider::new_turn(
+            (0..32)
+                .map(|_| boma_app::ports::ProviderTurn::ToolCalls(vec![call()]))
+                .collect(),
+        ));
+        let worker = Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(
+            run.status,
+            RunStatus::Failed,
+            "the run fails legibly instead of looping forever"
+        );
+        let reason = run.error.expect("the failure records a reason");
+        assert!(
+            reason.contains("tool calls"),
+            "the reason names the rule: {reason}"
+        );
+
+        // The tool rounds are bounded exactly at the cap.
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 50)
+            .await
+            .expect("the page answers");
+        let tool_messages = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Tool)
+            .count();
+        assert_eq!(
+            tool_messages, 8,
+            "at most eight rounds of tool calls fold into one run"
+        );
+    }
+
+    #[tokio::test]
     async fn req_019_delegate_helper_run_creates_a_child_run() {
         let test = TestApp::builder().build();
         let user_id = test

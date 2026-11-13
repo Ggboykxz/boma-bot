@@ -104,7 +104,7 @@ impl Worker {
         let mut passes: u32 = 0;
         let mut tool_passes: u32 = 0;
         loop {
-            let outcome = self.provider_pass(&context, &claimed).await?;
+            let outcome = self.provider_pass(&context, &claimed, tool_passes).await?;
             match outcome {
                 PassOutcome::Answered {
                     text: chunk_text,
@@ -131,16 +131,6 @@ impl Worker {
                 }
                 PassOutcome::ToolsDispatched => {
                     tool_passes += 1;
-                    if tool_passes > MAX_TOOL_CALLS {
-                        let error = AppError::Rule(boma_domain::DomainError::InvalidName(format!(
-                            "the run asked for more than {MAX_TOOL_CALLS} rounds of tool calls"
-                        )));
-                        tracing::warn!(run = %claimed.run.id, %error, "the tool loop hit its cap");
-                        self.fail_run(&context, &run, error).await?;
-                        self.helper_finished(&context, &run, "the helper run failed")
-                            .await;
-                        return Ok(true);
-                    }
                 }
                 PassOutcome::Suspended => return Ok(true),
                 PassOutcome::Cancelled | PassOutcome::Failed => {
@@ -231,6 +221,7 @@ impl Worker {
         &self,
         context: &TenantContext,
         claimed: &usecases::ClaimedRun,
+        tool_passes: u32,
     ) -> Result<PassOutcome, AppError> {
         let run = claimed.run.clone();
         let history = self
@@ -303,7 +294,7 @@ impl Worker {
             // The loop: read tools execute and fold into the history, write/spend tools park
             // the run on an approval card (REQ-016, REQ-017).
             Ok(ProviderTurn::ToolCalls(calls)) => {
-                self.dispatch_tool_calls(context, claimed, &tools, &run, calls)
+                self.dispatch_tool_calls(context, claimed, &tools, &run, calls, tool_passes)
                     .await
             }
             Err(error) => {
@@ -346,7 +337,20 @@ impl Worker {
         tools: &[boma_domain::ToolSpec],
         run: &boma_domain::Run,
         calls: Vec<crate::ports::ToolCallRequest>,
+        tool_passes: u32,
     ) -> Result<PassOutcome, AppError> {
+        // The cap binds before any tool executes: past eight rounds the run fails legibly
+        // instead of calling the tools forever (REQ-019, the loop stays bounded).
+        if tool_passes >= MAX_TOOL_CALLS {
+            let error = AppError::Rule(boma_domain::DomainError::InvalidName(format!(
+                "the run asked for more than {MAX_TOOL_CALLS} rounds of tool calls"
+            )));
+            tracing::warn!(run = %run.id, %error, "the tool loop hit its cap");
+            self.fail_run(context, run, error).await?;
+            self.helper_finished(context, run, "the helper run failed")
+                .await;
+            return Ok(PassOutcome::Failed);
+        }
         if calls.is_empty() {
             let error = AppError::Rule(boma_domain::DomainError::InvalidName(
                 "the model returned an empty tool call turn".to_owned(),
