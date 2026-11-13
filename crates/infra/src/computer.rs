@@ -236,13 +236,18 @@ impl ComputerRuntime for DockerComputerRuntime {
             AppError::Unavailable
         })?;
 
+        // A published binding only takes effect for a port the container also exposes: the CLI
+        // sends both, and a daemon that insists on `ExposedPorts` (as older ones do) would
+        // otherwise accept the container and publish nothing.
+        let exposed_ports = self.cdp_port.map(|port| vec![format!("{port}/tcp")]);
         let port_bindings = self.cdp_port.map(|port| {
             let mut bindings = HashMap::new();
             bindings.insert(
                 format!("{port}/tcp"),
                 Some(vec![bollard::models::PortBinding {
                     host_ip: Some("127.0.0.1".to_owned()),
-                    host_port: Some("0".to_owned()),
+                    // An empty host port asks the daemon for a free one.
+                    host_port: Some(String::new()),
                 }]),
             );
             bindings
@@ -250,6 +255,7 @@ impl ComputerRuntime for DockerComputerRuntime {
         let body = ContainerCreateBody {
             image: Some(self.image.clone()),
             cmd: Some(self.command.clone()),
+            exposed_ports,
             labels: Some(HashMap::from([(
                 "boma.computer".to_owned(),
                 spec.computer_id.clone(),

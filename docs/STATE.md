@@ -24,7 +24,10 @@ counter, a scroll moves `window.scrollY`). A deployment opts in with `BOMA_COMPU
 `BOMA_COMPUTER_CMD` (whitespace-separated argv, e.g. `--headless --no-sandbox
 --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 about:blank`) and
 `BOMA_COMPUTER_CDP_PORT=9222`; the container port is published on a random host port and read
-back by inspecting the container. The screen stream (REQ-030) falls back to CDP when the image
+back by inspecting the container. The supervisor sends both `ExposedPorts` and the binding, and
+asks for the host port with an empty string: a binding alone publishes nothing on a daemon that
+follows the older contract (found on CI, where the port came back unbound), and `"0"` is not the
+documented way to ask for a free one. The screen stream (REQ-030) falls back to CDP when the image
 carries no frame command. The shell and file tools keep working on the alpine image unchanged.
 
 - **REQ-027 (provider-agnostic computers, fail-closed, MUST)** is done: `SANDBOX_PROVIDER`
