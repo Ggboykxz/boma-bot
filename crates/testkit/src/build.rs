@@ -3904,7 +3904,10 @@ mod mcp_tests {
         let Err(error) = outcome else {
             panic!("a stdio server must be refused by default");
         };
-        assert!(error.to_string().contains("local command servers"), "{error}");
+        assert!(
+            error.to_string().contains("local command servers"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
