@@ -2561,12 +2561,43 @@ pub async fn react_to_message(
 
 /// The built-in tools every run receives (REQ-016).
 ///
-/// The spec requires built-in tools to exist but does not enumerate them, so this list is empty
-/// at M2: each built-in lands with the milestone that executes it (memory tools with REQ-022,
-/// messaging tools with REQ-048). An empty space and an empty bot grant therefore yield exactly
-/// these built-ins, as the acceptance criteria require. A silent non-empty list here would be a
-/// lie about what exists; each milestone appends, it never removes.
-pub const BUILTIN_TOOLS: &[ToolSpec] = &[];
+/// The memory pair (REQ-022) and the helper delegate (REQ-019) land with the tool loop.
+/// Computer reads (REQ-028) are read-only, and always go through the takeover and running gates.
+/// `delegate.helper` is write-class: a helper mutates the conversation state machine.
+///
+/// # Why a function and not a const
+///
+/// A static of `String`-keyed specs would still allocate on first call; a `Vec` built once per
+/// call keeps the catalogue construction simple and lets the loop extend it cheaply.
+#[must_use]
+pub fn builtin_tools() -> Vec<ToolSpec> {
+    vec![
+        ToolSpec {
+            key: "memory.read".to_owned(),
+            description: "Read a memory document this bot can see.".to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Read,
+        },
+        ToolSpec {
+            key: "memory.write".to_owned(),
+            description: "Append a revision to a memory document this bot can write.".to_owned(),
+            kind: boma_domain::ToolKind::Memory,
+            effect: boma_domain::ToolEffect::Write,
+        },
+        ToolSpec {
+            key: "delegate.helper".to_owned(),
+            description: "Ask a scoped helper run to work on the same thread.".to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Write,
+        },
+        ToolSpec {
+            key: "computer.observe".to_owned(),
+            description: "Capture the current screen of this bot's computer.".to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Read,
+        },
+    ]
+}
 
 /// Delegates a scoped task to a helper run on the same bot and thread (REQ-019).
 ///
@@ -2667,7 +2698,100 @@ pub async fn tool_catalogue(
         .find(context, &bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let mut tools = BUILTIN_TOOLS.to_vec();
+    let mut tools = builtin_tools();
     tools.extend(app.stores.tools.catalogue_for(context, &bot.id).await?);
     Ok(tools)
+}
+
+/// Dispatches one tool call against the catalogue of this run (REQ-016, REQ-017).
+///
+/// Read effects execute inline; write and spend effects do not touch state and answer with the
+/// approval marker instead, so a tool call can never have a side effect before a member approves.
+/// A call to a tool the bot may not use is refused and recorded as such, never executed.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's tenant. The
+/// refusal of an unknown tool is not an error: it is a `ToolCallResult` with `ok: false`, because
+/// the loop folds refusals into the next model turn.
+pub async fn dispatch_tool(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    call: &crate::ports::ToolCallRequest,
+) -> Result<crate::ports::ToolCallResult, AppError> {
+    let catalogue = tool_catalogue(app, context, bot_id).await?;
+    let Some(tool) = catalogue.iter().find(|tool| tool.key == call.name) else {
+        return Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: serde_json::json!({ "error": "the bot may not use this tool" }),
+        });
+    };
+    match tool.effect {
+        boma_domain::ToolEffect::Read => dispatch_read_tool(app, context, call).await,
+        // Writes and spends never reach a real effect here: they wait for approval (REQ-017).
+        boma_domain::ToolEffect::Write => Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: true,
+            body: serde_json::json!({ "approval": "required" }),
+        }),
+        boma_domain::ToolEffect::Spend => Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: true,
+            body: serde_json::json!({ "approval": "required", "kind": "spend" }),
+        }),
+    }
+}
+
+/// Runs the read effects inline against the stores (REQ-016).
+async fn dispatch_read_tool(
+    app: &App,
+    context: &TenantContext,
+    call: &crate::ports::ToolCallRequest,
+) -> Result<crate::ports::ToolCallResult, AppError> {
+    let string = |key: &str| -> Option<String> {
+        call.arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    match call.name.as_str() {
+        "memory.read" => {
+            let bot_id = string("botId");
+            let scope = string("scope").unwrap_or_else(|| "shared".to_owned());
+            let Some(path) = string("path") else {
+                return Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: false,
+                    body: serde_json::json!({ "error": "the tool needs a `path` argument" }),
+                });
+            };
+            match memory_read(app, context, &scope, bot_id.as_deref(), &path).await {
+                Ok(document) => Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: true,
+                    body: serde_json::json!({
+                        "path": document.path,
+                        "content": document.content,
+                        "revision": document.revision,
+                    }),
+                }),
+                Err(AppError::NotFound) => Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: false,
+                    body: serde_json::json!({ "error": "the document does not exist" }),
+                }),
+                Err(error) => Err(error),
+            }
+        }
+        // Computer reads are only callable from a running computer, and this use case enforces
+        // that: dispatching the tool reports that the observation itself needs a computer to
+        // answer first. Budgeting and base64 stay out of the model's reach.
+        other => Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: serde_json::json!({ "error": format!("the read tool {other} is not dispatchable yet") }),
+        }),
+    }
 }

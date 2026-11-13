@@ -947,19 +947,20 @@ mod tests {
             false,
         );
 
-        // A bot whose grant is the echo tool: the catalogue carries exactly that, whatever the
-        // space enabled.
+        // A bot whose grant is the echo tool: the catalogue carries the built-ins plus
+        // whatever the grant allows.
         database.seed_bot_grant(&bot_id, vec!["mcp.echo".to_owned()]);
-
         let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
             .await
             .expect("the catalogue answers");
-        assert_eq!(catalogue.len(), 1);
-        assert_eq!(catalogue[0].key, "mcp.echo");
-        assert_eq!(catalogue[0].kind, boma_domain::ToolKind::Mcp);
+        let keys: Vec<&str> = catalogue.iter().map(|tool| tool.key.as_str()).collect();
+        assert!(keys.contains(&"mcp.echo"));
+        assert!(keys.contains(&"memory.read"));
+        assert!(!keys.contains(&"connector.github"));
+        assert!(!keys.contains(&"mcp.write"));
 
-        // Empty grant: the bot sees every enabled install of the space, disabled ones never
-        // (REQ-016).
+        // Empty grant: the built-ins plus every enabled install of the space; disabled ones
+        // never (REQ-016).
         database.seed_bot_grant(&bot_id, Vec::new());
         let catalogue = boma_app::usecases::tool_catalogue(test.app(), &context, bot_id.as_str())
             .await
@@ -967,6 +968,8 @@ mod tests {
         let keys: Vec<&str> = catalogue.iter().map(|tool| tool.key.as_str()).collect();
         assert!(keys.contains(&"mcp.echo"));
         assert!(keys.contains(&"mcp.write"));
+        assert!(keys.contains(&"memory.read"));
+        assert!(keys.contains(&"memory.write"));
         assert!(!keys.contains(&"connector.github"));
     }
 
@@ -1042,9 +1045,18 @@ mod tests {
             .iter()
             .map(|tool| tool.key.as_str())
             .collect();
+        let expected: Vec<String> = boma_app::usecases::builtin_tools()
+            .into_iter()
+            .chain(std::iter::once(boma_domain::ToolSpec {
+                key: "mcp.write".to_owned(),
+                description: "Write the file".to_owned(),
+                kind: boma_domain::ToolKind::Mcp,
+                effect: boma_domain::ToolEffect::Write,
+            }))
+            .map(|tool| tool.key)
+            .collect();
         assert_eq!(
-            keys,
-            vec!["mcp.write"],
+            keys, expected,
             "the model never sees a tool the bot may not use"
         );
         let _ = thread_id;
@@ -1170,6 +1182,188 @@ mod tests {
         .expect("the fallback resolves");
         assert_eq!(outcome.run.model_provider.as_deref(), Some("openai"));
         assert_eq!(outcome.run.model_id.as_deref(), Some("gpt-5"));
+    }
+
+    #[tokio::test]
+    async fn req_016_a_builtin_memory_read_grants_the_read_and_the_gate_dispatches_it() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+
+        // The read tool is part of the built-in catalogue with a read effect class (REQ-016).
+        let catalogue =
+            boma_app::usecases::tool_catalogue(test.app(), &context, created.bot.id.as_str())
+                .await
+                .expect("the catalogue answers");
+        let memory_read = catalogue
+            .iter()
+            .find(|tool| tool.key == "memory.read")
+            .expect("memory.read is a built-in tool");
+        assert_eq!(memory_read.effect, boma_domain::ToolEffect::Read);
+
+        // The bot reads a document it owns after a write.
+        boma_app::usecases::memory_write(
+            test.app(),
+            &context,
+            "bot",
+            Some(created.bot.id.as_str()),
+            "notes/commits.md",
+            "# Commits",
+        )
+        .await
+        .expect("the memory write happened");
+        let result = boma_app::usecases::dispatch_tool(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            &boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "memory.read".to_owned(),
+                arguments: serde_json::json!({
+                    "scope": "bot",
+                    "botId": created.bot.id.as_str(),
+                    "path": "notes/commits.md",
+                }),
+            },
+        )
+        .await
+        .expect("the call dispatches");
+        assert_eq!(result.id, "call_1");
+        assert!(result.ok);
+        assert_eq!(
+            result
+                .body
+                .get("content")
+                .and_then(serde_json::Value::as_str),
+            Some("# Commits"),
+        );
+    }
+
+    #[tokio::test]
+    async fn req_016_a_tool_the_bot_may_not_use_is_refused_and_recorded() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+
+        let result = boma_app::usecases::dispatch_tool(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            &boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "delete.everything".to_owned(),
+                arguments: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("the refusal itself is not an error");
+        assert_eq!(result.id, "call_1");
+        assert!(!result.ok);
+        assert_eq!(
+            result.body.get("error").and_then(serde_json::Value::as_str),
+            Some("the bot may not use this tool"),
+        );
+    }
+
+    #[tokio::test]
+    async fn req_016_a_write_tool_requires_approval_and_has_no_effect_yet() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+
+        let catalogue =
+            boma_app::usecases::tool_catalogue(test.app(), &context, created.bot.id.as_str())
+                .await
+                .expect("the catalogue answers");
+        let memory_write = catalogue
+            .iter()
+            .find(|tool| tool.key == "memory.write")
+            .expect("memory.write is a built-in tool");
+        assert_eq!(memory_write.effect, boma_domain::ToolEffect::Write);
+
+        let result = boma_app::usecases::dispatch_tool(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            &boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "memory.write".to_owned(),
+                arguments: serde_json::json!({
+                    "scope": "bot",
+                    "botId": created.bot.id.as_str(),
+                    "path": "notes/pending.md",
+                    "text": "this must not be written before approval",
+                }),
+            },
+        )
+        .await
+        .expect("the call dispatches");
+        assert_eq!(result.id, "call_1");
+        assert!(result.ok);
+        assert_eq!(
+            result
+                .body
+                .get("approval")
+                .and_then(serde_json::Value::as_str),
+            Some("required"),
+        );
+        // No effect happened: the document does not exist.
+        assert!(
+            boma_app::usecases::memory_read(
+                test.app(),
+                &context,
+                "bot",
+                Some(created.bot.id.as_str()),
+                "notes/pending.md",
+            )
+            .await
+            .is_err(),
+        );
     }
 
     #[tokio::test]

@@ -2970,6 +2970,7 @@ impl ToolStore for MemoryToolStore {
             .filter(|row| row.space_id == space_id && row.enabled)
             .filter(|row| grant.is_empty() || grant.iter().any(|key| key == &row.tool_key))
             .map(|row| ToolSpec {
+                effect: boma_domain::ToolEffect::Write,
                 key: row.tool_key.clone(),
                 description: row.description.clone(),
                 kind: row.kind.clone(),

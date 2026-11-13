@@ -10,8 +10,8 @@ use boma_app::AppError;
 use boma_domain::{
     Block, Bot, BotId, Card, CardId, CardKind, CardStatus, Email, Event, EventType, ExternalEffect,
     InviteId, Message, MessageId, MessageRole, OrganizationId, Run, RunId, RunStatus, RunTrigger,
-    Session, SessionId, Space, SpaceId, SpaceRole, Thread, ThreadId, ToolKind, ToolSpec, User,
-    UserId,
+    Session, SessionId, Space, SpaceId, SpaceRole, Thread, ThreadId, ToolEffect, ToolKind,
+    ToolSpec, User, UserId,
 };
 use serde_json::Value;
 use sqlx::types::Json;
@@ -465,6 +465,8 @@ pub(crate) fn tool_spec(row: ToolInstallRow) -> Result<ToolSpec, AppError> {
         key: row.tool_key,
         description: row.description,
         kind: ToolKind::parse(&row.kind)?,
+        // Connector installs carry no effect class yet; the conservative default is approval-gated.
+        effect: ToolEffect::Write,
     })
 }
 

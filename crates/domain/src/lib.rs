@@ -26,7 +26,9 @@ pub mod thread;
 
 pub use account::{Email, Session, Space, SpaceRole, User, validate_password};
 pub use bot::Bot;
-pub use card::{Card, CardId, CardKind, CardStatus, ExternalEffect, ToolKind, ToolSpec};
+pub use card::{
+    Card, CardId, CardKind, CardStatus, ExternalEffect, ToolEffect, ToolKind, ToolSpec,
+};
 pub use computer::{
     Computer, ComputerId, ComputerStatus, MAX_CPU_LIMIT, MAX_IDLE_MINUTES, MAX_MEMORY_LIMIT_MB,
     MIN_CPU_LIMIT, MIN_IDLE_MINUTES, MIN_MEMORY_LIMIT_MB, validate_cpu_limit,

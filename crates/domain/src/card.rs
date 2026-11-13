@@ -75,6 +75,28 @@ pub struct ToolSpec {
     pub description: String,
     /// The family it belongs to: built-in, connector, MCP, skill or memory.
     pub kind: ToolKind,
+    /// The effect class the tool carries: reads, mutates, or spends (REQ-016).
+    ///
+    /// Missing means the stored row predates the effect class; the conservative default is
+    /// [`ToolEffect::Write`], so the call waits for an approval rather than running silently.
+    #[serde(default = "effect_default")]
+    pub effect: ToolEffect,
+}
+
+const fn effect_default() -> ToolEffect {
+    ToolEffect::Write
+}
+
+/// The effect class a tool carries, driving approval and idempotency (REQ-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolEffect {
+    /// No mutation: read files, memory, observations.
+    Read,
+    /// Mutates state and has to wait for approval.
+    Write,
+    /// Spends money and has to wait for approval.
+    Spend,
 }
 
 /// The family a tool belongs to (REQ-016).
