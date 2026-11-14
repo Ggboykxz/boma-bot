@@ -86,7 +86,24 @@ run to conclusion and reports it.
 
 **M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
 
-**M6 — in flight. Slice 1 committed (REQ-036 artifacts + defect D-03, in this revision).**
+**M6 — in flight. Slices 1 and 2 committed: REQ-036 (`c369833`, CI green) and REQ-037 (in this revision).**
+
+2. **REQ-037 (share a page by link, MUST) — slice 2.** `pages.save|get|share|revokeShare` RPC.
+   A page is a document of validated blocks (`text`, `table`, `chart` bar-kind only, `link`,
+   `image`; javascript:/data:text refused, bounded everything, `deny_unknown_fields`), stored
+   as immutable `page_versions`; the member shares it for a 256-bit token — only the sha256 of
+   the token is stored (revoked/unknown/malformed are one 404), the token is returned once per
+   share. The public read `GET /api/v1/pages/shared/{token}` (cookieless, 120/min/IP via the
+   D-01 counter, golden headers `cache-control: no-store`, `x-robots-tag: noindex, nofollow`,
+   `referrer-policy: no-referrer`) serves the golden body `{title, blocks, updatedAt}` —
+   **both `shared-page.json` fixtures now replay byte for byte** (the harness gained the
+   `<token>` substitution and the shared-page world). Bots create pages via `page.save`
+   (Write-class → approval gate exactly-once) — a bot never publishes; members share. The PG
+   round trip proves the token is hashed at rest and the public read works under the anonymous
+   `SharedPageRead` system reason. No web UI in this milestone (M10). Note: the generated
+   OpenAPI document intentionally mirrors only annotated handlers; the public route is
+   documented in the spec (openapi.yaml) like the plugin-submission route, not duplicated in
+   the generated document — same deviation, recorded once.
 
 1. **REQ-036 (artifacts with versions, MUST) + D-03 (magic-byte sniff) — slice 1.**
    `artifacts.create|get|getById|listVersions|listSpace|remove` RPC. Content lives out of band,

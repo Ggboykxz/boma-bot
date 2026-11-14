@@ -91,6 +91,7 @@ fn app_with_scripts(
             )),
             Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -2294,6 +2295,7 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                 )),
                 Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
                 Arc::new(PostgresReactionStore::new(pool.clone())),
                 Arc::new(PostgresReadStateStore::new(pool.clone())),
                 Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -2386,4 +2388,106 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
 
     let _ = std::fs::remove_dir_all(&content_root);
     common::cleanup(&pool, "artf").await;
+}
+
+/// REQ-037: a page round trip through Postgres: the token is hashed at rest, the public read
+/// is a system lookup by hash, a revoke is uniform, and rows go with the space.
+#[tokio::test]
+async fn req_037_a_page_round_trip_survives_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "page").await;
+    let app = app(&fresh.database);
+    let context = fixture.context.clone();
+
+    let saved = boma_app::usecases::pages_save(
+        &app,
+        &context,
+        boma_app::usecases::PageSaveInput {
+            page_id: None,
+            name: Some("Weekly report".to_owned()),
+            bot_id: None,
+            run_id: None,
+            source: serde_json::json!({
+                "title": "Weekly report",
+                "blocks": [{ "type": "text", "text": "All green." }],
+            }),
+            client_nonce: None,
+        },
+    )
+    .await
+    .expect("the page saves");
+
+    let versioned = boma_app::usecases::pages_save(
+        &app,
+        &context,
+        boma_app::usecases::PageSaveInput {
+            page_id: Some(saved.id.clone()),
+            name: None,
+            bot_id: None,
+            run_id: None,
+            source: serde_json::json!({
+                "title": "Weekly report",
+                "blocks": [{ "type": "text", "text": "All green, v2." }],
+            }),
+            client_nonce: None,
+        },
+    )
+    .await
+    .expect("the second version saves");
+
+    let token = boma_app::usecases::pages_share(&app, &context, &saved.id)
+        .await
+        .expect("the page shares");
+
+    // The row stores the hash, never the token.
+    let stored: Option<Vec<u8>> = sqlx::query_scalar("SELECT token_hash FROM pages WHERE id = $1")
+        .bind(&saved.id)
+        .fetch_one(&pool)
+        .await
+        .expect("the row exists");
+    let stored = stored.expect("a token hash is stored");
+    assert_ne!(stored, token.as_bytes(), "the plaintext token never lands");
+
+    // The public read works under the shared-page system reason, by hash only.
+    let (updated_at, source) = boma_app::usecases::pages_shared(&app, &token)
+        .await
+        .expect("the public read answers")
+        .expect("the token works");
+    assert_eq!(
+        source["blocks"][0]["text"],
+        serde_json::json!("All green, v2.")
+    );
+    assert_ne!(updated_at.len(), 0);
+
+    // A garbage token answers uniformly.
+    assert!(
+        boma_app::usecases::pages_shared(&app, "garbage-token")
+            .await
+            .expect("the public read answers")
+            .is_none()
+    );
+
+    let revoked = boma_app::usecases::pages_revoke_share(&app, &context, &saved.id)
+        .await
+        .expect("the revoke answers");
+    assert!(revoked);
+    assert!(
+        boma_app::usecases::pages_shared(&app, &token)
+            .await
+            .expect("the public read answers")
+            .is_none()
+    );
+
+    sqlx::query("DELETE FROM page_versions WHERE page_id = $1")
+        .bind(&versioned.id)
+        .execute(&pool)
+        .await
+        .expect("rows removed");
+    sqlx::query("DELETE FROM pages WHERE id = $1")
+        .bind(&saved.id)
+        .execute(&pool)
+        .await
+        .expect("rows removed");
+    common::cleanup(&pool, "page").await;
 }

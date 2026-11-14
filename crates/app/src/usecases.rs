@@ -1353,6 +1353,161 @@ async fn record_install(
     })
 }
 
+/// The input to one page save (REQ-037). The same shape serves the RPC and the bot tool.
+pub struct PageSaveInput {
+    /// The page to version; absent creates one.
+    pub page_id: Option<String>,
+    /// The library label; required when creating.
+    pub name: Option<String>,
+    /// The bot that produced it, when one did.
+    pub bot_id: Option<String>,
+    /// The run that produced it, when one did.
+    pub run_id: Option<String>,
+    /// The block document.
+    pub source: serde_json::Value,
+    /// The client's idempotency token.
+    pub client_nonce: Option<String>,
+}
+
+/// Saves a page: creates one, or appends an immutable version (REQ-037).
+///
+/// The block document is validated here, before anything persists: a page that passes this
+/// function was validated once, by the domain, and is served by the public route as stored.
+/// A `clientNonce` replay answers the stored page.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the source or the name is refused,
+/// [`AppError::NotFound`] when `page_id` is unknown, and an error when a store cannot answer.
+pub async fn pages_save(
+    app: &App,
+    context: &TenantContext,
+    input: PageSaveInput,
+) -> Result<crate::ports::PageSummary, AppError> {
+    let validated = boma_domain::validate_page_source(&input.source)?;
+    let name = match &input.name {
+        Some(name) => {
+            boma_domain::validate_page_name(name)?;
+            Some(name.trim().to_owned())
+        }
+        None => None,
+    };
+    if input.page_id.is_none() && name.is_none() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a new page needs a `name`".to_owned(),
+        )));
+    }
+    if let Some(nonce) = &input.client_nonce
+        && (nonce.is_empty() || nonce.len() > 200)
+    {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidNonce));
+    }
+    if let Some(nonce) = input.client_nonce.as_deref()
+        && let Some(existing) = app.stores.pages.find_by_nonce(context, nonce).await?
+    {
+        return Ok(existing);
+    }
+    let new_id = app.services.ids.new_id("pag");
+    let version_id = app.services.ids.new_id("pgv");
+    let source = serde_json::to_value(&validated).map_err(|_| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the page source does not serialise".to_owned(),
+        ))
+    })?;
+    app.stores
+        .pages
+        .put_version(
+            context,
+            crate::ports::NewPageVersion {
+                page_id: input.page_id,
+                name,
+                bot_id: input.bot_id,
+                new_id,
+                new_version_id: version_id,
+                source,
+                client_nonce: input.client_nonce,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+}
+
+/// One page with its current or pinned version (REQ-037).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the page or the version does not exist, and an error
+/// when a store cannot answer.
+pub async fn pages_get(
+    app: &App,
+    context: &TenantContext,
+    page_id: &str,
+    version: Option<i32>,
+) -> Result<(crate::ports::PageSummary, crate::ports::PageVersion), AppError> {
+    app.stores
+        .pages
+        .get(context, page_id, version)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Shares the page by link (REQ-037): mints a 256-bit token, stores only its hash.
+///
+/// The token is returned exactly once — the caller who lost it must revoke and re-share.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the page does not exist, and an error when a store
+/// cannot answer.
+pub async fn pages_share(
+    app: &App,
+    context: &TenantContext,
+    page_id: &str,
+) -> Result<String, AppError> {
+    let token = app.services.tokens.generate()?;
+    let hash = app.services.tokens.hash(&token)?;
+    let changed = app.stores.pages.share(context, page_id, &hash).await?;
+    if !changed {
+        return Err(AppError::NotFound);
+    }
+    Ok(token)
+}
+
+/// Revokes the share (REQ-037): the page is private again and the token hash is gone.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn pages_revoke_share(
+    app: &App,
+    context: &TenantContext,
+    page_id: &str,
+) -> Result<bool, AppError> {
+    app.stores.pages.revoke_share(context, page_id).await
+}
+
+/// The public, cookieless read of a shared page (REQ-037).
+///
+/// Returns `None` for unknown tokens, revoked pages and malformed input alike — the callers
+/// must not distinguish them, and the route answers with the same 404 either way.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn pages_shared(
+    app: &App,
+    token: &str,
+) -> Result<Option<(String, serde_json::Value)>, AppError> {
+    if token.is_empty() || token.len() > 128 {
+        return Ok(None);
+    }
+    let hash = app.services.tokens.hash(token)?;
+    let Some(version) = app.stores.pages.shared_by_token_hash(&hash).await? else {
+        return Ok(None);
+    };
+    Ok(Some((version.compiled_at, version.source)))
+}
+
 /// The input to one artifact creation (REQ-036). The same shape serves the RPC and the bot tool.
 pub struct ArtifactInput {
     /// The bot that produced it, when one did.
@@ -4424,6 +4579,73 @@ async fn approved_artifact_create(
     (body, false)
 }
 
+/// Saves a page from an approved tool call (REQ-037).
+///
+/// A bot never publishes a public link silently: the tool creates the page privately, and
+/// `pages.share` (a member act) is what makes it readable. The blocks are validated by the
+/// domain before anything persists.
+async fn approved_page_save(
+    app: &App,
+    context: &TenantContext,
+    bot: &Bot,
+    call: &crate::ports::PendingToolCall,
+) -> (serde_json::Value, bool) {
+    let string = |key: &str| -> Option<String> {
+        call.arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let Some(title) = string("title") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `title` argument" } }),
+            false,
+        );
+    };
+    let Some(blocks) = call.arguments.get("blocks") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `blocks` argument" } }),
+            false,
+        );
+    };
+    let name = string("name").unwrap_or_else(|| title.chars().take(120).collect());
+    let source = serde_json::json!({ "title": title, "blocks": blocks });
+    let body = match pages_save(
+        app,
+        context,
+        PageSaveInput {
+            page_id: string("pageId"),
+            name: Some(name),
+            bot_id: Some(bot.id.to_string()),
+            run_id: Some(call.run_id.to_string()),
+            source,
+            client_nonce: Some(format!("page-tool:{}", call.call_id)),
+        },
+    )
+    .await
+    {
+        Ok(summary) => match pages_get(app, context, &summary.id, None).await {
+            Ok((_, version)) => serde_json::json!({
+                "ok": true,
+                "body": {
+                    "pageId": summary.id,
+                    "version": version.version,
+                    "name": summary.name,
+                },
+            }),
+            Err(error) => serde_json::json!({
+                "ok": false,
+                "body": { "error": format!("the page was not saved: {error}") },
+            }),
+        },
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "body": { "error": format!("the page was not saved: {error}") },
+        }),
+    };
+    (body, false)
+}
+
 /// Runs one approved tool call and reports what happened in a body shaped `{ ok, body }`,
 /// plus whether the call created an asynchronous child run the parent must wait for.
 ///
@@ -4475,6 +4697,7 @@ async fn execute_approved_tool(
         }
         "skill.teach" => approved_skill_teach(app, context, call).await,
         "artifact.create" => approved_artifact_create(app, context, bot, call).await,
+        "page.save" => approved_page_save(app, context, bot, call).await,
         key if key.starts_with("mcp.") => approved_mcp_call(app, context, call).await,
         "delegate.helper" => {
             let Some(prompt) = string("prompt") else {
@@ -4710,6 +4933,14 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
             key: "artifact.create".to_owned(),
             description: "Create a file artifact for this space (a report, a chart, a export)."
                 .to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Write,
+        },
+        ToolSpec {
+            key: "page.save".to_owned(),
+            description:
+                "Save an interactive page (text, table, chart, link, image blocks) for this space."
+                    .to_owned(),
             kind: boma_domain::ToolKind::Builtin,
             effect: boma_domain::ToolEffect::Write,
         },

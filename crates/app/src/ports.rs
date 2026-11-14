@@ -2619,6 +2619,138 @@ pub trait ArtifactContentStore: Send + Sync {
     async fn remove(&self, key: &str) -> Result<(), AppError>;
 }
 
+/// One page as the member sees it (REQ-037).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageSummary {
+    /// The page's id.
+    pub id: String,
+    /// The bot that produced it, when one did.
+    pub bot_id: Option<String>,
+    /// Who made it.
+    pub created_by: String,
+    /// The library label.
+    pub name: String,
+    /// `private` or `link`.
+    pub visibility: String,
+    /// The id of the current version.
+    pub current_version_id: Option<String>,
+    /// When it was shared, when it is.
+    pub shared: bool,
+    /// The client's idempotency token.
+    pub client_nonce: Option<String>,
+    /// When it was created.
+    pub created_at: String,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+/// One immutable version of a page's source (REQ-037).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageVersion {
+    /// The version's id.
+    pub id: String,
+    /// The page it belongs to.
+    pub page_id: String,
+    /// 1 for the first, +1 per update.
+    pub version: i32,
+    /// The validated block document.
+    pub source: serde_json::Value,
+    /// When it was compiled.
+    pub compiled_at: String,
+}
+
+/// What `pages.save` hands in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewPageVersion {
+    /// The page to version; `None` creates a page.
+    pub page_id: Option<String>,
+    /// The library label; required on create, optional on version.
+    pub name: Option<String>,
+    /// The bot that produced it, when one did.
+    pub bot_id: Option<String>,
+    /// The new page's id; `None` reuses the page's.
+    pub new_id: String,
+    /// The new version's id.
+    pub new_version_id: String,
+    /// The validated document.
+    pub source: serde_json::Value,
+    /// The client's idempotency token.
+    pub client_nonce: Option<String>,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// Pages and their immutable versions (REQ-037).
+#[async_trait]
+pub trait PageStore: Send + Sync {
+    /// An existing page for the same (space, creator, client_nonce), if any — replay detection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_by_nonce(
+        &self,
+        context: &TenantContext,
+        client_nonce: &str,
+    ) -> Result<Option<PageSummary>, AppError>;
+
+    /// Appends a version, creating the page when `page_id` is `None`. A `page_id` that does
+    /// not exist in this space is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::NotFound`] when `page_id` is unknown, and an error when the database
+    /// cannot answer.
+    async fn put_version(
+        &self,
+        context: &TenantContext,
+        version: NewPageVersion,
+    ) -> Result<PageSummary, AppError>;
+
+    /// One page with its current (or pinned) version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn get(
+        &self,
+        context: &TenantContext,
+        page_id: &str,
+        version: Option<i32>,
+    ) -> Result<Option<(PageSummary, PageVersion)>, AppError>;
+
+    /// Shares the page by link: stores the token hash and flips visibility. Returns whether it
+    /// changed anything.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn share(
+        &self,
+        context: &TenantContext,
+        page_id: &str,
+        token_hash: &[u8],
+    ) -> Result<bool, AppError>;
+
+    /// Revokes the share: the page is private again and the token hash is gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn revoke_share(&self, context: &TenantContext, page_id: &str) -> Result<bool, AppError>;
+
+    /// The shared page for a token hash, resolved by a system read. `None` for unknown tokens,
+    /// revoked pages and malformed input alike — the callers must not distinguish.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn shared_by_token_hash(
+        &self,
+        token_hash: &[u8],
+    ) -> Result<Option<PageVersion>, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

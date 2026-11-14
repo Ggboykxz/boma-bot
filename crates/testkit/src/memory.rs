@@ -548,6 +548,10 @@ struct State {
     artifacts: Vec<ArtifactRow>,
     /// The artifact blobs, content-addressed (REQ-036).
     artifact_content: std::collections::HashMap<String, Vec<u8>>,
+    /// The pages the space shared (REQ-037).
+    pages: Vec<PageRow>,
+    /// The immutable page versions (REQ-037).
+    page_versions: Vec<PageVersionRow>,
     /// The pending OAuth attempts, one per server (REQ-033).
     oauth_sessions: Vec<OAuthSessionRow>,
     /// The probed tools of those servers (REQ-033).
@@ -791,6 +795,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn artifact_content(&self) -> MemoryArtifactContentStore {
         MemoryArtifactContentStore::new(self)
+    }
+
+    /// The store of pages (REQ-037).
+    #[must_use]
+    pub fn pages(&self) -> MemoryPageStore {
+        MemoryPageStore::new(self)
     }
 
     /// The store of effects.
@@ -5999,5 +6009,290 @@ impl boma_app::ports::ArtifactContentStore for MemoryArtifactContentStore {
         let mut state = write(&self.state);
         state.artifact_content.remove(key);
         Ok(())
+    }
+}
+
+/// One stored page (REQ-037).
+#[derive(Debug, Clone)]
+struct PageRow {
+    /// The page's id.
+    id: String,
+    /// The space the page belongs to.
+    space_id: SpaceId,
+    /// The bot that produced it, when one did.
+    bot_id: Option<String>,
+    /// Who made it.
+    created_by: UserId,
+    /// The library label.
+    name: String,
+    /// `private` or `link`.
+    visibility: String,
+    /// The id of the current version.
+    current_version_id: Option<String>,
+    /// The token hash, when shared.
+    token_hash: Option<Vec<u8>>,
+    /// The client's idempotency token.
+    client_nonce: Option<String>,
+    /// When it was created.
+    created_at: String,
+    /// When it last changed.
+    updated_at: String,
+}
+
+/// One immutable page version (REQ-037).
+#[derive(Debug, Clone)]
+struct PageVersionRow {
+    /// The version's id.
+    id: String,
+    /// The page it belongs to.
+    page_id: String,
+    /// 1 for the first, +1 per update.
+    version: i32,
+    /// The validated block document.
+    source: serde_json::Value,
+    /// When it was compiled.
+    compiled_at: String,
+}
+
+fn page_summary(row: &PageRow) -> boma_app::ports::PageSummary {
+    boma_app::ports::PageSummary {
+        id: row.id.clone(),
+        bot_id: row.bot_id.clone(),
+        created_by: row.created_by.as_str().to_owned(),
+        name: row.name.clone(),
+        visibility: row.visibility.clone(),
+        current_version_id: row.current_version_id.clone(),
+        shared: row.token_hash.is_some(),
+        client_nonce: row.client_nonce.clone(),
+        created_at: row.created_at.clone(),
+        updated_at: row.updated_at.clone(),
+    }
+}
+
+/// The store of pages (REQ-037).
+#[derive(Debug, Clone)]
+pub struct MemoryPageStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryPageStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The pages a test seeded (REQ-037).
+    #[must_use]
+    pub fn recorded(&self) -> Vec<boma_app::ports::PageSummary> {
+        let state = read(&self.state);
+        state.pages.iter().map(page_summary).collect()
+    }
+}
+
+impl Default for MemoryPageStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::PageStore for MemoryPageStore {
+    async fn find_by_nonce(
+        &self,
+        context: &TenantContext,
+        client_nonce: &str,
+    ) -> Result<Option<boma_app::ports::PageSummary>, AppError> {
+        let (space_id, user_id) = match context {
+            TenantContext::Member { space_id, user_id } => (space_id.clone(), user_id.clone()),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .pages
+            .iter()
+            .find(|row| {
+                row.space_id == space_id
+                    && row.created_by == user_id
+                    && row.client_nonce.as_deref() == Some(client_nonce)
+            })
+            .map(page_summary))
+    }
+
+    async fn put_version(
+        &self,
+        context: &TenantContext,
+        version: boma_app::ports::NewPageVersion,
+    ) -> Result<boma_app::ports::PageSummary, AppError> {
+        let (space_id, created_by) = match context {
+            TenantContext::Member { space_id, user_id } => (space_id.clone(), user_id.clone()),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        let page_id = version
+            .page_id
+            .clone()
+            .unwrap_or_else(|| version.new_id.clone());
+        if version.page_id.is_some()
+            && !state
+                .pages
+                .iter()
+                .any(|row| row.space_id == space_id && row.id == page_id)
+        {
+            return Err(AppError::NotFound);
+        }
+        let next = state
+            .page_versions
+            .iter()
+            .filter(|row| row.page_id == page_id)
+            .map(|row| row.version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        if version.page_id.is_none() {
+            state.pages.push(PageRow {
+                id: page_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: version.bot_id.clone(),
+                created_by,
+                name: version.name.clone().unwrap_or_else(|| "Page".to_owned()),
+                visibility: "private".to_owned(),
+                token_hash: None,
+                current_version_id: None,
+                client_nonce: version.client_nonce.clone(),
+                created_at: version.created_at.clone(),
+                updated_at: version.created_at.clone(),
+            });
+        }
+        state.page_versions.push(PageVersionRow {
+            id: version.new_version_id.clone(),
+            page_id: page_id.clone(),
+            version: next,
+            source: version.source.clone(),
+            compiled_at: version.created_at.clone(),
+        });
+        let Some(page) = state
+            .pages
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.id == page_id)
+        else {
+            return Err(AppError::Unavailable);
+        };
+        page.current_version_id = Some(version.new_version_id.clone());
+        page.updated_at = version.created_at;
+        Ok(page_summary(page))
+    }
+
+    async fn get(
+        &self,
+        context: &TenantContext,
+        page_id: &str,
+        version: Option<i32>,
+    ) -> Result<Option<(boma_app::ports::PageSummary, boma_app::ports::PageVersion)>, AppError>
+    {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        let Some(page) = state
+            .pages
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == page_id)
+        else {
+            return Ok(None);
+        };
+        let chosen = match version {
+            Some(version) => state
+                .page_versions
+                .iter()
+                .find(|row| row.page_id == page_id && row.version == version),
+            None => state
+                .page_versions
+                .iter()
+                .filter(|row| row.page_id == page_id)
+                .max_by_key(|row| row.version),
+        };
+        Ok(chosen.map(|row| {
+            (
+                page_summary(page),
+                boma_app::ports::PageVersion {
+                    id: row.id.clone(),
+                    page_id: row.page_id.clone(),
+                    version: row.version,
+                    source: row.source.clone(),
+                    compiled_at: row.compiled_at.clone(),
+                },
+            )
+        }))
+    }
+
+    async fn share(
+        &self,
+        context: &TenantContext,
+        page_id: &str,
+        token_hash: &[u8],
+    ) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state = write(&self.state);
+        let Some(page) = state
+            .pages
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.id == page_id)
+        else {
+            return Ok(false);
+        };
+        "link".clone_into(&mut page.visibility);
+        page.token_hash = Some(token_hash.to_vec());
+        Ok(true)
+    }
+
+    async fn revoke_share(&self, context: &TenantContext, page_id: &str) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state = write(&self.state);
+        let Some(page) = state
+            .pages
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.id == page_id)
+        else {
+            return Ok(false);
+        };
+        "private".clone_into(&mut page.visibility);
+        page.token_hash = None;
+        Ok(true)
+    }
+
+    async fn shared_by_token_hash(
+        &self,
+        token_hash: &[u8],
+    ) -> Result<Option<boma_app::ports::PageVersion>, AppError> {
+        let state = read(&self.state);
+        let Some(page) = state
+            .pages
+            .iter()
+            .find(|row| row.visibility == "link" && row.token_hash.as_deref() == Some(token_hash))
+        else {
+            return Ok(None);
+        };
+        let current = page.current_version_id.clone();
+        let Some(row) = current.and_then(|id| state.page_versions.iter().find(|row| row.id == id))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(boma_app::ports::PageVersion {
+            id: row.id.clone(),
+            page_id: row.page_id.clone(),
+            version: row.version,
+            source: row.source.clone(),
+            compiled_at: row.compiled_at.clone(),
+        }))
     }
 }

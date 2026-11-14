@@ -136,7 +136,9 @@ fn substitute(value: &str, world: Option<&golden_world::GoldenWorld>) -> String 
     match world {
         Some(world) => value
             .replace("session=placeholder", &world.cookie)
-            .replace("<synthetic-address>", "invitee@example.com"),
+            .replace("<synthetic-address>", "invitee@example.com")
+            .replace("<token>", "golden-shared-token")
+            .replace("<unknown>", "golden-unknown-token"),
         None => value,
     }
 }
@@ -148,7 +150,7 @@ async fn replay(fixture_name: &str, fixture: &Fixture) -> Response<Body> {
 
     let mut builder = Request::builder()
         .method(fixture.request.method.as_str())
-        .uri(fixture.request.path.as_str());
+        .uri(substitute(fixture.request.path.as_str(), world.as_ref()));
     for (name, value) in &fixture.request.headers {
         if name == "cookie" {
             if let Some(cookie) = cookie_of(fixture, world.as_ref()) {

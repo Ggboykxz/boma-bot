@@ -111,14 +111,12 @@
       "reason": null
     },
     "shared-page": {
-      "status": "pending",
-      "req": "REQ-037",
-      "reason": "M6 - token-shared pages are not implemented"
+      "status": "implemented",
+      "req": "REQ-037"
     },
     "shared-page-invalid": {
-      "status": "pending",
-      "req": "REQ-037",
-      "reason": "M6 - the uniform not-found answer needs the shared-page lookup"
+      "status": "implemented",
+      "req": "REQ-037"
     },
     "space-create": {
       "status": "implemented",

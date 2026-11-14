@@ -431,6 +431,7 @@ impl TestAppBuilder {
             Arc::new(database.connectors()),
             Arc::new(database.plugin_installs()),
             Arc::new(database.artifacts()),
+            Arc::new(database.pages()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -5377,6 +5378,287 @@ mod artifact_tests {
             test.database()
                 .artifact_content()
                 .contains(&artifacts[0].storage_key)
+        );
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    // REQ-037 — pages: validate, version, share, and the public cookieless read.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+    use crate::ScriptedProvider;
+    use boma_app::worker::Worker;
+
+    async fn seeded() -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_app::usecases::BotCreated,
+    ) {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        (test, context, created)
+    }
+
+    fn source() -> serde_json::Value {
+        serde_json::json!({
+            "title": "Weekly report",
+            "blocks": [
+                { "type": "text", "text": "All green." },
+                { "type": "chart", "label": "signups", "points": [{ "label": "mon", "value": 12.0 }] },
+            ],
+        })
+    }
+
+    #[tokio::test]
+    async fn req_037_a_page_saves_shares_serves_and_revokes() {
+        let (test, context, _created) = seeded().await;
+
+        // The golden's shape: save → {pageId, version, name}.
+        let saved = boma_app::usecases::pages_save(
+            test.app(),
+            &context,
+            boma_app::usecases::PageSaveInput {
+                page_id: None,
+                name: Some("Weekly report".to_owned()),
+                bot_id: None,
+                run_id: None,
+                source: source(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the page saves");
+        assert_eq!(saved.name, "Weekly report");
+        assert_eq!(saved.visibility, "private");
+
+        // Version two of the same page.
+        let saved2 = boma_app::usecases::pages_save(
+            test.app(),
+            &context,
+            boma_app::usecases::PageSaveInput {
+                page_id: Some(saved.id.clone()),
+                name: None,
+                bot_id: None,
+                run_id: None,
+                source: source(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the second version saves");
+
+        // Share: a token comes back, the hash is what's stored.
+        let token = boma_app::usecases::pages_share(test.app(), &context, &saved.id)
+            .await
+            .expect("the page shares");
+        assert_ne!(token.len(), 0);
+
+        // The public read answers the golden body: title, blocks, updatedAt.
+        let shared = boma_app::usecases::pages_shared(test.app(), &token)
+            .await
+            .expect("the public read answers")
+            .expect("the token works");
+        let (updated_at, source) = shared;
+        assert_eq!(source["title"], serde_json::json!("Weekly report"));
+        assert_eq!(source["blocks"][0]["type"], serde_json::json!("text"));
+        assert_ne!(updated_at.len(), 0);
+
+        // The member read shows private → link and the latest version.
+        let (_page, version) = boma_app::usecases::pages_get(test.app(), &context, &saved.id, None)
+            .await
+            .expect("the member read answers");
+        assert_eq!(version.version, 2);
+        let _ = saved2;
+
+        // Revoke: the public read refuses, uniformly.
+        let revoked = boma_app::usecases::pages_revoke_share(test.app(), &context, &saved.id)
+            .await
+            .expect("the revoke answers");
+        assert!(revoked);
+        let gone = boma_app::usecases::pages_shared(test.app(), &token)
+            .await
+            .expect("the public read answers");
+        assert!(gone.is_none());
+    }
+
+    #[tokio::test]
+    async fn req_037_the_public_read_is_uniform_for_missing_and_revoked() {
+        let (test, context, _created) = seeded().await;
+        let saved = boma_app::usecases::pages_save(
+            test.app(),
+            &context,
+            boma_app::usecases::PageSaveInput {
+                page_id: None,
+                name: Some("Weekly".to_owned()),
+                bot_id: None,
+                run_id: None,
+                source: source(),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the page saves");
+        let token = boma_app::usecases::pages_share(test.app(), &context, &saved.id)
+            .await
+            .expect("the page shares");
+
+        let garbage = boma_app::usecases::pages_shared(test.app(), "definitely-not-a-token")
+            .await
+            .expect("the public read answers");
+        assert!(garbage.is_none());
+        let empty = boma_app::usecases::pages_shared(test.app(), "")
+            .await
+            .expect("the public read answers");
+        assert!(empty.is_none());
+
+        boma_app::usecases::pages_revoke_share(test.app(), &context, &saved.id)
+            .await
+            .expect("the revoke answers");
+        let revoked = boma_app::usecases::pages_shared(test.app(), &token)
+            .await
+            .expect("the public read answers");
+        assert!(
+            revoked.is_none(),
+            "an unknown and a revoked token are one 404"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_037_an_invalid_source_is_refused_before_anything_persists() {
+        let (test, context, _created) = seeded().await;
+        for source in [
+            serde_json::json!({"blocks": []}),
+            serde_json::json!({"title": "t", "blocks": [{ "type": "link", "label": "l", "href": "javascript:alert(1)" }]}),
+            serde_json::json!({"title": "t", "blocks": [{ "type": "table", "columns": ["a"], "rows": [["1", "2"]] }]}),
+            serde_json::json!({"title": "t", "blocks": [{ "type": "chart", "label": "c", "points": [{ "label": "p", "value": "lots" }] }]}),
+        ] {
+            let outcome = boma_app::usecases::pages_save(
+                test.app(),
+                &context,
+                boma_app::usecases::PageSaveInput {
+                    page_id: None,
+                    name: Some("Page".to_owned()),
+                    bot_id: None,
+                    run_id: None,
+                    source: source.clone(),
+                    client_nonce: None,
+                },
+            )
+            .await;
+            assert!(outcome.is_err(), "the source is refused: {source}");
+        }
+        assert_eq!(test.database().pages().recorded().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn req_037_a_client_nonce_replay_answers_the_same_page() {
+        let (test, context, _created) = seeded().await;
+        let input = || boma_app::usecases::PageSaveInput {
+            page_id: None,
+            name: Some("Weekly".to_owned()),
+            bot_id: None,
+            run_id: None,
+            source: source(),
+            client_nonce: Some("nonce-page-0001".to_owned()),
+        };
+        let first = boma_app::usecases::pages_save(test.app(), &context, input())
+            .await
+            .expect("the first save lands");
+        let second = boma_app::usecases::pages_save(test.app(), &context, input())
+            .await
+            .expect("the replay answers");
+        assert_eq!(first.id, second.id);
+        assert_eq!(test.database().pages().recorded().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn req_037_a_bot_saves_a_page_through_the_approval_gate() {
+        let (test, context, created) = seeded().await;
+        let bot_id = created.bot.id.clone();
+
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Build the weekly dashboard.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "page.save".to_owned(),
+                arguments: serde_json::json!({
+                    "title": "Weekly report",
+                    "blocks": [{ "type": "text", "text": "All green." }],
+                }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["Done.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            provider,
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        assert!(
+            test.database().pages().recorded().is_empty(),
+            "nothing exists before the approval"
+        );
+
+        let messages = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers")
+            .messages;
+        let card_id = messages
+            .into_iter()
+            .flat_map(|message| message.blocks.into_iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+
+        let answered = boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        assert!(answered.effect_recorded);
+
+        let pages = test.database().pages().recorded();
+        assert_eq!(pages.len(), 1, "the approval saved exactly one page");
+        assert_eq!(pages[0].bot_id.as_deref(), Some(bot_id.as_str()));
+        assert_eq!(
+            pages[0].visibility, "private",
+            "a bot never publishes by itself"
         );
     }
 }

@@ -54,6 +54,10 @@ pub fn router(state: AppState) -> Router {
                 .options(public::plugin_submissions_preflight)
                 .route_layer(DefaultBodyLimit::max(33 * 1024)),
         )
+        .route(
+            "/api/v1/pages/shared/{token}",
+            get(public::shared_page),
+        )
         .merge(rpc::router())
         .fallback(not_found)
         .with_state(state)

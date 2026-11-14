@@ -2342,3 +2342,137 @@ async fn d03_an_html_upload_declared_as_png_is_refused_over_rpc() {
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn req_037_a_member_saves_shares_views_and_revokes_a_page() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Save: the reply carries the page id, the version and the name.
+    let response = post(
+        app_state.clone(),
+        "/rpc/pages/save",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "Weekly report",
+            "source": {
+                "title": "Weekly report",
+                "blocks": [
+                    { "type": "text", "text": "All green." },
+                    { "type": "chart", "label": "signups", "points": [{ "label": "mon", "value": 12.0 }] },
+                ],
+            },
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let page_id = body["pageId"].as_str().expect("a page id").to_owned();
+    assert_eq!(body["version"], serde_json::json!(1));
+    assert_eq!(body["name"], serde_json::json!("Weekly report"));
+
+    // Get: the member sees the source and the private visibility.
+    let response = post(
+        app_state.clone(),
+        "/rpc/pages/get",
+        Some(&world.caller),
+        serde_json::json!({ "pageId": page_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["visibility"], serde_json::json!("private"));
+    assert_eq!(body["source"]["title"], serde_json::json!("Weekly report"));
+
+    // Share: the token comes back exactly once, with the golden path.
+    let response = post(
+        app_state.clone(),
+        "/rpc/pages/share",
+        Some(&world.caller),
+        serde_json::json!({ "pageId": page_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let token = body["token"].as_str().expect("a token").to_owned();
+    assert_eq!(
+        body["path"],
+        serde_json::json!(format!("/api/v1/pages/shared/{token}"))
+    );
+
+    // The public read: the golden body and headers, with no session at all.
+    let unauth = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/pages/shared/{token}"))
+        .header("accept", "application/json")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(app_state.clone())
+        .oneshot(unauth)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-robots-tag"], "noindex, nofollow");
+    assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body = json(response).await;
+    assert_eq!(body["title"], serde_json::json!("Weekly report"));
+    assert_eq!(body["blocks"][0]["type"], serde_json::json!("text"));
+    assert!(body["updatedAt"].as_str().is_some());
+
+    // The public read of an unknown token: the same 404 shape.
+    let unauth = Request::builder()
+        .method("GET")
+        .uri("/api/v1/pages/shared/definitely-not-a-token")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(app_state.clone())
+        .oneshot(unauth)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json(response).await;
+    assert_eq!(body, serde_json::json!({ "error": "Not found." }));
+
+    // Revoke: the public read answers the same 404, and the member sees private again.
+    let response = post(
+        app_state.clone(),
+        "/rpc/pages/revokeShare",
+        Some(&world.caller),
+        serde_json::json!({ "pageId": page_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["revoked"], serde_json::json!(true));
+
+    let unauth = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/pages/shared/{token}"))
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(app_state)
+        .oneshot(unauth)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn req_037_an_invalid_source_is_refused_over_rpc() {
+    let world = world().await;
+    let app_state = state(&world.app);
+    let response = post(
+        app_state,
+        "/rpc/pages/save",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "Page",
+            "source": {
+                "title": "Page",
+                "blocks": [{ "type": "link", "label": "x", "href": "javascript:alert(1)" }],
+            },
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

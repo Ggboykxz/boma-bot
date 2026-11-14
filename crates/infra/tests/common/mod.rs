@@ -560,6 +560,7 @@ pub async fn computer_app(
             )),
             Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReactionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReadStateStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresRosterStore::new(pool.clone())),

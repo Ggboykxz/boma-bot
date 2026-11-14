@@ -32,11 +32,12 @@ use crate::{
         InvitationReply, MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply,
         McpOAuthStartReply, McpServerReply, McpServerView, McpServersListReply,
         McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply,
-        MemoryRemoveReply, MemoryWriteReply, MessagesReply, PluginInstallView, ReactReply,
-        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
-        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
-        SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply,
-        SpaceReply, TeachSkillReply, ThreadHeadReply,
+        MemoryRemoveReply, MemoryWriteReply, MessagesReply, PagesGetReply, PagesRevokeShareReply,
+        PagesSaveReply, PagesShareReply, PluginInstallView, ReactReply, RosterBotView,
+        RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply,
+        RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply, SecretView,
+        SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
+        TeachSkillReply, ThreadHeadReply,
     },
 };
 
@@ -68,6 +69,8 @@ pub mod namespaces {
     pub const MARKETPLACE: &str = "marketplace";
     /// Artifacts: files with versions (REQ-036).
     pub const ARTIFACTS: &str = "artifacts";
+    /// Pages: block documents, shared by link (REQ-037).
+    pub const PAGES: &str = "pages";
 }
 
 /// Every procedure this deployment serves.
@@ -135,6 +138,10 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::ARTIFACTS, "listVersions"),
         (namespaces::ARTIFACTS, "listSpace"),
         (namespaces::ARTIFACTS, "remove"),
+        (namespaces::PAGES, "save"),
+        (namespaces::PAGES, "get"),
+        (namespaces::PAGES, "share"),
+        (namespaces::PAGES, "revokeShare"),
     ]
 }
 
@@ -370,6 +377,18 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::ARTIFACTS, "remove") => artifacts_remove(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::PAGES, "save") => pages_save(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::PAGES, "get") => pages_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::PAGES, "share") => pages_share(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::PAGES, "revokeShare") => pages_revoke_share(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -2212,4 +2231,123 @@ async fn artifacts_remove(
     let removed =
         usecases::artifact_remove(state.app(), &auth.actor.context, &request.artifact_id).await?;
     Ok(ArtifactRemoveReply { removed })
+}
+
+/// The body of `pages.save` (REQ-037).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PagesSaveRequest {
+    /// The page to version; omit to create one.
+    #[serde(default)]
+    page_id: Option<String>,
+    /// The library label; required on create.
+    #[serde(default)]
+    name: Option<String>,
+    /// The bot that produced it, when one did.
+    #[serde(default)]
+    bot_id: Option<String>,
+    /// The block document.
+    source: serde_json::Value,
+    /// The client's idempotency token.
+    #[serde(default)]
+    client_nonce: Option<String>,
+}
+
+/// `pages.save` — create or version a page.
+async fn pages_save(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<PagesSaveReply, ApiError> {
+    let request: PagesSaveRequest = parse(&body)?;
+    let summary = usecases::pages_save(
+        state.app(),
+        &auth.actor.context,
+        usecases::PageSaveInput {
+            page_id: request.page_id,
+            name: request.name,
+            bot_id: request.bot_id,
+            run_id: None,
+            source: request.source,
+            client_nonce: request.client_nonce,
+        },
+    )
+    .await?;
+    let (page, version) =
+        usecases::pages_get(state.app(), &auth.actor.context, &summary.id, None).await?;
+    Ok(PagesSaveReply {
+        page_id: page.id,
+        version: version.version,
+        name: page.name,
+    })
+}
+
+/// The body of `pages.get` (REQ-037).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PagesGetRequest {
+    /// The page.
+    page_id: String,
+    /// A specific version; `None` is the latest.
+    #[serde(default)]
+    version: Option<i32>,
+}
+
+/// `pages.get` — the page plus its source.
+async fn pages_get(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<PagesGetReply, ApiError> {
+    let request: PagesGetRequest = parse(&body)?;
+    let (page, version) = usecases::pages_get(
+        state.app(),
+        &auth.actor.context,
+        &request.page_id,
+        request.version,
+    )
+    .await?;
+    Ok(PagesGetReply {
+        page_id: page.id,
+        name: page.name,
+        visibility: page.visibility,
+        current_version_id: page.current_version_id,
+        version: version.version,
+        source: version.source,
+        updated_at: version.compiled_at,
+    })
+}
+
+/// The body of `pages.share` and `pages.revokeShare`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PagesShareRequest {
+    /// The page.
+    page_id: String,
+}
+
+/// `pages.share` — mint the capability; it is returned once and never stored.
+async fn pages_share(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<PagesShareReply, ApiError> {
+    let request: PagesShareRequest = parse(&body)?;
+    let token = usecases::pages_share(state.app(), &auth.actor.context, &request.page_id).await?;
+    Ok(PagesShareReply {
+        path: format!("/api/v1/pages/shared/{token}"),
+        token,
+    })
+}
+
+/// `pages.revokeShare` — the page is private again.
+async fn pages_revoke_share(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<PagesRevokeShareReply, ApiError> {
+    let request: PagesShareRequest = parse(&body)?;
+    let revoked =
+        usecases::pages_revoke_share(state.app(), &auth.actor.context, &request.page_id).await?;
+    Ok(PagesRevokeShareReply { revoked })
 }

@@ -23,6 +23,7 @@ pub mod mcp;
 pub mod memory;
 pub mod message;
 pub mod model;
+pub mod page;
 pub mod plugin;
 pub mod routine;
 pub mod run;
@@ -65,6 +66,7 @@ pub use message::{
     validate_message_text,
 };
 pub use model::{DeploymentModels, ModelChoice, ModelPreferences, resolve};
+pub use page::{PageBlock, PageSource, validate_page_name, validate_page_source};
 pub use plugin::{PluginSourceError, PluginSourceRef, parse_plugin_source};
 pub use routine::{
     MAX_CRONS, MAX_ROUTINE_NAME_LENGTH, MAX_ROUTINE_PROMPT_LENGTH, ONCE, next_run_at,

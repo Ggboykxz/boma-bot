@@ -27,16 +27,19 @@ pub enum SystemReason {
     ScheduledJob,
     /// A migration reads across tenants.
     DataMigration,
+    /// An anonymous browser reads a shared page by its token (REQ-037).
+    SharedPageRead,
 }
 
 impl SystemReason {
     /// Every reason, in the order the product declares them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Boot,
         Self::Authentication,
         Self::WebhookDelivery,
         Self::ScheduledJob,
         Self::DataMigration,
+        Self::SharedPageRead,
     ];
 
     /// The wire value, used in the audit log.
@@ -48,6 +51,7 @@ impl SystemReason {
             Self::WebhookDelivery => "webhook_delivery",
             Self::ScheduledJob => "scheduled_job",
             Self::DataMigration => "data_migration",
+            Self::SharedPageRead => "shared_page_read",
         }
     }
 
@@ -63,6 +67,7 @@ impl SystemReason {
             "webhook_delivery" => Ok(Self::WebhookDelivery),
             "scheduled_job" => Ok(Self::ScheduledJob),
             "data_migration" => Ok(Self::DataMigration),
+            "shared_page_read" => Ok(Self::SharedPageRead),
             other => Err(DomainError::UnknownSystemReason(other.to_owned())),
         }
     }

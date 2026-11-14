@@ -10,11 +10,12 @@ use boma_infra::{
     PostgresArtifactStore, PostgresAuditStore, PostgresBotStore, PostgresCardStore,
     PostgresComputerStore, PostgresConnectorStore, PostgresEffectStore, PostgresEventStore,
     PostgresInvitationStore, PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresPendingToolCallStore, PostgresPluginInstallStore, PostgresPluginSubmissionStore,
-    PostgresRateLimitStore, PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore,
-    PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore,
-    PostgresSessionStore, PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore,
-    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresPageStore, PostgresPendingToolCallStore, PostgresPluginInstallStore,
+    PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
+    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
+    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSkillStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore,
+    ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -141,6 +142,7 @@ fn build_app(
             Arc::new(PostgresConnectorStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(PostgresArtifactStore::new(pool.clone())),
+            Arc::new(PostgresPageStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

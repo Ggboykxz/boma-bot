@@ -12,7 +12,7 @@ use crate::{
     ports::{
         AccountStore, ArtifactStore, AuditStore, BotStore, CardStore, Clock, ComputerStore,
         ConnectorStore, EffectStore, EventPublisher, EventStore, IdGenerator, InvitationStore,
-        McpServerStore, MemoryStore, MessageStore, PasswordHasher, PendingToolCallStore,
+        McpServerStore, MemoryStore, MessageStore, PageStore, PasswordHasher, PendingToolCallStore,
         PluginInstallStore, PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore,
         RosterStore, RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore,
         SkillStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
@@ -64,6 +64,8 @@ pub struct Stores {
     pub plugin_installs: Arc<dyn PluginInstallStore>,
     /// The artifact rows of the space (REQ-036).
     pub artifacts: Arc<dyn ArtifactStore>,
+    /// The pages of the space and their immutable versions (REQ-037).
+    pub pages: Arc<dyn PageStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
     /// The per-run tool catalogue.
@@ -115,6 +117,7 @@ impl Stores {
         connectors: Arc<dyn ConnectorStore>,
         plugin_installs: Arc<dyn PluginInstallStore>,
         artifacts: Arc<dyn ArtifactStore>,
+        pages: Arc<dyn PageStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -145,6 +148,7 @@ impl Stores {
             connectors,
             plugin_installs,
             artifacts,
+            pages,
             effects,
             tools,
             reactions,

@@ -102,7 +102,52 @@ pub fn created_ids(fixture: &str) -> Vec<String> {
 ///
 /// Panics when a seeded id is refused by the domain: that is a bug in the seed, not a runtime
 /// condition. The golden replay is a test, so a panic is the honest failure.
+#[allow(clippy::too_many_lines)] // the world is one function per fixture; it reads top to bottom
 pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
+    if fixture == "shared-page" {
+        // The fixture was captured against a shared page served by this clock instant; the world
+        // reproduces exactly that: the same token (the fixture substitutes its `<token>` with
+        // this constant), the same instant, the same document.
+        let test_app = TestApp::builder()
+            .fixed_clock("2026-01-01T00:02:00Z")
+            .tokens(vec!["golden-shared-token".to_owned()])
+            .build();
+        let app = test_app.app().clone();
+        let cookie = format!("session={SESSION_TOKEN}");
+        let (user_id, space_id) = seed_account_and_session(&test_app, &app).await;
+        let context = boma_domain::TenantContext::Member { space_id, user_id };
+        let _ = boma_app::usecases::pages_save(
+            &app,
+            &context,
+            boma_app::usecases::PageSaveInput {
+                page_id: None,
+                name: Some("Weekly report".to_owned()),
+                bot_id: None,
+                run_id: None,
+                source: serde_json::json!({
+                    "title": "Weekly report",
+                    "blocks": [{ "type": "text", "text": "All green." }],
+                }),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the golden page is seeded");
+        let page_id = test_app
+            .database()
+            .pages()
+            .recorded()
+            .into_iter()
+            .next()
+            .expect("the page is there")
+            .id;
+        let token = boma_app::usecases::pages_share(&app, &context, &page_id)
+            .await
+            .expect("the golden page shares");
+        assert_eq!(token, "golden-shared-token");
+        return Some(GoldenWorld { app, cookie });
+    }
+
     let needs_world = matches!(
         fixture,
         "send-message"
@@ -123,6 +168,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "computer-takeover-conflict"
             | "plugin-submission"
             | "plugin-submission-invalid"
+            | "shared-page-invalid"
     );
     if !needs_world {
         return None;
@@ -153,7 +199,8 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         | "space-create"
         | "space-invite"
         | "plugin-submission"
-        | "plugin-submission-invalid" => {}
+        | "plugin-submission-invalid"
+        | "shared-page-invalid" => {}
         "thread-messages" | "run-list" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
             seed_history(&test_app, &space_id, &bot, &thread, &user_id);

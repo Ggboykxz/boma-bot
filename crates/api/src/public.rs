@@ -9,8 +9,8 @@
 use axum::{
     Json,
     body::Bytes,
-    extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    extract::{Path, State},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use boma_app::usecases;
@@ -149,6 +149,68 @@ fn plain(status: StatusCode, body: &'static str) -> Response {
             (header::CACHE_CONTROL, "no-store"),
         ],
         body,
+    )
+        .into_response()
+}
+
+/// The per-minute allowance for the public shared-page read (spec/03-api-contract.md §3.2).
+const SHARED_PAGE_PER_IP_PER_MINUTE: u64 = 120;
+
+/// The window the allowance applies to.
+const SHARED_PAGE_WINDOW_SECONDS: u64 = 60;
+
+/// `GET /api/v1/pages/shared/:token` — the golden body, or a uniform 404 (REQ-037).
+///
+/// The token is the capability: looked up by hash, never by id. An unknown, revoked or
+/// malformed token answers the same 404 body with the same headers, indistinguishably. A
+/// database failure is a 500 with the public headers, never a fake 404: an outage must not
+/// masquerade as a missing page.
+pub async fn shared_page(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let client_ip =
+        crate::client::resolve_client_ip(peer, &headers, state.http().trusted_proxies());
+    let key = format!("pages-shared:{client_ip}");
+    match usecases::hit_rate_limit(state.app(), &key, SHARED_PAGE_WINDOW_SECONDS).await {
+        Ok(decision) if decision.count > SHARED_PAGE_PER_IP_PER_MINUTE => {
+            let body = serde_json::json!({ "error": "Too many requests. Try again later." });
+            return shared_page_response(StatusCode::TOO_MANY_REQUESTS, &body);
+        }
+        Ok(_) => {}
+        Err(error) => return ApiError::from(error).into_response(),
+    }
+
+    match usecases::pages_shared(state.app(), &token).await {
+        Ok(Some((updated_at, source))) => {
+            let body = serde_json::json!({
+                "title": source.get("title").cloned().unwrap_or(serde_json::Value::Null),
+                "blocks": source.get("blocks").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "updatedAt": updated_at,
+            });
+            shared_page_response(StatusCode::OK, &body)
+        }
+        Ok(None) => {
+            let body = serde_json::json!({ "error": "Not found." });
+            shared_page_response(StatusCode::NOT_FOUND, &body)
+        }
+        Err(error) => ApiError::from(error).into_response(),
+    }
+}
+
+/// The shared-page answer with the golden headers.
+fn shared_page_response(status: StatusCode, body: &serde_json::Value) -> Response {
+    (
+        status,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+            (HeaderName::from_static("x-robots-tag"), "noindex, nofollow"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        body.to_string(),
     )
         .into_response()
 }

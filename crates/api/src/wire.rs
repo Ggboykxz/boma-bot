@@ -855,6 +855,56 @@ pub struct MarketplaceSubmitReply {
     pub id: String,
 }
 
+/// The reply of `pages.save` (REQ-037).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagesSaveReply {
+    /// The page's id.
+    pub page_id: String,
+    /// Its version in the family.
+    pub version: i32,
+    /// The library label.
+    pub name: String,
+}
+
+/// The reply of `pages.get` (REQ-037): the page plus its source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagesGetReply {
+    /// The page's id.
+    pub page_id: String,
+    /// The library label.
+    pub name: String,
+    /// `private` or `link`.
+    pub visibility: String,
+    /// The id of the current version.
+    pub current_version_id: Option<String>,
+    /// The version read (latest by default).
+    pub version: i32,
+    /// The validated document.
+    pub source: serde_json::Value,
+    /// When it was compiled.
+    pub updated_at: String,
+}
+
+/// The reply of `pages.share` (REQ-037). The token is handed out once, never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagesShareReply {
+    /// The capability: open it to read the page, signed out.
+    pub token: String,
+    /// The public path to share.
+    pub path: String,
+}
+
+/// The reply of `pages.revokeShare`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagesRevokeShareReply {
+    /// Whether anything changed.
+    pub revoked: bool,
+}
+
 /// One artifact as the API exposes it (REQ-036).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
