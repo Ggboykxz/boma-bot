@@ -2023,6 +2023,475 @@ fn payload_is_a_repository_event(payload: &str) -> bool {
         .is_some_and(|repository| repository.is_object())
 }
 
+/// The outcome of one relayed mail (REQ-047).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailInboundOutcome {
+    /// `started`, `routine`, `held`, `dropped`, or `ignored`.
+    pub result: String,
+    /// The run the mail started, when it started one.
+    pub run_id: Option<String>,
+}
+
+/// Decides and records what happens to one mail from the relay (REQ-047).
+///
+/// The relay proves itself with a bearer, like the webhook path; the sender's trust decides:
+/// a space member or the bot's allowlist starts a conversational run; a routine's `email_senders`
+/// starts that routine's run (a stranger never gets a free-form turn); anything else lands in
+/// the bot's policy — `hold` (default, visible to the space) or `drop` (audited, discarded).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the relay token is wrong or the bot is missing or
+/// archived, and an error when a store cannot answer.
+#[allow(clippy::too_many_lines)] // the mail flow is the contract, in order
+pub async fn mail_inbound(
+    app: &App,
+    via: &str,
+    raw: &[u8],
+) -> Result<MailInboundOutcome, AppError> {
+    let Some(inbound) = app.services.email_inbound.as_ref() else {
+        return Err(AppError::NotFound);
+    };
+    let expected = app
+        .services
+        .tokens
+        .hash(secrecy::ExposeSecret::expose_secret(&inbound.relay_token))?;
+    let provided = app.services.tokens.hash(via)?;
+    if !constant_time_eq(&provided, &expected) {
+        return Err(AppError::NotFound);
+    }
+    let mail = boma_domain::parse_rfc822(raw)?;
+    let domain = &inbound.domain;
+    let prefix = "boma+";
+    let recipient = mail.recipients.iter().find_map(|address| {
+        let address = address.to_ascii_lowercase();
+        address
+            .strip_prefix(prefix)
+            .and_then(|local| local.strip_suffix(&format!("@{domain}")))
+            .map(str::to_owned)
+    });
+    let Some(bot_id) = recipient else {
+        return Ok(MailInboundOutcome {
+            result: "ignored".to_owned(),
+            run_id: None,
+        });
+    };
+
+    let context = TenantContext::System {
+        reason: boma_domain::SystemReason::WebhookDelivery,
+        user_id: None,
+    };
+    let bot_id = boma_domain::BotId::new(bot_id).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(&context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Ok(MailInboundOutcome {
+            result: "ignored".to_owned(),
+            run_id: None,
+        });
+    }
+    let space_id = bot.space_id.clone();
+    let member = TenantContext::Member {
+        space_id: space_id.clone(),
+        user_id: bot.user_id.clone(),
+    };
+    let sender = mail.from.to_ascii_lowercase();
+    let rule = app.stores.mail.rule(&context, bot_id.as_str()).await?;
+    let rule_policy = rule.as_ref().map_or("hold", |rule| rule.policy.as_str());
+    let rule_allows = rule.as_ref().is_some_and(|rule| {
+        rule.allowed_senders
+            .iter()
+            .any(|admitted| admitted == &sender)
+    });
+    let member_match = app
+        .stores
+        .mail
+        .sender_is_member(&context, &space_id, &sender)
+        .await?;
+    let routines = app.stores.routines.list(&context, &bot.id).await?;
+    let admitted: Vec<crate::ports::Routine> = routines
+        .into_iter()
+        .filter(|routine| {
+            routine.active
+                && routine
+                    .email_senders
+                    .iter()
+                    .any(|admitted| admitted == &sender)
+        })
+        .collect();
+
+    let now = app.services.clock.now();
+    let text = format!(
+        "Subject: {}
+
+{}",
+        mail.subject, mail.body
+    );
+    /// The payload arrives as the newest message of the bot's thread, like a person writing in.
+    #[allow(clippy::items_after_statements)]
+    fn user_message(
+        app: &App,
+        space_id: &boma_domain::SpaceId,
+        thread_id: boma_domain::ThreadId,
+        text: String,
+        now: String,
+    ) -> Result<crate::ports::NewMessage, AppError> {
+        Ok(crate::ports::NewMessage {
+            id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+            space_id: space_id.clone(),
+            thread_id,
+            role: boma_domain::MessageRole::User,
+            blocks: vec![boma_domain::Block::Text { text }],
+            bot_id: None,
+            author_user_id: None,
+            run_id: None,
+            client_nonce: None,
+            created_at: now,
+            reply_to_message_id: None,
+            reply_quote: None,
+        })
+    }
+
+    // A member or an allowlisted sender gets a conversational run, like a person writing in.
+    if member_match || rule_allows {
+        let thread_id = thread_of(app, &context, &bot)
+            .await?
+            .ok_or(AppError::NotFound)?
+            .id;
+        let message = app
+            .stores
+            .messages
+            .insert(
+                &member,
+                user_message(app, &space_id, thread_id.clone(), text, now.clone())?,
+            )
+            .await?;
+        let choice = model_choice_for(&bot, &app.services.models)?;
+        let run = app
+            .stores
+            .runs
+            .create(NewRun {
+                id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+                space_id: space_id.clone(),
+                bot_id: bot.id.clone(),
+                thread_id,
+                user_id: bot.user_id.clone(),
+                trigger: boma_domain::RunTrigger::User,
+                client_nonce: None,
+                source_message_id: Some(message.message.id.clone()),
+                created_at: app.services.clock.now(),
+                model_provider: Some(choice.provider),
+                model_id: Some(choice.model),
+                model_pinned: choice.pinned,
+                parent_run_id: None,
+                routine_id: None,
+            })
+            .await?;
+        return Ok(MailInboundOutcome {
+            result: "started".to_owned(),
+            run_id: Some(run.id.as_str().to_owned()),
+        });
+    }
+
+    // A stranger admitted only by a routine wakes that routine, and nothing else.
+    if !admitted.is_empty() {
+        let thread_id = thread_of(app, &context, &bot)
+            .await?
+            .ok_or(AppError::NotFound)?
+            .id;
+        let message = app
+            .stores
+            .messages
+            .insert(
+                &member,
+                user_message(app, &space_id, thread_id.clone(), text, now.clone())?,
+            )
+            .await?;
+        let mut wakes: u32 = 0;
+        for routine in admitted {
+            if app
+                .stores
+                .runs
+                .find_open_routine(&member, &routine.id)
+                .await?
+                .is_some()
+            {
+                continue;
+            }
+            app.stores
+                .runs
+                .create(NewRun {
+                    id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+                    space_id: space_id.clone(),
+                    bot_id: bot.id.clone(),
+                    thread_id: routine.thread_id.clone(),
+                    user_id: routine.user_id.clone(),
+                    trigger: boma_domain::RunTrigger::Routine,
+                    client_nonce: None,
+                    source_message_id: Some(message.message.id.clone()),
+                    created_at: app.services.clock.now(),
+                    model_provider: None,
+                    model_id: None,
+                    model_pinned: false,
+                    parent_run_id: None,
+                    routine_id: Some(routine.id.clone()),
+                })
+                .await?;
+            wakes += 1;
+        }
+        return Ok(MailInboundOutcome {
+            result: "routine".to_owned(),
+            run_id: (wakes > 0).then(|| message.message.id.as_str().to_owned()),
+        });
+    }
+
+    // A stranger with no rule and no routine: the policy decides.
+    if rule_policy == "drop" {
+        let _ = app
+            .stores
+            .audit
+            .append(crate::ports::NewAuditEvent {
+                id: app.services.ids.new_id("aud"),
+                space_id: space_id.clone(),
+                actor_user_id: None,
+                kind: boma_domain::AuditKind::MailDropped,
+                target: sender,
+                metadata: serde_json::json!({ "reason": "the sender is not admitted" }),
+                created_at: app.services.clock.now(),
+            })
+            .await;
+        return Ok(MailInboundOutcome {
+            result: "dropped".to_owned(),
+            run_id: None,
+        });
+    }
+    app.stores
+        .mail
+        .hold(
+            &context,
+            crate::ports::NewHeldMail {
+                id: app.services.ids.new_id("hld"),
+                space_id: space_id.as_str().to_owned(),
+                bot_id: bot.id.as_str().to_owned(),
+                sender,
+                subject: mail.subject,
+                body: mail.body,
+                reason:
+                    "the sender is not a member of this space and is not in the bot's allowlist"
+                        .to_owned(),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(MailInboundOutcome {
+        result: "held".to_owned(),
+        run_id: None,
+    })
+}
+
+/// The bot's thread, for a member or system context.
+async fn thread_of(
+    app: &App,
+    context: &TenantContext,
+    bot: &boma_domain::Bot,
+) -> Result<Option<boma_domain::Thread>, AppError> {
+    app.stores.threads.for_bot(context, &bot.id).await
+}
+
+/// Creates or replaces one bot's mail policy (REQ-047).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's space,
+/// [`AppError::Rule`] when a sender is malformed or the policy is unknown, and an error when a
+/// store cannot answer.
+pub async fn mail_policy_set(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    policy: &str,
+    allowed_senders: &[String],
+) -> Result<crate::ports::MailRule, AppError> {
+    if policy != "hold" && policy != "drop" {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the policy must be `hold` or `drop`".to_owned(),
+        )));
+    }
+    if allowed_senders.len() > 20 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a bot admits at most 20 senders".to_owned(),
+        )));
+    }
+    let senders: Vec<String> = allowed_senders
+        .iter()
+        .map(|sender| {
+            boma_domain::Email::new(sender.clone()).map(|email| email.as_str().to_ascii_lowercase())
+        })
+        .collect::<Result<_, _>>()?;
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores
+        .mail
+        .set_rule(context, bot_id.as_str(), policy, &senders)
+        .await
+}
+
+/// The mail policy of one bot (REQ-047).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn mail_policy_get(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<crate::ports::MailRule, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(app
+        .stores
+        .mail
+        .rule(context, bot_id.as_str())
+        .await?
+        .unwrap_or_else(|| crate::ports::MailRule {
+            bot_id: bot_id.as_str().to_owned(),
+            policy: "hold".to_owned(),
+            allowed_senders: Vec::new(),
+            updated_at: String::new(),
+        }))
+}
+
+/// The held messages of one bot (REQ-047), newest first.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's space, and an
+/// error when a store cannot answer.
+pub async fn mail_held_list(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<Vec<crate::ports::HeldMail>, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    app.stores.mail.held_list(context, bot_id.as_str()).await
+}
+
+/// Starts a run from a held message (REQ-047): the member admits the sender, once.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the held message or the bot does not exist in the
+/// caller's space, and an error when a store cannot answer.
+pub async fn mail_held_release(
+    app: &App,
+    context: &TenantContext,
+    held_id: &str,
+) -> Result<String, AppError> {
+    let held = app
+        .stores
+        .mail
+        .take_held(context, held_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let bot_id = boma_domain::BotId::new(held.bot_id.clone()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let member = context.clone();
+    let text = format!(
+        "Subject: {}
+
+{}",
+        held.subject, held.body
+    );
+    let thread_id = app
+        .stores
+        .threads
+        .for_bot(context, &bot.id)
+        .await?
+        .ok_or(AppError::NotFound)?
+        .id;
+    let message = app
+        .stores
+        .messages
+        .insert(
+            &member,
+            NewMessage {
+                id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                space_id: bot.space_id.clone(),
+                thread_id: thread_id.clone(),
+                role: boma_domain::MessageRole::User,
+                blocks: vec![boma_domain::Block::Text { text }],
+                bot_id: None,
+                author_user_id: context.user_id().cloned(),
+                run_id: None,
+                client_nonce: None,
+                created_at: app.services.clock.now(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await?;
+    let choice = model_choice_for(&bot, &app.services.models)?;
+    let run = app
+        .stores
+        .runs
+        .create(NewRun {
+            id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+            space_id: bot.space_id.clone(),
+            bot_id: bot.id.clone(),
+            thread_id,
+            user_id: bot.user_id.clone(),
+            trigger: boma_domain::RunTrigger::User,
+            client_nonce: None,
+            source_message_id: Some(message.message.id.clone()),
+            created_at: app.services.clock.now(),
+            model_provider: Some(choice.provider),
+            model_id: Some(choice.model),
+            model_pinned: choice.pinned,
+            parent_run_id: None,
+            routine_id: None,
+        })
+        .await?;
+    Ok(run.id.as_str().to_owned())
+}
+
+/// Drops a held message (REQ-047). Removing an unknown id is a success.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn mail_held_drop(
+    app: &App,
+    context: &TenantContext,
+    held_id: &str,
+) -> Result<bool, AppError> {
+    Ok(app.stores.mail.take_held(context, held_id).await?.is_some())
+}
+
 /// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors
@@ -2669,6 +3138,7 @@ pub async fn routines_create(
     active: bool,
     notify: bool,
     github_enabled: bool,
+    email_senders: Vec<String>,
 ) -> Result<RoutineCreateOutcome, AppError> {
     boma_domain::validate_routine_name(name)?;
     boma_domain::validate_routine_prompt(prompt)?;
@@ -2715,6 +3185,7 @@ pub async fn routines_create(
                 active,
                 notify,
                 github_enabled,
+                email_senders,
                 next_run_at,
                 created_at: now,
             },

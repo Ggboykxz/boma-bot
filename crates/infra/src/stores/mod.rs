@@ -13,6 +13,7 @@ mod computer_row;
 pub mod connectors;
 pub mod events;
 pub mod invitations;
+pub mod mail;
 pub mod mcp;
 pub mod memory;
 pub mod messages;

@@ -29,16 +29,17 @@ use crate::{
         BoardsGetReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
         ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
         ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
-        ConnectionsRemoveReply, ConnectorView, InvitationReply, MarketplaceInstallReply,
-        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
-        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
-        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
-        MessagesReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
-        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
-        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
-        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply,
-        SkillView, SkillsReply, SnoozeReply, SpaceReply, TeachSkillReply, ThreadHeadReply,
-        TicketCommentReply, TicketCommentView, TicketReply, TicketView,
+        ConnectionsRemoveReply, ConnectorView, HeldDropReply, HeldListReply, HeldMailView,
+        HeldReleaseReply, InvitationReply, MailPolicyReply, MailPolicyView,
+        MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply,
+        McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
+        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
+        MemoryWriteReply, MessagesReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply,
+        PagesShareReply, PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply,
+        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
+        RunsReply, SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply,
+        SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply, TeachSkillReply,
+        ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -76,6 +77,8 @@ pub mod namespaces {
     pub const BOARDS: &str = "boards";
     /// Tickets: the tickets of the board (REQ-038).
     pub const TICKETS: &str = "tickets";
+    /// Mail: the bot mail rules and the held queue (REQ-047).
+    pub const MAIL: &str = "mail";
 }
 
 /// Every procedure this deployment serves.
@@ -151,6 +154,11 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::TICKETS, "create"),
         (namespaces::TICKETS, "move"),
         (namespaces::TICKETS, "comment"),
+        (namespaces::MAIL, "policyGet"),
+        (namespaces::MAIL, "policySet"),
+        (namespaces::MAIL, "heldList"),
+        (namespaces::MAIL, "heldRelease"),
+        (namespaces::MAIL, "heldDrop"),
     ]
 }
 
@@ -418,6 +426,21 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::TICKETS, "comment") => tickets_comment(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MAIL, "policyGet") => mail_policy_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MAIL, "policySet") => mail_policy_set(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MAIL, "heldList") => mail_held_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MAIL, "heldRelease") => mail_held_release(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MAIL, "heldDrop") => mail_held_drop(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -914,6 +937,9 @@ struct RoutinesCreateRequest {
     /// Whether repository events from the bot's webhook wake this routine.
     #[serde(default)]
     github_enabled: bool,
+    /// The exact addresses admitted to wake this routine by mail.
+    #[serde(default)]
+    email_senders: Vec<String>,
 }
 
 /// The body of `routines.list` (REQ-023).
@@ -950,6 +976,7 @@ async fn routines_create(
         request.active,
         request.notify,
         request.github_enabled,
+        request.email_senders,
     )
     .await?;
     Ok(RoutineWriteReply::from(&outcome.routine))
@@ -2518,4 +2545,131 @@ async fn tickets_comment(
     Ok(TicketCommentReply {
         comment: ticket_comment_view(comment),
     })
+}
+
+fn mail_policy_view(rule: boma_app::ports::MailRule) -> MailPolicyView {
+    MailPolicyView {
+        bot_id: rule.bot_id,
+        policy: rule.policy,
+        allowed_senders: rule.allowed_senders,
+        updated_at: rule.updated_at,
+    }
+}
+
+fn held_mail_view(held: boma_app::ports::HeldMail) -> HeldMailView {
+    HeldMailView {
+        id: held.id,
+        sender: held.sender,
+        subject: held.subject,
+        body: held.body,
+        reason: held.reason,
+        created_at: held.created_at,
+    }
+}
+
+/// The body of `mail.policyGet`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MailPolicyGetRequest {
+    /// The bot whose policy to read.
+    bot_id: String,
+}
+
+/// `mail.policyGet` — the bot's sender rule, `hold` by default.
+async fn mail_policy_get(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MailPolicyReply, ApiError> {
+    let request: MailPolicyGetRequest = parse(&body)?;
+    let rule = usecases::mail_policy_get(state.app(), &auth.actor.context, &request.bot_id).await?;
+    Ok(MailPolicyReply {
+        policy: mail_policy_view(rule),
+    })
+}
+
+/// The body of `mail.policySet`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MailPolicySetRequest {
+    /// The bot whose policy to set.
+    bot_id: String,
+    /// `hold` (the default) or `drop`.
+    policy: String,
+    /// Exact addresses admitted to start work.
+    #[serde(default)]
+    allowed_senders: Vec<String>,
+}
+
+/// `mail.policySet` — create or replace the sender rule.
+async fn mail_policy_set(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MailPolicyReply, ApiError> {
+    let request: MailPolicySetRequest = parse(&body)?;
+    let rule = usecases::mail_policy_set(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.policy,
+        &request.allowed_senders,
+    )
+    .await?;
+    Ok(MailPolicyReply {
+        policy: mail_policy_view(rule),
+    })
+}
+
+/// The body of `mail.held.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MailHeldListRequest {
+    /// The bot whose held messages to list.
+    bot_id: String,
+}
+
+/// `mail.held.list` — the held queue, newest first.
+async fn mail_held_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<HeldListReply, ApiError> {
+    let request: MailHeldListRequest = parse(&body)?;
+    let held = usecases::mail_held_list(state.app(), &auth.actor.context, &request.bot_id).await?;
+    Ok(HeldListReply {
+        held: held.into_iter().map(held_mail_view).collect(),
+    })
+}
+
+/// The body of `mail.held.release` and `mail.held.drop`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MailHeldRequest {
+    /// The held message.
+    held_id: String,
+}
+
+/// `mail.held.release` — admit the sender for this message and start the run.
+async fn mail_held_release(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<HeldReleaseReply, ApiError> {
+    let request: MailHeldRequest = parse(&body)?;
+    let run_id =
+        usecases::mail_held_release(state.app(), &auth.actor.context, &request.held_id).await?;
+    Ok(HeldReleaseReply { run_id })
+}
+
+/// `mail.held.drop` — discard the held message.
+async fn mail_held_drop(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<HeldDropReply, ApiError> {
+    let request: MailHeldRequest = parse(&body)?;
+    let dropped =
+        usecases::mail_held_drop(state.app(), &auth.actor.context, &request.held_id).await?;
+    Ok(HeldDropReply { dropped })
 }

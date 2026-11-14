@@ -40,7 +40,7 @@ pub use memory::{
     MemoryAccountStore, MemoryArtifactContentStore, MemoryArtifactStore, MemoryAuditStore,
     MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryConnectorStore, MemoryDatabase,
     MemoryEffectStore, MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore,
-    MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore, MemoryPageStore,
+    MemoryMailStore, MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore, MemoryPageStore,
     MemoryPendingToolCallStore, MemoryPluginInstallStore, MemoryPluginSubmissionStore,
     MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
     MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,

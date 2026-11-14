@@ -12,10 +12,11 @@ use crate::{
     ports::{
         AccountStore, ArtifactStore, AuditStore, BotStore, CardStore, Clock, ComputerStore,
         ConnectorStore, EffectStore, EventPublisher, EventStore, IdGenerator, InvitationStore,
-        McpServerStore, MemoryStore, MessageStore, PageStore, PasswordHasher, PendingToolCallStore,
-        PluginInstallStore, PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore,
-        RosterStore, RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore,
-        SkillStore, SpaceStore, ThreadStore, TicketStore, TokenGenerator, ToolStore, UserStore,
+        MailStore, McpServerStore, MemoryStore, MessageStore, PageStore, PasswordHasher,
+        PendingToolCallStore, PluginInstallStore, PluginSubmissionStore, RateLimitStore,
+        ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore, ScreenCapabilityStore,
+        SecretStore, SessionStore, SkillStore, SpaceStore, ThreadStore, TicketStore,
+        TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -66,6 +67,8 @@ pub struct Stores {
     pub artifacts: Arc<dyn ArtifactStore>,
     /// The pages of the space and their immutable versions (REQ-037).
     pub pages: Arc<dyn PageStore>,
+    /// The inbound-mail rules and held messages (REQ-047).
+    pub mail: Arc<dyn MailStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -121,6 +124,7 @@ impl Stores {
         artifacts: Arc<dyn ArtifactStore>,
         pages: Arc<dyn PageStore>,
         tickets: Arc<dyn TicketStore>,
+        mail: Arc<dyn MailStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -152,6 +156,7 @@ impl Stores {
             plugin_installs,
             artifacts,
             pages,
+            mail,
             tickets,
             effects,
             tools,
@@ -192,6 +197,9 @@ pub struct Services {
     /// Whether the ticket board is enabled (`BOMA_BOARD`). Off by default: without the flag the
     /// board surface is absent — every board procedure answers 404, signed in or not (REQ-038).
     pub board_enabled: bool,
+    /// The inbound-mail settings (`BOMA_EMAIL_RELAY_TOKEN` + `BOMA_EMAIL_DOMAIN`). `None` means
+    /// the relay route does not exist (REQ-047).
+    pub email_inbound: Option<crate::ports::EmailInboundSettings>,
     /// The runner for connector tools (REQ-032), when this deployment is configured to
     /// execute them. `None` means connector tools are never dispatched, and a call answers with
     /// a clear refusal rather than a fake success.
@@ -234,6 +242,7 @@ impl Services {
             mcp_transport,
             stdio_allowed: Vec::new(),
             board_enabled: false,
+            email_inbound: None,
             connector_runner: None,
             plugin_fetcher,
             oauth_client,
@@ -274,6 +283,16 @@ impl Services {
     #[must_use]
     pub fn with_board(mut self, enabled: bool) -> Self {
         self.board_enabled = enabled;
+        self
+    }
+
+    /// Builds the services with the inbound-mail settings attached (REQ-047).
+    #[must_use]
+    pub fn with_email_inbound(
+        mut self,
+        settings: Option<crate::ports::EmailInboundSettings>,
+    ) -> Self {
+        self.email_inbound = settings;
         self
     }
 }

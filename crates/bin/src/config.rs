@@ -45,6 +45,9 @@ pub enum ConfigError {
     /// The HTTP settings were rejected.
     #[error(transparent)]
     Http(#[from] HttpConfigError),
+    /// The inbound-mail settings are half-configured or invalid.
+    #[error("{0}")]
+    EmailInbound(String),
 }
 
 /// How logs are rendered.
@@ -99,6 +102,10 @@ pub struct Config {
     ///
     /// Off by default; the board surface does not exist without it.
     pub board: bool,
+    /// The inbound-mail settings (`BOMA_EMAIL_RELAY_TOKEN` + `BOMA_EMAIL_DOMAIN`).
+    ///
+    /// Both or neither: a half-configured relay is a startup error, not a degraded mode.
+    pub email_inbound: Option<boma_app::ports::EmailInboundSettings>,
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -242,6 +249,7 @@ impl Config {
             stdio_allowed: parse_string_list(&env, "MCP_STDIO_ALLOWED_COMMANDS"),
             artifact_dir: optional(&env, "BOMA_ARTIFACT_DIR"),
             board: optional_parsed(&env, "BOMA_BOARD", false)?,
+            email_inbound: parse_email_inbound(&env)?,
         })
     }
 }
@@ -329,6 +337,53 @@ fn parse_ip_list(
             })
         })
         .collect()
+}
+
+/// Parses the inbound-mail settings: both variables or neither (REQ-047).
+fn parse_email_inbound(
+    env: &BTreeMap<String, String>,
+) -> Result<Option<boma_app::ports::EmailInboundSettings>, ConfigError> {
+    match (
+        optional(env, "BOMA_EMAIL_RELAY_TOKEN"),
+        optional(env, "BOMA_EMAIL_DOMAIN"),
+    ) {
+        (Some(token), Some(domain)) => {
+            if token.len() < 16 {
+                return Err(ConfigError::EmailInbound(
+                    "BOMA_EMAIL_RELAY_TOKEN must be at least 16 characters".to_owned(),
+                ));
+            }
+            if !domain_shape_ok(&domain) {
+                return Err(ConfigError::EmailInbound(
+                    "BOMA_EMAIL_DOMAIN must be a DNS name (labels of letters, digits and hyphens, joined by dots)".to_owned(),
+                ));
+            }
+            Ok(Some(boma_app::ports::EmailInboundSettings {
+                domain,
+                relay_token: secrecy::SecretString::from(token),
+            }))
+        }
+        (None, None) => Ok(None),
+        _ => Err(ConfigError::EmailInbound(
+            "BOMA_EMAIL_RELAY_TOKEN and BOMA_EMAIL_DOMAIN must be set together".to_owned(),
+        )),
+    }
+}
+
+/// Whether `value` is a plausible DNS name for bot addresses.
+fn domain_shape_ok(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.contains('.')
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn parse_string_list(env: &BTreeMap<String, String>, name: &str) -> Vec<String> {

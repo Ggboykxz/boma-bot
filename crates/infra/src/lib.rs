@@ -59,6 +59,7 @@ pub use stores::computer::PostgresComputerStore;
 pub use stores::connectors::PostgresConnectorStore;
 pub use stores::events::PostgresEventStore;
 pub use stores::invitations::PostgresInvitationStore;
+pub use stores::mail::PostgresMailStore;
 pub use stores::mcp::PostgresMcpServerStore;
 pub use stores::memory::PostgresMemoryStore;
 pub use stores::messages::PostgresMessageStore;

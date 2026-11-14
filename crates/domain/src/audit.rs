@@ -8,6 +8,8 @@
 pub enum AuditKind {
     /// A private MCP endpoint was reached (D-05).
     McpPrivateCall,
+    /// An unverified sender's mail was dropped by policy (REQ-047).
+    MailDropped,
 }
 
 impl AuditKind {
@@ -16,6 +18,7 @@ impl AuditKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::McpPrivateCall => "mcp.private_call",
+            Self::MailDropped => "mail.dropped",
         }
     }
 }

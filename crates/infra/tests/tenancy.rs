@@ -8,7 +8,9 @@
 
 mod common;
 
-use boma_app::ports::{BotStore, MessageStore, ReadStateStore, RosterStore, TicketStore};
+use boma_app::ports::{
+    BotStore, MailStore, MessageStore, ReadStateStore, RosterStore, TicketStore,
+};
 use boma_domain::{SystemReason, TenantContext};
 use boma_infra::{PostgresBotStore, PostgresMessageStore, PostgresReadStateStore};
 
@@ -274,6 +276,65 @@ async fn req_043_a_ticket_cannot_cross_tenants() {
         commented.is_none(),
         "the other tenant cannot comment on the ticket"
     );
+
+    common::cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn req_043_a_held_mail_cannot_cross_tenants() {
+    let database = common::database().await;
+    let pool = common::tenant_pool(&database).await;
+    let prefix = common::unique_id();
+
+    let first = common::fixture(&pool, &format!("{prefix}a")).await;
+    let second = common::fixture(&pool, &format!("{prefix}b")).await;
+
+    let mail = boma_infra::PostgresMailStore::new(pool.clone());
+    mail.hold(
+        &first.context,
+        boma_app::ports::NewHeldMail {
+            id: format!("{prefix}hld"),
+            space_id: first.space_id.as_str().to_owned(),
+            bot_id: first.bot_id.as_str().to_owned(),
+            sender: "stranger@elsewhere.example".to_owned(),
+            subject: "Secret offer".to_owned(),
+            body: "First space only".to_owned(),
+            reason: "the sender is not admitted".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        },
+    )
+    .await
+    .expect("the held message is stored");
+
+    // The other tenant cannot see or drop it.
+    let held = mail
+        .held_list(&second.context, first.bot_id.as_str())
+        .await
+        .expect("the held list is read");
+    assert!(
+        held.is_empty(),
+        "the tenant does not see another tenant's held mail"
+    );
+    let taken = mail
+        .take_held(&second.context, &format!("{prefix}hld"))
+        .await
+        .expect("the take answers");
+    assert!(
+        taken.is_none(),
+        "the other tenant cannot take the held message"
+    );
+
+    // The owning tenant can see and drop it.
+    let held = mail
+        .held_list(&first.context, first.bot_id.as_str())
+        .await
+        .expect("the held list is read");
+    assert_eq!(held.len(), 1);
+    let taken = mail
+        .take_held(&first.context, &format!("{prefix}hld"))
+        .await
+        .expect("the take answers");
+    assert!(taken.is_some());
 
     common::cleanup(&pool, &prefix).await;
 }

@@ -961,6 +961,8 @@ pub struct Routine {
     pub notify: bool,
     /// Whether repository events from the bot's webhook wake this routine (REQ-050).
     pub github_enabled: bool,
+    /// The exact addresses admitted to wake this routine by mail (REQ-047).
+    pub email_senders: Vec<String>,
     /// When it last fired.
     pub last_run_at: Option<String>,
     /// When it wakes next, in UTC.
@@ -1000,6 +1002,8 @@ pub struct NewRoutine {
     pub notify: bool,
     /// Whether repository events from the bot's webhook wake this routine (REQ-050).
     pub github_enabled: bool,
+    /// The exact addresses admitted to wake this routine by mail (REQ-047).
+    pub email_senders: Vec<String>,
     /// When it wakes next, in UTC.
     pub next_run_at: Option<String>,
     /// When it is created.
@@ -2885,6 +2889,137 @@ pub trait TicketStore: Send + Sync {
         context: &TenantContext,
         ticket_id: &str,
     ) -> Result<Option<TicketSummary>, AppError>;
+}
+
+/// The sender policy of one bot for inbound mail (REQ-047).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailRule {
+    /// The bot the rule belongs to.
+    pub bot_id: String,
+    /// `hold` (the safe default) or `drop`.
+    pub policy: String,
+    /// Exact addresses admitted to start work.
+    pub allowed_senders: Vec<String>,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+/// One held message, waiting for the member (REQ-047).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldMail {
+    /// The held message's id.
+    pub id: String,
+    /// The bot it was addressed to.
+    pub bot_id: String,
+    /// Who wrote.
+    pub sender: String,
+    /// The subject line.
+    pub subject: String,
+    /// The plain-text body.
+    pub body: String,
+    /// Why it is held.
+    pub reason: String,
+    /// When it arrived.
+    pub created_at: String,
+}
+
+/// The write payload for one held message (REQ-047).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewHeldMail {
+    /// The held message's id.
+    pub id: String,
+    /// The space the bot belongs to.
+    pub space_id: String,
+    /// The bot it was addressed to.
+    pub bot_id: String,
+    /// Who wrote.
+    pub sender: String,
+    /// The subject line.
+    pub subject: String,
+    /// The plain-text body.
+    pub body: String,
+    /// Why it is held.
+    pub reason: String,
+    /// When it arrived.
+    pub created_at: String,
+}
+
+/// Inbound mail for bots: the rules and the held queue (REQ-047).
+#[async_trait]
+pub trait MailStore: Send + Sync {
+    /// One bot's rule, or `None` (default `hold`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn rule(
+        &self,
+        context: &TenantContext,
+        bot_id: &str,
+    ) -> Result<Option<MailRule>, AppError>;
+
+    /// Creates or replaces one bot's rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn set_rule(
+        &self,
+        context: &TenantContext,
+        bot_id: &str,
+        policy: &str,
+        allowed_senders: &[String],
+    ) -> Result<MailRule, AppError>;
+
+    /// Parks one message for the member (the `hold` policy).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn hold(&self, context: &TenantContext, held: NewHeldMail) -> Result<(), AppError>;
+
+    /// The held messages of the bot, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn held_list(
+        &self,
+        context: &TenantContext,
+        bot_id: &str,
+    ) -> Result<Vec<HeldMail>, AppError>;
+
+    /// Takes one held message (release or drop). `None` when it is unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn take_held(
+        &self,
+        context: &TenantContext,
+        held_id: &str,
+    ) -> Result<Option<HeldMail>, AppError>;
+
+    /// Whether the sender address belongs to a member of the space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn sender_is_member(
+        &self,
+        context: &TenantContext,
+        space_id: &SpaceId,
+        sender: &str,
+    ) -> Result<bool, AppError>;
+}
+
+/// The deployment's inbound-mail settings (REQ-047): absent means the route does not exist.
+#[derive(Debug, Clone)]
+pub struct EmailInboundSettings {
+    /// The mail domain bot addresses live under (`boma+<bot>@<domain>`).
+    pub domain: String,
+    /// The bearer the relay presents. Never logged.
+    pub relay_token: secrecy::SecretString,
 }
 
 /// A memory document carried into a provider turn (REQ-022).

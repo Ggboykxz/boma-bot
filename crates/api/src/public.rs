@@ -13,7 +13,7 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use boma_app::usecases;
+use boma_app::{AppError, usecases};
 use serde::Deserialize;
 
 use crate::{client::ClientAddr, error::ApiError, state::AppState};
@@ -335,6 +335,95 @@ pub async fn bot_webhook(
                 "{}",
                 serde_json::json!({ "ok": true, "runId": outcome.run_id, "routineWakes": outcome.routine_wakes })
             ),
+        )
+            .into_response(),
+        Err(_) => deny(),
+    }
+}
+
+/// The per-minute allowance for the email relay; a relay bursts when a deployment migrates.
+const EMAIL_INBOUND_PER_IP_PER_MINUTE: u64 = 300;
+
+/// `POST /api/v1/email/inbound` — one message from the relay for one bot address (REQ-047).
+///
+/// The relay proves itself with the relay token. The body is an RFC 822 message. The reply
+/// never enumerates: a wrong relay token is the same 404 as a missing route. A malformed
+/// message is a 400 with the reason; a bot that does not exist or is archived does not leak.
+pub async fn email_inbound(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let deny = || {
+        (
+            StatusCode::NOT_FOUND,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error": "Not found."}"#,
+        )
+            .into_response()
+    };
+    let client_ip =
+        crate::client::resolve_client_ip(peer, &headers, state.http().trusted_proxies());
+    let key = format!("email-inbound:{client_ip}");
+    match usecases::hit_rate_limit(state.app(), &key, 60).await {
+        Ok(decision) if decision.count > EMAIL_INBOUND_PER_IP_PER_MINUTE => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (HeaderName::from_static("content-type"), "application/json"),
+                    (HeaderName::from_static("cache-control"), "no-store"),
+                ],
+                r#"{"error": "Too many requests. Try again later."}"#,
+            )
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(error) => return ApiError::from(error).into_response(),
+    }
+    let Some(relay_token) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return deny();
+    };
+    if body.len() > 25 * 1024 * 1024 {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error": "The message is too large"}"#,
+        )
+            .into_response();
+    }
+    match usecases::mail_inbound(state.app(), relay_token, &body).await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            serde_json::json!({
+                "ok": true,
+                "result": outcome.result,
+                "runId": outcome.run_id,
+            })
+            .to_string(),
+        )
+            .into_response(),
+        Err(AppError::Rule(error)) => (
+            StatusCode::BAD_REQUEST,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            serde_json::json!({ "error": error.to_string() }).to_string(),
         )
             .into_response(),
         Err(_) => deny(),

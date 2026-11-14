@@ -86,7 +86,22 @@ run to conclusion and reports it.
 
 **M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
 
-**M7 — in flight. Slice 1 committed (REQ-050 webhooks, in this revision).**
+**M7 — in flight. Slices 1–2 committed: REQ-050 (`8c1e37f`), REQ-047 (in this revision).**
+
+2. **REQ-047 (inbound mail per bot, SHOULD) — slice 2.** `POST /api/v1/email/inbound` with a
+   deployment relay token (`BOMA_EMAIL_RELAY_TOKEN` + `BOMA_EMAIL_DOMAIN`, both-or-neither at
+   boot). Bots are reachable at `boma+<botId>@<domain>`. A minimal RFC 822/MIME reader in the
+   domain (plain text / base64 / quoted-printable / first text/plain part of one-level
+   multipart; attachments named and dropped; UTF-8 encoded words). The sender's trust decides:
+   a space member or the bot's allowlist (`bot_mail_rules`, policy `hold` default or `drop`,
+   allowlist ≤20) opens a normal run; a routine's `email_senders` opens only that routine's run;
+   everybody else is held in `held_mail` (release/drop as a member action) or dropped — the drop
+   is on the audit trail (`AuditKind::MailDropped`). `mail.policyGet|policySet|heldList|
+   heldRelease|heldDrop` RPC. RLS on `bot_mail_rules` and `held_mail`; cross-tenant isolation
+   proved against the probe role. Named, accepted limits: no DKIM/SPF, no outbound SMTP (the bot
+   replies in the thread), no mail authentication beyond the relay token and the sender rules,
+   and no attachments as artifacts in this build — a relay is a trusted SMTP front, not a mail
+   filter. Sweat: 403 tests green.
 
 1. **REQ-050 (bot webhooks + repository events, SHOULD) — slice 1.** `POST /api/v1/bots/{botId}/webhook`,
    cookieless, bot-authenticated by its `WEBHOOK` bot secret (REQ-046 machinery, sealed per space), 64 KiB cap.

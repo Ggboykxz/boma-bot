@@ -552,6 +552,10 @@ struct State {
     pages: Vec<PageRow>,
     /// The immutable page versions (REQ-037).
     page_versions: Vec<PageVersionRow>,
+    /// The mail rules of the bots (REQ-047).
+    mail_rules: Vec<MailRuleRow>,
+    /// The held messages (REQ-047).
+    held_mail: Vec<HeldMailRow>,
     /// The tickets of the board (REQ-038).
     tickets: Vec<TicketRow>,
     /// The comments on the tickets (REQ-038).
@@ -813,6 +817,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn tickets(&self) -> MemoryTicketStore {
         MemoryTicketStore::new(self)
+    }
+
+    /// The store of mail rules and held messages (REQ-047).
+    #[must_use]
+    pub fn mail(&self) -> MemoryMailStore {
+        MemoryMailStore::new(self)
     }
 
     /// The store of effects.
@@ -3243,6 +3253,7 @@ impl RoutineStore for MemoryRoutineStore {
             active: routine.active,
             notify: routine.notify,
             github_enabled: routine.github_enabled,
+            email_senders: routine.email_senders,
             last_run_at: None,
             next_run_at: routine.next_run_at,
             account_failures: 0,
@@ -6527,5 +6538,251 @@ impl boma_app::ports::TicketStore for MemoryTicketStore {
             .iter()
             .find(|row| row.space_id == space_id && row.id == ticket_id)
             .map(ticket_summary))
+    }
+}
+
+/// One stored mail rule (REQ-047).
+#[derive(Debug, Clone)]
+struct MailRuleRow {
+    /// The bot the rule belongs to.
+    bot_id: String,
+    /// The policy.
+    policy: String,
+    /// The allowed senders.
+    allowed_senders: Vec<String>,
+    /// When it was written.
+    updated_at: String,
+}
+
+/// One held message (REQ-047).
+#[derive(Debug, Clone)]
+struct HeldMailRow {
+    /// The held message's id.
+    id: String,
+    /// The space it was delivered to.
+    space_id: SpaceId,
+    /// The bot it was addressed to.
+    bot_id: String,
+    /// Who wrote.
+    sender: String,
+    /// The subject.
+    subject: String,
+    /// The body.
+    body: String,
+    /// Why it is held.
+    reason: String,
+    /// When it arrived.
+    created_at: String,
+}
+
+fn held_mail(row: &HeldMailRow) -> boma_app::ports::HeldMail {
+    boma_app::ports::HeldMail {
+        id: row.id.clone(),
+        bot_id: row.bot_id.clone(),
+        sender: row.sender.clone(),
+        subject: row.subject.clone(),
+        body: row.body.clone(),
+        reason: row.reason.clone(),
+        created_at: row.created_at.clone(),
+    }
+}
+
+fn mail_rule(row: &MailRuleRow) -> boma_app::ports::MailRule {
+    boma_app::ports::MailRule {
+        bot_id: row.bot_id.clone(),
+        policy: row.policy.clone(),
+        allowed_senders: row.allowed_senders.clone(),
+        updated_at: row.updated_at.clone(),
+    }
+}
+
+/// The store of inbound-mail rules and held messages (REQ-047).
+#[derive(Debug, Clone)]
+pub struct MemoryMailStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryMailStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The rules a test seeded (REQ-047).
+    #[must_use]
+    pub fn rules(&self) -> Vec<boma_app::ports::MailRule> {
+        let state = read(&self.state);
+        state.mail_rules.iter().map(mail_rule).collect()
+    }
+}
+
+impl Default for MemoryMailStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::MailStore for MemoryMailStore {
+    async fn rule(
+        &self,
+        context: &TenantContext,
+        bot_id: &str,
+    ) -> Result<Option<boma_app::ports::MailRule>, AppError> {
+        let state = read(&self.state);
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => Some(space_id.clone()),
+            TenantContext::System { .. } => state
+                .bots
+                .iter()
+                .find(|row| row.bot.id.as_str() == bot_id)
+                .map(|row| row.bot.space_id.clone()),
+        };
+        let Some(space_id) = space_id else {
+            return Ok(None);
+        };
+        Ok(state
+            .mail_rules
+            .iter()
+            .find(|row| row.bot_id == bot_id)
+            .filter(|_| {
+                state
+                    .bots
+                    .iter()
+                    .any(|row| row.bot.id.as_str() == bot_id && row.bot.space_id == space_id)
+            })
+            .map(mail_rule))
+    }
+
+    async fn set_rule(
+        &self,
+        context: &TenantContext,
+        bot_id: &str,
+        policy: &str,
+        allowed_senders: &[String],
+    ) -> Result<boma_app::ports::MailRule, AppError> {
+        let (space_id, user_id) = match context {
+            TenantContext::Member { space_id, user_id } => (space_id.clone(), user_id.clone()),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let bot = {
+            let state = read(&self.state);
+            state
+                .bots
+                .iter()
+                .find(|row| row.bot.id.as_str() == bot_id && row.bot.space_id == space_id)
+                .cloned()
+        };
+        if bot.is_none() {
+            return Err(AppError::NotFound);
+        }
+        let _ = user_id;
+        let mut state = write(&self.state);
+        let updated_at = "2026-01-01T00:00:00Z".to_owned();
+        if let Some(row) = state.mail_rules.iter_mut().find(|row| row.bot_id == bot_id) {
+            policy.clone_into(&mut row.policy);
+            row.allowed_senders = allowed_senders.to_vec();
+            updated_at.clone_into(&mut row.updated_at);
+            return Ok(mail_rule(row));
+        }
+        state.mail_rules.push(MailRuleRow {
+            bot_id: bot_id.to_owned(),
+            policy: policy.to_owned(),
+            allowed_senders: allowed_senders.to_vec(),
+            updated_at,
+        });
+        let Some(row) = state.mail_rules.last() else {
+            return Err(AppError::Unavailable);
+        };
+        Ok(mail_rule(row))
+    }
+
+    async fn hold(
+        &self,
+        context: &TenantContext,
+        held: boma_app::ports::NewHeldMail,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => {
+                SpaceId::new(held.space_id.clone()).map_err(|_| AppError::Unavailable)?
+            }
+        };
+        let mut state = write(&self.state);
+        state.held_mail.push(HeldMailRow {
+            id: held.id,
+            space_id,
+            bot_id: held.bot_id,
+            sender: held.sender,
+            subject: held.subject,
+            body: held.body,
+            reason: held.reason,
+            created_at: held.created_at,
+        });
+        Ok(())
+    }
+
+    async fn held_list(
+        &self,
+        context: &TenantContext,
+        bot_id: &str,
+    ) -> Result<Vec<boma_app::ports::HeldMail>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .held_mail
+            .iter()
+            .filter(|row| row.space_id == space_id && row.bot_id == bot_id)
+            .rev()
+            .take(50)
+            .map(held_mail)
+            .collect())
+    }
+
+    async fn take_held(
+        &self,
+        context: &TenantContext,
+        held_id: &str,
+    ) -> Result<Option<boma_app::ports::HeldMail>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let mut state = write(&self.state);
+        let Some(position) = state
+            .held_mail
+            .iter()
+            .position(|row| row.space_id == space_id && row.id == held_id)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(held_mail(&state.held_mail.remove(position))))
+    }
+
+    async fn sender_is_member(
+        &self,
+        _context: &TenantContext,
+        space_id: &SpaceId,
+        sender: &str,
+    ) -> Result<bool, AppError> {
+        let state = read(&self.state);
+        let sender = sender.to_ascii_lowercase();
+        Ok(state
+            .memberships
+            .iter()
+            .filter(|row| row.space_id == *space_id)
+            .any(|row| {
+                state
+                    .users
+                    .iter()
+                    .find(|user| user.user.id == row.user_id)
+                    .is_some_and(|user| user.user.email.as_str().eq_ignore_ascii_case(&sender))
+            }))
     }
 }

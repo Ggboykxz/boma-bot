@@ -93,6 +93,7 @@ fn app_with_scripts(
             Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMailStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -1291,6 +1292,7 @@ async fn req_024_a_due_routine_is_claimed_and_a_once_fire_deactivates_postgres()
                 active: true,
                 notify: false,
                 github_enabled: false,
+                email_senders: vec![],
                 next_run_at: Some("2000-01-01T00:00:00Z".to_owned()),
                 created_at: created_at.clone(),
             },
@@ -1380,6 +1382,7 @@ async fn req_024_a_backoff_queued_run_waits_for_its_window_in_postgres() {
                 active: true,
                 notify: false,
                 github_enabled: false,
+                email_senders: vec![],
                 next_run_at: Some("2000-01-01T00:00:00Z".to_owned()),
                 created_at: created_at.clone(),
             },
@@ -2300,6 +2303,7 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                 Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresMailStore::new(pool.clone())),
                 Arc::new(PostgresReactionStore::new(pool.clone())),
                 Arc::new(PostgresReadStateStore::new(pool.clone())),
                 Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -2638,6 +2642,7 @@ async fn req_050_a_webhook_round_trip_survives_postgres() {
             true,
             false,
             github_enabled,
+            vec![],
         )
         .await
         .expect("the routine is created");
@@ -2686,4 +2691,87 @@ async fn req_050_a_webhook_round_trip_survives_postgres() {
         .await
         .expect("secrets removed");
     common::cleanup(&pool, "hook").await;
+}
+
+/// REQ-047: the mail rule and the held queue round trip through Postgres.
+#[tokio::test]
+async fn req_047_a_mail_rule_and_a_held_message_round_trip_through_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "mail").await;
+    let app = app(&fresh.database);
+    let context = fixture.context.clone();
+    let bot_id = fixture.bot_id.as_str().to_owned();
+
+    // No rule yet: the default is hold with an empty allowlist.
+    let rule = boma_app::usecases::mail_policy_get(&app, &context, &bot_id)
+        .await
+        .expect("the policy answers");
+    assert_eq!(rule.policy, "hold");
+    assert_eq!(rule.allowed_senders.len(), 0);
+
+    // Set a policy; read it back.
+    let rule = boma_app::usecases::mail_policy_set(
+        &app,
+        &context,
+        &bot_id,
+        "hold",
+        &["Vendor@Goods.example".to_owned()],
+    )
+    .await
+    .expect("the policy is stored");
+    assert_eq!(
+        rule.allowed_senders,
+        vec!["vendor@goods.example".to_owned()]
+    );
+    let rule = boma_app::usecases::mail_policy_get(&app, &context, &bot_id)
+        .await
+        .expect("the policy answers");
+    assert_eq!(
+        rule.allowed_senders,
+        vec!["vendor@goods.example".to_owned()]
+    );
+
+    // Held rows round trip with the space.
+    app.stores
+        .mail
+        .hold(
+            &context,
+            boma_app::ports::NewHeldMail {
+                id: "hld_round_trip".to_owned(),
+                space_id: fixture.space_id.as_str().to_owned(),
+                bot_id: bot_id.clone(),
+                sender: "stranger@elsewhere.example".to_owned(),
+                subject: "Cold outreach".to_owned(),
+                body: "Buy our thing.".to_owned(),
+                reason: "the sender is not admitted".to_owned(),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the held message is stored");
+    let held = boma_app::usecases::mail_held_list(&app, &context, &bot_id)
+        .await
+        .expect("the held list answers");
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].sender, "stranger@elsewhere.example");
+
+    let dropped = boma_app::usecases::mail_held_drop(&app, &context, &held[0].id)
+        .await
+        .expect("the drop answers");
+    assert!(dropped);
+    assert_eq!(
+        boma_app::usecases::mail_held_list(&app, &context, &bot_id)
+            .await
+            .expect("the held list answers")
+            .len(),
+        0
+    );
+
+    sqlx::query("DELETE FROM bot_mail_rules WHERE bot_id = $1")
+        .bind(&bot_id)
+        .execute(&pool)
+        .await
+        .expect("rows removed");
+    common::cleanup(&pool, "mail").await;
 }

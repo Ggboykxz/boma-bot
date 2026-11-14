@@ -19,6 +19,7 @@ pub mod connector;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod mail;
 pub mod mcp;
 pub mod memory;
 pub mod message;
@@ -57,6 +58,7 @@ pub use ids::{
     BotId, EventId, InviteId, MessageId, OrganizationId, RoutineId, RunId, SessionId, SpaceId,
     ThreadId, UserId,
 };
+pub use mail::{MAIL_BODY_MAX, MAIL_SUBJECT_MAX, ParsedMail, parse_rfc822};
 pub use mcp::{
     McpTransport, program_allowed, sanitize_mcp_tool_name, split_command, validate_mcp_server_name,
     validate_mcp_server_url,

@@ -79,6 +79,29 @@ fn state(test_app: &TestApp) -> AppState {
     )
 }
 
+/// A raw POST with a plain text body (RFC 822 messages are not JSON).
+async fn post_bytes_path(
+    app_state: AppState,
+    path: &str,
+    body: &str,
+    bearer: Option<&str>,
+) -> Response {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "message/rfc822");
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", bearer);
+    }
+    let request = builder
+        .body(Body::from(body.to_owned()))
+        .expect("the request builds");
+    router(app_state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
 async fn post(
     state: AppState,
     path: &str,
@@ -205,6 +228,34 @@ async fn world_with_board(enabled: bool) -> World {
 
 async fn world() -> World {
     world_with_board(false).await
+}
+
+async fn world_with_mail() -> World {
+    let test_app = TestApp::builder()
+        .email_inbound("mail.example.com", "relay-token-1234567890")
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot_id, thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    World {
+        app: test_app,
+        caller: Caller {
+            cookie,
+            space_id: space_id.as_str().to_owned(),
+        },
+        bot_id: bot_id.as_str().to_owned(),
+        thread_id: thread_id.as_str().to_owned(),
+    }
 }
 
 #[tokio::test]
@@ -2961,4 +3012,164 @@ async fn req_050_a_valid_bearer_starts_a_run_and_wakes_github_routines() {
         .map(|routine| routine["githubEnabled"].as_bool().expect("a bool"))
         .collect();
     assert_eq!(flags.iter().filter(|&&flag| flag).count(), 1);
+}
+
+#[tokio::test]
+async fn req_047_the_relay_route_is_absent_when_mail_is_not_configured() {
+    let world = world().await;
+    let app_state = state(&world.app);
+    let raw = format!(
+        "From: x@example.com\r\nTo: boma+{}@mail.example.com\r\nSubject: hi\r\n\r\nhello\r\n",
+        world.bot_id
+    );
+    let response = post_bytes_path(
+        app_state,
+        "/api/v1/email/inbound",
+        &raw,
+        Some("Bearer relay-token-1234567890"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json(response).await;
+    assert_eq!(body, serde_json::json!({ "error": "Not found." }));
+}
+
+#[tokio::test]
+async fn req_047_a_configured_relay_routes_member_mail_to_a_run() {
+    let world = world_with_mail().await;
+    let app_state = state(&world.app);
+
+    let raw = format!(
+        "From: Person <person@example.com>\r\nTo: boma+{}@mail.example.com\r\nSubject: Ship it\r\nContent-Type: text/plain\r\n\r\nWrite the report.\r\n",
+        world.bot_id
+    );
+
+    // The relay proves itself: absent or wrong token is 404, the same as a missing route.
+    let response = post_bytes_path(app_state.clone(), "/api/v1/email/inbound", &raw, None).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = post_bytes_path(
+        app_state.clone(),
+        "/api/v1/email/inbound",
+        &raw,
+        Some("Bearer wrong"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // A member's mail starts a run.
+    let response = post_bytes_path(
+        app_state.clone(),
+        "/api/v1/email/inbound",
+        &raw,
+        Some("Bearer relay-token-1234567890"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["result"], serde_json::json!("started"));
+    assert!(body["runId"].as_str().is_some());
+
+    // A stranger is held, then listed, released through RPC, and the queue drains.
+    let raw = format!(
+        "From: Stranger <stranger@elsewhere.example>\r\nTo: boma+{}@mail.example.com\r\nSubject: Cold outreach\r\nContent-Type: text/plain\r\n\r\nBuy our thing.\r\n",
+        world.bot_id
+    );
+    let response = post_bytes_path(
+        app_state.clone(),
+        "/api/v1/email/inbound",
+        &raw,
+        Some("Bearer relay-token-1234567890"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["result"], serde_json::json!("held"));
+
+    let response = post(
+        app_state.clone(),
+        "/rpc/mail/heldList",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let held = json(response).await["held"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(held.len(), 1);
+    let held_id = held[0]["id"].as_str().expect("an id").to_owned();
+
+    let response = post(
+        app_state.clone(),
+        "/rpc/mail/heldRelease",
+        Some(&world.caller),
+        serde_json::json!({ "heldId": held_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(json(response).await["runId"].as_str().is_some());
+
+    let response = post(
+        app_state,
+        "/rpc/mail/heldList",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json(response).await["held"]
+            .as_array()
+            .expect("a list")
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn req_047_the_mail_policy_rpc_round_trips() {
+    let world = world_with_mail().await;
+    let app_state = state(&world.app);
+
+    let response = post(
+        app_state.clone(),
+        "/rpc/mail/policyGet",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json(response).await["policy"]["policy"],
+        serde_json::json!("hold")
+    );
+
+    let response = post(
+        app_state.clone(),
+        "/rpc/mail/policySet",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "policy": "drop",
+            "allowedSenders": ["vendor@goods.example"],
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["policy"]["policy"], serde_json::json!("drop"));
+    assert_eq!(
+        body["policy"]["allowedSenders"],
+        serde_json::json!(["vendor@goods.example"])
+    );
+
+    // A malformed policy is refused.
+    let response = post(
+        app_state,
+        "/rpc/mail/policySet",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id, "policy": "bogus", "allowedSenders": [] }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

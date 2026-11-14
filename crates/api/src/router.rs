@@ -63,6 +63,10 @@ pub fn router(state: AppState) -> Router {
             post(public::bot_webhook).route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
+            "/api/v1/email/inbound",
+            post(public::email_inbound).route_layer(DefaultBodyLimit::max(25 * 1024 * 1024 + 1024)),
+        )
+        .route(
             "/api/v1/assets/page-runtime.js",
             get(pages::page_runtime_js),
         )

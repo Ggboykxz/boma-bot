@@ -9,13 +9,13 @@ use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
     PostgresArtifactStore, PostgresAuditStore, PostgresBotStore, PostgresCardStore,
     PostgresComputerStore, PostgresConnectorStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresPageStore, PostgresPendingToolCallStore, PostgresPluginInstallStore,
-    PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
-    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSkillStore,
-    PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore, PostgresToolStore,
-    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore, PostgresMemoryStore,
+    PostgresMessageStore, PostgresPageStore, PostgresPendingToolCallStore,
+    PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
+    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
+    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
+    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore,
+    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -52,6 +52,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         config.stdio_allowed.clone(),
         config.artifact_dir.as_deref(),
         config.board,
+        config.email_inbound.clone(),
     )?;
     let state = AppState::new(
         readiness,
@@ -91,6 +92,7 @@ fn build_app(
     stdio_allowed: Vec<String>,
     config_artifact_dir: Option<&str>,
     config_board: bool,
+    config_email_inbound: Option<boma_app::ports::EmailInboundSettings>,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -146,6 +148,7 @@ fn build_app(
             Arc::new(PostgresArtifactStore::new(pool.clone())),
             Arc::new(PostgresPageStore::new(pool.clone())),
             Arc::new(PostgresTicketStore::new(pool.clone())),
+            Arc::new(PostgresMailStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -175,7 +178,8 @@ fn build_app(
             )
             .with_connectors(connector_runner)
             .with_stdio_commands(stdio_allowed)
-            .with_board(config_board);
+            .with_board(config_board)
+            .with_email_inbound(config_email_inbound);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -208,6 +212,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         config.stdio_allowed.clone(),
         config.artifact_dir.as_deref(),
         config.board,
+        config.email_inbound.clone(),
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

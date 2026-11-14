@@ -285,6 +285,8 @@ pub struct TestAppBuilder {
     artifact_content: Option<Arc<dyn boma_app::ports::ArtifactContentStore>>,
     /// Whether the ticket board is enabled (`BOMA_BOARD`).
     board: bool,
+    /// The inbound-mail relay settings (REQ-047).
+    email_inbound: Option<(String, String)>,
 }
 
 impl Default for TestAppBuilder {
@@ -303,6 +305,7 @@ impl Default for TestAppBuilder {
             oauth_client: None,
             artifact_content: None,
             board: false,
+            email_inbound: None,
         }
     }
 }
@@ -390,6 +393,13 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with the inbound-mail relay configured (REQ-047).
+    #[must_use]
+    pub fn email_inbound(mut self, domain: &str, relay_token: &str) -> Self {
+        self.email_inbound = Some((domain.to_owned(), relay_token.to_owned()));
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -406,6 +416,7 @@ impl TestAppBuilder {
 
     /// Builds the application.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // the builder is one list per store; it is meant to be read
     pub fn build(self) -> TestApp {
         let ids = Arc::new(ScriptedIds::new(self.ids));
         let clock = Arc::new(match &self.fixed_instant {
@@ -443,6 +454,7 @@ impl TestAppBuilder {
             Arc::new(database.artifacts()),
             Arc::new(database.pages()),
             Arc::new(database.tickets()),
+            Arc::new(database.mail()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -482,7 +494,13 @@ impl TestAppBuilder {
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::ScriptedConnectorRunner::new())),
         )
-        .with_board(self.board);
+        .with_board(self.board)
+        .with_email_inbound(self.email_inbound.clone().map(|(domain, relay_token)| {
+            boma_app::ports::EmailInboundSettings {
+                domain,
+                relay_token: secrecy::SecretString::from(relay_token),
+            }
+        }));
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
         } else if self.computers {
@@ -519,6 +537,7 @@ mod tests {
         usecases::{SendMessage, create_bot, send_message, sign_up},
     };
     use boma_domain::{RunStatus, SpaceId};
+    use std::sync::Arc;
 
     use super::TestApp;
 
@@ -597,8 +616,6 @@ mod tests {
 
     #[tokio::test]
     async fn req_021_a_run_that_fails_carries_a_legible_reason() {
-        use std::sync::Arc;
-
         use crate::ScriptedProvider;
         use boma_app::worker::Worker;
 
@@ -2380,6 +2397,7 @@ async fn req_024_a_due_routine_fires_into_a_routine_run() {
                 active: true,
                 notify: false,
                 github_enabled: false,
+                email_senders: Vec::new(),
                 next_run_at: Some("2026-01-01T00:01:00Z".to_owned()),
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
             },
@@ -2464,6 +2482,7 @@ async fn req_024_a_once_routine_fires_once_and_deactivates_itself() {
                 active: true,
                 notify: false,
                 github_enabled: false,
+                email_senders: Vec::new(),
                 next_run_at: Some("2026-01-01T00:01:00Z".to_owned()),
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
             },
@@ -2548,6 +2567,7 @@ async fn req_024_a_coalesced_routine_records_the_skip_instead_of_stampeding() {
                 active: true,
                 notify: false,
                 github_enabled: false,
+                email_senders: Vec::new(),
                 next_run_at: Some("2026-01-01T00:01:00Z".to_owned()),
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
             },
@@ -2656,6 +2676,7 @@ mod routine_retry_tests {
                     active: true,
                     notify,
                     github_enabled: false,
+                    email_senders: Vec::new(),
                     next_run_at: Some("2025-12-31T23:59:00Z".to_owned()),
                     created_at: "2026-01-01T00:00:00Z".to_owned(),
                 },
@@ -5675,6 +5696,222 @@ mod page_tests {
         assert_eq!(
             pages[0].visibility, "private",
             "a bot never publishes by itself"
+        );
+    }
+}
+
+#[cfg(test)]
+mod mail_tests {
+    // REQ-047 — inbound mail: member trust, allowlisting, held queue, release and drop.
+
+    use super::TestApp;
+
+    async fn seeded(
+        email_inbound: bool,
+    ) -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_app::usecases::BotCreated,
+    ) {
+        let builder = TestApp::builder();
+        let test = if email_inbound {
+            builder
+                .email_inbound("mail.example.com", "relay-token-1234567890")
+                .build()
+        } else {
+            builder.build()
+        };
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        (test, context, created)
+    }
+
+    #[tokio::test]
+    async fn req_047_a_member_mail_starts_a_run() {
+        let (test, _context, created) = seeded(true).await;
+        let bot_id = created.bot.id.as_str().to_owned();
+
+        let raw = format!(
+            "From: Person <person@example.com>\r\nTo: boma+{bot_id}@mail.example.com\r\nSubject: Ship it\r\nContent-Type: text/plain\r\n\r\nWrite the report.\r\n"
+        );
+        let outcome =
+            boma_app::usecases::mail_inbound(test.app(), "relay-token-1234567890", raw.as_bytes())
+                .await
+                .expect("the relay is configured and the mail parses");
+        assert_eq!(outcome.result, "started");
+        assert!(outcome.run_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn req_047_a_stranger_is_held_and_the_member_can_release_or_drop() {
+        let (test, context, created) = seeded(true).await;
+        let bot_id = created.bot.id.as_str().to_owned();
+
+        // A stranger's mail lands in the held queue.
+        let raw = format!(
+            "From: Stranger <stranger@elsewhere.example>\r\nTo: boma+{bot_id}@mail.example.com\r\nSubject: Cold outreach\r\nContent-Type: text/plain\r\n\r\nBuy our thing.\r\n"
+        );
+        let outcome =
+            boma_app::usecases::mail_inbound(test.app(), "relay-token-1234567890", raw.as_bytes())
+                .await
+                .expect("the mail parses");
+        assert_eq!(outcome.result, "held");
+
+        let held = boma_app::usecases::mail_held_list(test.app(), &context, &bot_id)
+            .await
+            .expect("the held list answers");
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].sender, "stranger@elsewhere.example");
+
+        // Releasing starts a run, without silently allowlisting the sender.
+        let released = boma_app::usecases::mail_held_release(test.app(), &context, &held[0].id)
+            .await
+            .expect("the held message is released");
+        assert_ne!(released.len(), 0);
+
+        // Holding another stranger then dropping it removes it.
+        let outcome =
+            boma_app::usecases::mail_inbound(test.app(), "relay-token-1234567890", raw.as_bytes())
+                .await
+                .expect("the mail parses");
+        assert_eq!(outcome.result, "held");
+        let held = boma_app::usecases::mail_held_list(test.app(), &context, &bot_id)
+            .await
+            .expect("the held list answers");
+        assert_eq!(held.len(), 1);
+        let dropped = boma_app::usecases::mail_held_drop(test.app(), &context, &held[0].id)
+            .await
+            .expect("the drop answers");
+        assert!(dropped);
+        assert_eq!(
+            boma_app::usecases::mail_held_list(test.app(), &context, &bot_id)
+                .await
+                .expect("the held list answers")
+                .len(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn req_047_an_allowlisted_sender_starts_a_run() {
+        let (test, context, created) = seeded(true).await;
+        let bot_id = created.bot.id.as_str().to_owned();
+
+        // The bot admits nobody yet: the mail is held.
+        let raw = format!(
+            "From: Vendor <vendor@goods.example>\r\nTo: boma+{bot_id}@mail.example.com\r\nSubject: Invoice\r\nContent-Type: text/plain\r\n\r\nInvoice 42 attached.\r\n"
+        );
+        let outcome =
+            boma_app::usecases::mail_inbound(test.app(), "relay-token-1234567890", raw.as_bytes())
+                .await
+                .expect("the mail parses");
+        assert_eq!(outcome.result, "held");
+
+        // The member allows this address; the next mail starts a run.
+        let rule = boma_app::usecases::mail_policy_set(
+            test.app(),
+            &context,
+            &bot_id,
+            "hold",
+            &["vendor@goods.example".to_owned()],
+        )
+        .await
+        .expect("the policy is set");
+        assert_eq!(
+            rule.allowed_senders,
+            vec!["vendor@goods.example".to_owned()]
+        );
+
+        let outcome =
+            boma_app::usecases::mail_inbound(test.app(), "relay-token-1234567890", raw.as_bytes())
+                .await
+                .expect("the mail parses");
+        assert_eq!(outcome.result, "started");
+    }
+
+    #[tokio::test]
+    async fn req_047_a_routine_admits_only_its_own_senders() {
+        let (test, context, created) = seeded(true).await;
+        let bot_id = created.bot.id.as_str().to_owned();
+
+        // A routine admits one address; the bot's general rule stays shut.
+        boma_app::usecases::routines_create(
+            test.app(),
+            &context,
+            &bot_id,
+            "package watcher",
+            "Track the delivery.",
+            &["@once".to_owned()],
+            "UTC",
+            true,
+            false,
+            true,
+            vec!["tracker@parcels.example".to_owned()],
+        )
+        .await
+        .expect("the routine is created");
+
+        let raw = format!(
+            "From: Courier <tracker@parcels.example>\r\nTo: boma+{bot_id}@mail.example.com\r\nSubject: Package delivered\r\nContent-Type: text/plain\r\n\r\nYour package was delivered.\r\n"
+        );
+        let outcome =
+            boma_app::usecases::mail_inbound(test.app(), "relay-token-1234567890", raw.as_bytes())
+                .await
+                .expect("the mail parses");
+        assert_eq!(outcome.result, "routine");
+
+        // A routine-scoped admission never opens a conversational run for a stranger.
+        let page = test
+            .app()
+            .stores
+            .runs
+            .find_active_for_thread(&context, &created.thread.id)
+            .await
+            .expect("the store answers");
+        assert!(
+            page.is_none(),
+            "the stranger's mail does not start a conversational run"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_047_the_drop_policy_discards_and_audits() {
+        let (test, context, created) = seeded(true).await;
+        let bot_id = created.bot.id.as_str().to_owned();
+
+        boma_app::usecases::mail_policy_set(test.app(), &context, &bot_id, "drop", &[])
+            .await
+            .expect("the policy is set");
+
+        let raw = format!(
+            "From: Stranger <stranger@elsewhere.example>\r\nTo: boma+{bot_id}@mail.example.com\r\nSubject: Cold outreach\r\nContent-Type: text/plain\r\n\r\nBuy our thing.\r\n"
+        );
+        let outcome =
+            boma_app::usecases::mail_inbound(test.app(), "relay-token-1234567890", raw.as_bytes())
+                .await
+                .expect("the mail parses");
+        assert_eq!(outcome.result, "dropped");
+        assert_eq!(test.database().mail().rules().len(), 1);
+
+        // The drop is on the audit trail for the space, with the sender as the target.
+        let events = test.database().audit().events();
+        assert!(
+            events.iter().any(|event| event.kind == "mail.dropped"
+                && event.target == "stranger@elsewhere.example")
         );
     }
 }

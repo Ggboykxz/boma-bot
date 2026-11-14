@@ -509,6 +509,9 @@ pub struct RoutineView {
     pub notify: bool,
     /// Whether repository events from the bot's webhook wake this routine.
     pub github_enabled: bool,
+    /// The exact addresses admitted to wake this routine by mail.
+    #[serde(default)]
+    pub email_senders: Vec<String>,
     /// When it last fired.
     pub last_run_at: Option<String>,
     /// When it wakes next.
@@ -534,6 +537,7 @@ impl From<&boma_app::ports::Routine> for RoutineView {
             active: routine.active,
             notify: routine.notify,
             github_enabled: routine.github_enabled,
+            email_senders: routine.email_senders.clone(),
             last_run_at: routine.last_run_at.clone(),
             next_run_at: routine.next_run_at.clone(),
             account_failures: routine.account_failures,
@@ -856,6 +860,70 @@ pub struct MarketplaceSubmitReply {
     pub ok: bool,
     /// The submission's id.
     pub id: String,
+}
+
+/// The mail policy of one bot as the API exposes it (REQ-047).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailPolicyView {
+    /// The bot's id.
+    pub bot_id: String,
+    /// `hold` (the default) or `drop`.
+    pub policy: String,
+    /// The exact addresses admitted to start work.
+    pub allowed_senders: Vec<String>,
+    /// When the rule last changed.
+    pub updated_at: String,
+}
+
+/// One held message as the API exposes it (REQ-047).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldMailView {
+    /// The held message's id.
+    pub id: String,
+    /// Who wrote.
+    pub sender: String,
+    /// The subject.
+    pub subject: String,
+    /// The plain-text body.
+    pub body: String,
+    /// Why it is held.
+    pub reason: String,
+    /// When it arrived.
+    pub created_at: String,
+}
+
+/// The reply of `mail.policyGet` and `mail.policySet`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailPolicyReply {
+    /// The policy.
+    pub policy: MailPolicyView,
+}
+
+/// The reply of `mail.held.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldListReply {
+    /// The held messages, newest first.
+    pub held: Vec<HeldMailView>,
+}
+
+/// The reply of `mail.held.release`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldReleaseReply {
+    /// The run the message started.
+    pub run_id: String,
+}
+
+/// The reply of `mail.held.drop`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldDropReply {
+    /// Whether something was there.
+    pub dropped: bool,
 }
 
 /// One ticket of the board as the API exposes it (REQ-038).
