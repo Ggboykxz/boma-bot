@@ -1290,6 +1290,7 @@ async fn req_024_a_due_routine_is_claimed_and_a_once_fire_deactivates_postgres()
                 timezone: "UTC".to_owned(),
                 active: true,
                 notify: false,
+                github_enabled: false,
                 next_run_at: Some("2000-01-01T00:00:00Z".to_owned()),
                 created_at: created_at.clone(),
             },
@@ -1378,6 +1379,7 @@ async fn req_024_a_backoff_queued_run_waits_for_its_window_in_postgres() {
                 timezone: "UTC".to_owned(),
                 active: true,
                 notify: false,
+                github_enabled: false,
                 next_run_at: Some("2000-01-01T00:00:00Z".to_owned()),
                 created_at: created_at.clone(),
             },
@@ -2588,4 +2590,100 @@ async fn req_038_tickets_round_trip_through_postgres() {
     }
     common::cleanup(&pool, "tkt").await;
     common::cleanup(&pool, "tk2").await;
+}
+
+/// REQ-050: a webhook round trip through Postgres — the secret is sealed, the wake runs, and a
+/// repository-shaped payload wakes the opted-in routine only.
+#[tokio::test]
+async fn req_050_a_webhook_round_trip_survives_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "hook").await;
+    let app = app(&fresh.database);
+    let context = fixture.context.clone();
+    let bot_id = fixture.bot_id.as_str().to_owned();
+
+    // Seal the webhook secret as a bot secret.
+    boma_app::usecases::bot_secret_set(
+        &app,
+        &context,
+        &bot_id,
+        "WEBHOOK",
+        secrecy::SecretString::from("hook-secret-1".to_owned()),
+    )
+    .await
+    .expect("the secret is stored");
+
+    // A wrong bearer is refused uniformly.
+    let refused = boma_app::usecases::webhook_wake(&app, &bot_id, "wrong-bearer", "{}").await;
+    assert!(refused.is_err());
+
+    // A valid bearer starts a Webhook-triggered run.
+    let first =
+        boma_app::usecases::webhook_wake(&app, &bot_id, "hook-secret-1", "{\"event\":\"ping\"}")
+            .await
+            .expect("the wake is accepted");
+    assert_eq!(first.routine_wakes, 0);
+
+    // One routine opts into repository events; another does not.
+    for (name, github_enabled) in [("repo watcher", true), ("quiet routine", false)] {
+        boma_app::usecases::routines_create(
+            &app,
+            &context,
+            &bot_id,
+            name,
+            "Watch the repository.",
+            &["@once".to_owned()],
+            "UTC",
+            true,
+            false,
+            github_enabled,
+        )
+        .await
+        .expect("the routine is created");
+    }
+
+    let second = boma_app::usecases::webhook_wake(
+        &app,
+        &bot_id,
+        "hook-secret-1",
+        "{\"repository\":{\"full_name\":\"acme/widgets\",\"name\":\"widgets\"}}",
+    )
+    .await
+    .expect("the repository wake is accepted");
+    assert_eq!(second.routine_wakes, 1);
+
+    // The triggered runs exist and carry the trigger vocabulary the UI expects.
+    let runs: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT trigger FROM runs WHERE space_id = $1 ORDER BY trigger",
+    )
+    .bind(fixture.space_id.as_str())
+    .fetch_all(&pool)
+    .await
+    .expect("the runs answer");
+    assert!(runs.iter().any(|trigger| trigger == "webhook"));
+    assert!(runs.iter().any(|trigger| trigger == "routine"));
+
+    // Clean up.
+    sqlx::query("DELETE FROM runs WHERE space_id = $1")
+        .bind(fixture.space_id.as_str())
+        .execute(&pool)
+        .await
+        .expect("runs removed");
+    sqlx::query("DELETE FROM messages WHERE thread_id = $1")
+        .bind(fixture.thread_id.as_str())
+        .execute(&pool)
+        .await
+        .expect("messages removed");
+    sqlx::query("DELETE FROM routines WHERE space_id = $1")
+        .bind(fixture.space_id.as_str())
+        .execute(&pool)
+        .await
+        .expect("routines removed");
+    sqlx::query("DELETE FROM bot_secrets WHERE bot_id = $1")
+        .bind(&bot_id)
+        .execute(&pool)
+        .await
+        .expect("secrets removed");
+    common::cleanup(&pool, "hook").await;
 }

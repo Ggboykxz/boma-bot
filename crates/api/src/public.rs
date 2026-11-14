@@ -258,3 +258,85 @@ fn shared_page_response(status: StatusCode, body: &serde_json::Value) -> Respons
     )
         .into_response()
 }
+
+/// The per-minute allowance for the bot webhook (bot-authenticated, not internet-facing).
+const BOT_WEBHOOK_PER_IP_PER_MINUTE: u64 = 120;
+
+/// The window the allowance applies to.
+const BOT_WEBHOOK_WINDOW_SECONDS: u64 = 60;
+
+/// `POST /api/v1/bots/:botId/webhook` — wake the bot with a payload (REQ-050).
+///
+/// The bot proves itself with its `WEBHOOK` bot secret. Every refusal — unknown bot, archived
+/// bot, missing secret, wrong secret, an unreadable body — answers the same `401` with the same
+/// body and the same headers, so bot ids cannot be enumerated. On success a run starts with the
+/// payload as its newest message; a repository-shaped payload additionally wakes the bot's
+/// opted-in `github_enabled` routines.
+pub async fn bot_webhook(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    Path(bot_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let deny = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error": "Unauthorized."}"#,
+        )
+            .into_response()
+    };
+    let client_ip =
+        crate::client::resolve_client_ip(peer, &headers, state.http().trusted_proxies());
+    let key = format!("bot-webhook:{client_ip}");
+    match usecases::hit_rate_limit(state.app(), &key, BOT_WEBHOOK_WINDOW_SECONDS).await {
+        Ok(decision) if decision.count > BOT_WEBHOOK_PER_IP_PER_MINUTE => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (HeaderName::from_static("content-type"), "application/json"),
+                    (HeaderName::from_static("cache-control"), "no-store"),
+                ],
+                r#"{"error": "Too many requests. Try again later."}"#,
+            )
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(error) => return ApiError::from(error).into_response(),
+    }
+    let Some(bearer) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return deny();
+    };
+    if body.len() > 64 * 1024 {
+        return deny();
+    }
+    let Some(payload) = std::str::from_utf8(&body).ok() else {
+        return deny();
+    };
+    if serde_json::from_str::<serde_json::Value>(payload).is_err() {
+        return deny();
+    }
+    match usecases::webhook_wake(state.app(), &bot_id, bearer, payload).await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            format!(
+                "{}",
+                serde_json::json!({ "ok": true, "runId": outcome.run_id, "routineWakes": outcome.routine_wakes })
+            ),
+        )
+            .into_response(),
+        Err(_) => deny(),
+    }
+}

@@ -911,6 +911,9 @@ struct RoutinesCreateRequest {
     /// Whether the owner is told about each run.
     #[serde(default)]
     notify: bool,
+    /// Whether repository events from the bot's webhook wake this routine.
+    #[serde(default)]
+    github_enabled: bool,
 }
 
 /// The body of `routines.list` (REQ-023).
@@ -946,6 +949,7 @@ async fn routines_create(
         &request.timezone,
         request.active,
         request.notify,
+        request.github_enabled,
     )
     .await?;
     Ok(RoutineWriteReply::from(&outcome.routine))

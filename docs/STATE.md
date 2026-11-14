@@ -86,6 +86,20 @@ run to conclusion and reports it.
 
 **M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
 
+**M7 — in flight. Slice 1 committed (REQ-050 webhooks, in this revision).**
+
+1. **REQ-050 (bot webhooks + repository events, SHOULD) — slice 1.** `POST /api/v1/bots/{botId}/webhook`,
+   cookieless, bot-authenticated by its `WEBHOOK` bot secret (REQ-046 machinery, sealed per space), 64 KiB cap.
+   **Uniform 401** for unknown bot, archived bot, missing secret and wrong bearer — the body is
+   `{"error": "Unauthorized."}` byte-identical and the golden `bot-webhook-denied` **replays** against
+   the real router. A valid bearer inserts the payload as the newest message of the bot's thread and
+   starts a `webhook`-triggered run; a repository-shaped payload additionally wakes the bot's routines
+   with `github_enabled` (new `routines.github_enabled`, column migration 0039) — each with its own
+   `routine`-triggered run, an open run suppresses the duplicate wake, and the schedule is untouched.
+   Wire: `routines.create` accepts `githubEnabled` and echoes it (`RoutineView`). Named gaps: no
+   repository/owner filtering, no signature verification beyond the bot bearer (GitHub's HMAC is an
+   M11 candidate), and `routine_wakes` exists in the answer for visibility.
+
 **M6 — complete. Four slices committed and CI green: REQ-036 (`c369833`, run 50),
 REQ-037 (`33cf6eb`, run 51), REQ-039 (`06d41c1`, run 52), REQ-038 (`23d3fca`, run 53 — rust,
 compose, web all success). 386 tests locally green plus docker-gated suites green in CI.**

@@ -21,9 +21,8 @@
       "reason": null
     },
     "bot-webhook-denied": {
-      "status": "pending",
-      "req": "REQ-050",
-      "reason": "M7 - bot webhooks and their uniform 401 arrive with the signed-ingress layer"
+      "status": "implemented",
+      "req": "REQ-050"
     },
     "computer-status": {
       "status": "implemented",

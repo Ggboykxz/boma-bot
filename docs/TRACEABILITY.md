@@ -66,7 +66,7 @@ Status values:
 | REQ-047 | M7 | — | — |
 | REQ-048 | M7 | — | — |
 | REQ-049 | deferred | — | — (COULD; recorded in `docs/STATE.md`) |
-| REQ-050 | M7 | — | — |
+| REQ-050 | M7 | `crates/api/tests/rpc_surface.rs::req_050_an_unknown_bot_and_a_wrong_secret_get_the_same_401`, `crates/api/tests/rpc_surface.rs::req_050_a_valid_bearer_starts_a_run_and_wakes_github_routines`, `crates/infra/tests/m1.rs::req_050_a_webhook_round_trip_survives_postgres`, `crates/conformance/tests/golden_api.rs::req_001_implemented_goldens_replay_exactly` (bot-webhook-denied replayed) | `crates/api/src/public.rs` (`POST /api/v1/bots/{botId}/webhook`), `crates/app/src/usecases.rs` (`webhook_wake`, `constant_time_eq`), `crates/domain/src/run.rs` (`RunTrigger::Webhook`), `crates/app/src/ports.rs` (`github_enabled` on Routine/NewRoutine), `crates/infra/src/stores/routines.rs`, `crates/infra/src/stores/rows.rs`, `migrations/0039_routines_github_enabled.sql`, `spec/golden/bot-webhook-denied.json`, `docs/adr/022-artifacts-pages-board.md` |
 | REQ-051 | M8 | — | — |
 | REQ-052 | M8 | — | — |
 | REQ-053 | M0 | `crates/api/tests/http_surface.rs::req_053_health_is_live_even_when_every_dependency_is_down` | `crates/api/src/health.rs`, `crates/app/src/health.rs` |

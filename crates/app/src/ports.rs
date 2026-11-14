@@ -959,6 +959,8 @@ pub struct Routine {
     pub active: bool,
     /// Whether the owner is told about each run.
     pub notify: bool,
+    /// Whether repository events from the bot's webhook wake this routine (REQ-050).
+    pub github_enabled: bool,
     /// When it last fired.
     pub last_run_at: Option<String>,
     /// When it wakes next, in UTC.
@@ -996,6 +998,8 @@ pub struct NewRoutine {
     pub active: bool,
     /// Whether the owner is told about each run.
     pub notify: bool,
+    /// Whether repository events from the bot's webhook wake this routine (REQ-050).
+    pub github_enabled: bool,
     /// When it wakes next, in UTC.
     pub next_run_at: Option<String>,
     /// When it is created.

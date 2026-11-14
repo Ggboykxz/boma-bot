@@ -94,7 +94,13 @@ fn golden_state(app: boma_app::App) -> AppState {
 }
 
 /// The fixtures that carry no world: they are answered from configuration alone.
-const WORLDLESS: &[&str] = &["health", "ready", "auth-capabilities", "unauthorized"];
+const WORLDLESS: &[&str] = &[
+    "health",
+    "ready",
+    "auth-capabilities",
+    "unauthorized",
+    "bot-webhook-denied",
+];
 
 /// The fixture whose world is the account alone, without a bot.
 const ACCOUNT_WORLD: &str = "send-message";

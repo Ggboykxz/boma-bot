@@ -1835,6 +1835,194 @@ pub async fn tickets_comment(
         .ok_or(AppError::NotFound)
 }
 
+/// Compares two digests without leaking where they differ.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (left, right) in a.iter().zip(b) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
+
+/// The outcome of one accepted webhook call (REQ-050).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookOutcome {
+    /// The run the payload started.
+    pub run_id: String,
+    /// How many opted-in routines the same call woke as well.
+    pub routine_wakes: u32,
+}
+
+/// Wakes a bot from an inbound webhook (REQ-050).
+///
+/// The bot proves itself with the `WEBHOOK` bot secret sealed in its space: `bearer` is
+/// compared by digest; every failure — unknown bot, archived bot, missing secret, wrong secret —
+/// answers the same refusal, so bot ids cannot be enumerated. A payload with a `repository`
+/// object additionally wakes the bot's `github_enabled` routines, each with its own run, exactly
+/// as a due routine fires, without touching their schedules.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist, is archived, has no webhook
+/// secret, or the bearer does not match, and an error when a store cannot answer.
+#[allow(clippy::too_many_lines)] // the wake is the flow, in order
+pub async fn webhook_wake(
+    app: &App,
+    bot_id: &str,
+    bearer: &str,
+    payload: &str,
+) -> Result<WebhookOutcome, AppError> {
+    let context = TenantContext::System {
+        reason: boma_domain::SystemReason::WebhookDelivery,
+        user_id: None,
+    };
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(&context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let secret = app
+        .stores
+        .secrets
+        .reveal(&context, &bot.id, "WEBHOOK")
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let provided = app.services.tokens.hash(bearer)?;
+    let expected = app
+        .services
+        .tokens
+        .hash(secrecy::ExposeSecret::expose_secret(&secret))?;
+    if !constant_time_eq(&provided, &expected) {
+        return Err(AppError::NotFound);
+    }
+
+    let now = app.services.clock.now();
+    let space_id = bot.space_id.clone();
+    let thread = app
+        .stores
+        .threads
+        .for_bot(&context, &bot.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let member = TenantContext::Member {
+        space_id: space_id.clone(),
+        user_id: bot.user_id.clone(),
+    };
+
+    // The payload arrives as the newest user message, exactly like a person writing in.
+    let text = format!(
+        "Webhook payload:
+{payload}"
+    );
+    let message = app
+        .stores
+        .messages
+        .insert(
+            &member,
+            NewMessage {
+                id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                space_id: space_id.clone(),
+                thread_id: thread.id.clone(),
+                role: boma_domain::MessageRole::User,
+                blocks: vec![boma_domain::Block::Text { text }],
+                bot_id: None,
+                author_user_id: None,
+                run_id: None,
+                client_nonce: None,
+                created_at: now.clone(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await?;
+
+    // The model is picked before the run exists, same as a conversational turn (REQ-015).
+    let choice = model_choice_for(&bot, &app.services.models)?;
+    let run = app
+        .stores
+        .runs
+        .create(NewRun {
+            id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+            space_id: space_id.clone(),
+            bot_id: bot.id.clone(),
+            thread_id: thread.id.clone(),
+            user_id: bot.user_id.clone(),
+            trigger: boma_domain::RunTrigger::Webhook,
+            client_nonce: None,
+            source_message_id: Some(message.message.id.clone()),
+            created_at: now.clone(),
+            model_provider: Some(choice.provider),
+            model_id: Some(choice.model),
+            model_pinned: choice.pinned,
+            parent_run_id: None,
+            routine_id: None,
+        })
+        .await?;
+
+    // A repository-shaped payload additionally wakes the opted-in routines of this bot.
+    let mut routine_wakes: u32 = 0;
+    if payload_is_a_repository_event(payload) {
+        let routines = app.stores.routines.list(&member, &bot.id).await?;
+        for routine in routines
+            .into_iter()
+            .filter(|routine| routine.active && routine.github_enabled)
+        {
+            // A routine with an open run is not fired again; the wake is skipped, not queued.
+            if app
+                .stores
+                .runs
+                .find_open_routine(&member, &routine.id)
+                .await?
+                .is_some()
+            {
+                continue;
+            }
+            app.stores
+                .runs
+                .create(NewRun {
+                    id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+                    space_id: space_id.clone(),
+                    bot_id: bot.id.clone(),
+                    thread_id: routine.thread_id.clone(),
+                    user_id: routine.user_id.clone(),
+                    trigger: boma_domain::RunTrigger::Routine,
+                    client_nonce: None,
+                    source_message_id: Some(message.message.id.clone()),
+                    created_at: app.services.clock.now(),
+                    model_provider: None,
+                    model_id: None,
+                    model_pinned: false,
+                    parent_run_id: None,
+                    routine_id: Some(routine.id.clone()),
+                })
+                .await?;
+            routine_wakes += 1;
+        }
+    }
+
+    Ok(WebhookOutcome {
+        run_id: run.id.as_str().to_owned(),
+        routine_wakes,
+    })
+}
+
+/// Whether the payload carries a `repository` object: the only shape this build treats as a
+/// repository event. Push, pull_request, issues and friends all fit.
+fn payload_is_a_repository_event(payload: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|value| value.get("repository").cloned())
+        .is_some_and(|repository| repository.is_object())
+}
+
 /// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors
@@ -2480,6 +2668,7 @@ pub async fn routines_create(
     timezone: &str,
     active: bool,
     notify: bool,
+    github_enabled: bool,
 ) -> Result<RoutineCreateOutcome, AppError> {
     boma_domain::validate_routine_name(name)?;
     boma_domain::validate_routine_prompt(prompt)?;
@@ -2525,6 +2714,7 @@ pub async fn routines_create(
                 timezone: timezone.to_owned(),
                 active,
                 notify,
+                github_enabled,
                 next_run_at,
                 created_at: now,
             },

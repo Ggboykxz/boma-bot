@@ -39,12 +39,13 @@ impl RoutineStore for PostgresRoutineStore {
             Box::pin(async move {
                 let row = sqlx::query_as::<_, RoutineRow>(
                     "INSERT INTO routines (id, space_id, bot_id, thread_id, user_id, name,
-                                            prompt, crons, timezone, active, notify, next_run_at,
+                                            prompt, crons, timezone, active, notify, github_enabled,
+                                            next_run_at,
                                             account_failures, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                             $12::timestamptz, 0, $13::timestamptz, $13::timestamptz)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                             $13::timestamptz, 0, $14::timestamptz, $14::timestamptz)
                      RETURNING id, space_id, bot_id, thread_id, user_id, name, prompt, crons,
-                               timezone, active, notify,
+                               timezone, active, notify, github_enabled,
                                boma.rfc3339(last_run_at) AS last_run_at,
                                boma.rfc3339(next_run_at) AS next_run_at,
                                account_failures,
@@ -62,6 +63,7 @@ impl RoutineStore for PostgresRoutineStore {
                 .bind(routine.timezone.as_str())
                 .bind(routine.active)
                 .bind(routine.notify)
+                .bind(routine.github_enabled)
                 .bind(routine.next_run_at.as_deref())
                 .bind(routine.created_at.as_str())
                 .fetch_one(&mut *conn)
@@ -103,7 +105,7 @@ impl RoutineStore for PostgresRoutineStore {
             Box::pin(async move {
                 let row = sqlx::query_as::<_, RoutineRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, name, prompt, crons, timezone,
-                            active, notify,
+                            active, notify, github_enabled,
                             boma.rfc3339(last_run_at) AS last_run_at,
                             boma.rfc3339(next_run_at) AS next_run_at,
                             account_failures,
@@ -135,7 +137,7 @@ impl RoutineStore for PostgresRoutineStore {
             Box::pin(async move {
                 let rows = sqlx::query_as::<_, RoutineRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, name, prompt, crons, timezone,
-                            active, notify,
+                            active, notify, github_enabled,
                             boma.rfc3339(last_run_at) AS last_run_at,
                             boma.rfc3339(next_run_at) AS next_run_at,
                             account_failures,
@@ -165,7 +167,7 @@ impl RoutineStore for PostgresRoutineStore {
                 Box::pin(async move {
                     let rows = sqlx::query_as::<_, RoutineRow>(
                     "SELECT id, space_id, bot_id, thread_id, user_id, name, prompt, crons, timezone,
-                            active, notify,
+                            active, notify, github_enabled,
                             boma.rfc3339(last_run_at) AS last_run_at,
                             boma.rfc3339(next_run_at) AS next_run_at,
                             account_failures,
@@ -213,7 +215,7 @@ impl RoutineStore for PostgresRoutineStore {
                          updated_at = now()
                      WHERE id = $1 AND space_id = $4
                      RETURNING id, space_id, bot_id, thread_id, user_id, name, prompt, crons,
-                               timezone, active, notify,
+                               timezone, active, notify, github_enabled,
                                boma.rfc3339(last_run_at) AS last_run_at,
                                boma.rfc3339(next_run_at) AS next_run_at,
                                account_failures,
@@ -269,7 +271,7 @@ impl RoutineStore for PostgresRoutineStore {
                          updated_at = now()
                      WHERE id = $1 AND space_id = $2
                      RETURNING id, space_id, bot_id, thread_id, user_id, name, prompt, crons,
-                               timezone, active, notify,
+                               timezone, active, notify, github_enabled,
                                boma.rfc3339(last_run_at) AS last_run_at,
                                boma.rfc3339(next_run_at) AS next_run_at,
                                account_failures,

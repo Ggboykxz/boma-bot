@@ -3242,6 +3242,7 @@ impl RoutineStore for MemoryRoutineStore {
             timezone: routine.timezone,
             active: routine.active,
             notify: routine.notify,
+            github_enabled: routine.github_enabled,
             last_run_at: None,
             next_run_at: routine.next_run_at,
             account_failures: 0,

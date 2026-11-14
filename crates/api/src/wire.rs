@@ -507,6 +507,8 @@ pub struct RoutineView {
     pub active: bool,
     /// Whether the owner is told about each run.
     pub notify: bool,
+    /// Whether repository events from the bot's webhook wake this routine.
+    pub github_enabled: bool,
     /// When it last fired.
     pub last_run_at: Option<String>,
     /// When it wakes next.
@@ -531,6 +533,7 @@ impl From<&boma_app::ports::Routine> for RoutineView {
             timezone: routine.timezone.clone(),
             active: routine.active,
             notify: routine.notify,
+            github_enabled: routine.github_enabled,
             last_run_at: routine.last_run_at.clone(),
             next_run_at: routine.next_run_at.clone(),
             account_failures: routine.account_failures,

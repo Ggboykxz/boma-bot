@@ -103,6 +103,29 @@ async fn post(
         .expect("the router answers")
 }
 
+/// A raw cookieless POST with an explicit Authorization header: the bot-webhook shape.
+async fn raw_post(
+    app_state: AppState,
+    path: &str,
+    bearer: Option<&str>,
+    body: serde_json::Value,
+) -> Response {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json");
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", format!("Bearer {bearer}"));
+    }
+    let request = builder
+        .body(Body::from(body.to_string()))
+        .expect("the request builds");
+    router(app_state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
 async fn json(response: Response) -> serde_json::Value {
     let bytes = response
         .into_body()
@@ -2802,4 +2825,140 @@ async fn req_038_a_member_creates_moves_and_comments_on_the_board() {
     assert_eq!(tickets[0]["state"], serde_json::json!("in_progress"));
     assert_eq!(tickets[1]["key"], serde_json::json!("BOT-2"));
     assert_eq!(tickets[1]["assigneeBotId"], serde_json::json!(world.bot_id));
+}
+
+#[tokio::test]
+async fn req_050_an_unknown_bot_and_a_wrong_secret_get_the_same_401() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Unknown bot: the golden's shape.
+    let response = raw_post(
+        app_state.clone(),
+        "/api/v1/bots/bot_unknown/webhook",
+        Some("invalid"),
+        serde_json::json!({ "event": "push" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let unknown = json(response).await;
+
+    // A real bot with no WEBHOOK secret yet: the same refusal.
+    let response = raw_post(
+        app_state.clone(),
+        &format!("/api/v1/bots/{}/webhook", world.bot_id),
+        Some("hook-secret-1"),
+        serde_json::json!({ "event": "push" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let no_secret = json(response).await;
+
+    // A real bot with a secret set, the wrong bearer: indistinguishable.
+    let response = post(
+        app_state.clone(),
+        "/rpc/botSecrets/set",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id, "name": "WEBHOOK", "value": "hook-secret-1" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = raw_post(
+        app_state,
+        &format!("/api/v1/bots/{}/webhook", world.bot_id),
+        Some("definitely-not-the-secret"),
+        serde_json::json!({ "event": "push" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let wrong_secret = json(response).await;
+
+    assert_eq!(unknown, serde_json::json!({ "error": "Unauthorized." }));
+    assert_eq!(unknown, no_secret);
+    assert_eq!(unknown, wrong_secret);
+}
+
+#[tokio::test]
+async fn req_050_a_valid_bearer_starts_a_run_and_wakes_github_routines() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Set the webhook secret.
+    let response = post(
+        app_state.clone(),
+        "/rpc/botSecrets/set",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id, "name": "WEBHOOK", "value": "hook-secret-1" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // One routine opts into repository events, one does not.
+    for (name, github_enabled) in [("repo watcher", true), ("quiet routine", false)] {
+        let response = post(
+            app_state.clone(),
+            "/rpc/routines/create",
+            Some(&world.caller),
+            serde_json::json!({
+                "botId": world.bot_id,
+                "name": name,
+                "prompt": "Watch the repository and summarise what changed.",
+                "crons": ["@once"],
+                "timezone": "UTC",
+                "active": true,
+                "githubEnabled": github_enabled,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // A repository-shaped payload wakes the bot and the opted-in routine only.
+    let response = raw_post(
+        app_state.clone(),
+        &format!("/api/v1/bots/{}/webhook", world.bot_id),
+        Some("hook-secret-1"),
+        serde_json::json!({
+            "ref": "refs/heads/main",
+            "repository": { "full_name": "acme/widgets", "name": "widgets" },
+            "pusher": { "name": "dev" },
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["ok"], serde_json::json!(true));
+    assert_eq!(body["routineWakes"], serde_json::json!(1));
+    let run_id = body["runId"].as_str().expect("a run id").to_owned();
+    assert_ne!(run_id.len(), 0);
+
+    // A non-repository payload wakes only the bot.
+    let response = raw_post(
+        app_state.clone(),
+        &format!("/api/v1/bots/{}/webhook", world.bot_id),
+        Some("hook-secret-1"),
+        serde_json::json!({ "event": "ping" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["routineWakes"], serde_json::json!(0));
+
+    // The githubEnabled flag survived a round trip through the API.
+    let response = post(
+        app_state,
+        "/rpc/routines/list",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id }),
+    )
+    .await;
+    let routines = json(response).await["routines"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    let flags: Vec<bool> = routines
+        .iter()
+        .map(|routine| routine["githubEnabled"].as_bool().expect("a bool"))
+        .collect();
+    assert_eq!(flags.iter().filter(|&&flag| flag).count(), 1);
 }
