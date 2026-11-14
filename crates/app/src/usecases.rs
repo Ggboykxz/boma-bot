@@ -557,6 +557,14 @@ pub async fn mcp_server_add(
     }
 }
 
+/// Decodes standard base64 with the one engine the deployment uses.
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, ()> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|_| ())
+}
+
 /// The redirect URI the member's browser lands on after the server approves the sign-in.
 ///
 /// The member copies this URL out of the browser's address bar into `mcp.oauth.complete`: this
@@ -1343,6 +1351,206 @@ async fn record_install(
         mcp_server_count,
         skipped,
     })
+}
+
+/// The input to one artifact creation (REQ-036). The same shape serves the RPC and the bot tool.
+pub struct ArtifactInput {
+    /// The bot that produced it, when one did.
+    pub bot_id: Option<String>,
+    /// The group thread it belongs to, when one does.
+    pub group_id: Option<String>,
+    /// The run that produced it, when one did.
+    pub run_id: Option<String>,
+    /// The member's file name.
+    pub name: String,
+    /// One line about what the file is.
+    pub description: String,
+    /// What the client declared.
+    pub declared_mime: String,
+    /// The raw bytes.
+    pub content: Vec<u8>,
+    /// The family to version; `None` roots a new family.
+    pub root_artifact_id: Option<String>,
+    /// The client's idempotency token.
+    pub client_nonce: Option<String>,
+}
+
+/// Creates (or versions) one artifact (REQ-036).
+///
+/// The bytes are sniffed before anything touches the store (defect D-03): a declared/content
+/// lie is refused here, an `application/octet-stream` declaration is corrected. A replay of the
+/// same `clientNonce` answers the stored row instead of writing a second blob.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the bytes are refused, [`AppError::NotFound`] when the
+/// family root does not exist, and an error when a store cannot answer.
+pub async fn artifact_create(
+    app: &App,
+    context: &TenantContext,
+    input: ArtifactInput,
+) -> Result<crate::ports::ArtifactSummary, AppError> {
+    boma_domain::validate_artifact_name(&input.name)?;
+    boma_domain::validate_artifact_description(&input.description)?;
+    if input.content.len() > boma_domain::ARTIFACT_MAX_BYTES {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            format!(
+                "the artifact is larger than {} bytes",
+                boma_domain::ARTIFACT_MAX_BYTES
+            ),
+        )));
+    }
+    if let Some(nonce) = &input.client_nonce
+        && (nonce.is_empty() || nonce.len() > 200)
+    {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidNonce));
+    }
+    if let Some(nonce) = input.client_nonce.as_deref() {
+        // Replay: the stored row answers instead of writing a second blob.
+        if let Some(existing) = app.stores.artifacts.find_by_nonce(context, nonce).await? {
+            return Ok(existing);
+        }
+    }
+    let mime_type = boma_domain::sniff_artifact_mime(&input.content, &input.declared_mime)?;
+    let content_write = app.services.artifact_content.put(&input.content).await?;
+    let id = app.services.ids.new_id("art");
+    let artifact = crate::ports::NewArtifact {
+        id,
+        bot_id: input.bot_id,
+        group_id: input.group_id,
+        run_id: input.run_id,
+        name: input.name.trim().to_owned(),
+        description: input.description.trim().to_owned(),
+        declared_mime: input.declared_mime.trim().to_ascii_lowercase(),
+        mime_type,
+        size: content_write.size,
+        hash: content_write.hash,
+        root_artifact_id: input.root_artifact_id,
+        client_nonce: input.client_nonce,
+        created_at: app.services.clock.now(),
+    };
+    app.stores.artifacts.put(context, artifact).await
+}
+
+/// One artifact with its bytes (REQ-036): the contract carries `contentBase64`.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the artifact does not exist (or the version does not),
+/// and an error when a store cannot answer.
+pub async fn artifact_get(
+    app: &App,
+    context: &TenantContext,
+    artifact_id: &str,
+    version: Option<i32>,
+) -> Result<(crate::ports::ArtifactSummary, Vec<u8>), AppError> {
+    let summary = app
+        .stores
+        .artifacts
+        .get(context, artifact_id, version)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let bytes = app
+        .services
+        .artifact_content
+        .read(&summary.storage_key)
+        .await?;
+    Ok((summary, bytes))
+}
+
+/// One artifact, exactly the row identified — unlike `artifact_get`, no family resolution.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the id does not name an artifact, and an error when a
+/// store cannot answer.
+pub async fn artifact_get_by_id(
+    app: &App,
+    context: &TenantContext,
+    artifact_id: &str,
+) -> Result<(crate::ports::ArtifactSummary, Vec<u8>), AppError> {
+    let summary = app
+        .stores
+        .artifacts
+        .get_exact(context, artifact_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let bytes = app
+        .services
+        .artifact_content
+        .read(&summary.storage_key)
+        .await?;
+    Ok((summary, bytes))
+}
+
+/// The versions of a family, newest first (REQ-036), the golden's order.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when no such artifact exists, and an error when a store
+/// cannot answer.
+pub async fn artifact_versions(
+    app: &App,
+    context: &TenantContext,
+    artifact_id: &str,
+) -> Result<Vec<crate::ports::ArtifactSummary>, AppError> {
+    let versions = app
+        .stores
+        .artifacts
+        .list_versions(context, artifact_id)
+        .await?;
+    if versions.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    Ok(versions)
+}
+
+/// The latest version of every family in the space (REQ-036), optional bot/group filter.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn artifact_list_space(
+    app: &App,
+    context: &TenantContext,
+    bot_id: Option<&str>,
+    group_id: Option<&str>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::ports::ArtifactSummary>, AppError> {
+    let limit = limit.unwrap_or(50).clamp(1, 100);
+    app.stores
+        .artifacts
+        .list_space(context, bot_id, group_id, limit)
+        .await
+}
+
+/// Removes the whole version family (REQ-036), reclaiming unreferenced blobs.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn artifact_remove(
+    app: &App,
+    context: &TenantContext,
+    artifact_id: &str,
+) -> Result<u64, AppError> {
+    let keys = app
+        .stores
+        .artifacts
+        .family_keys(context, artifact_id)
+        .await?;
+    let removed = app
+        .stores
+        .artifacts
+        .remove_family(context, artifact_id)
+        .await?;
+    for key in keys {
+        let refs = app.stores.artifacts.storage_key_refs(context, &key).await?;
+        if refs == 0 {
+            let _ = app.services.artifact_content.remove(&key).await;
+        }
+    }
+    Ok(removed)
 }
 
 /// The names and descriptions of every skill this context may load (REQ-035).
@@ -3961,7 +4169,7 @@ async fn apply_pending_tool_calls(
             .await?;
             continue;
         }
-        let (body, created) = execute_approved_tool(app, context, &call).await;
+        let (body, created) = execute_approved_tool(app, context, bot, &call).await;
         child_created |= created;
         let ok = body
             .get("ok")
@@ -4141,6 +4349,81 @@ async fn approved_skill_teach(
     (body, false)
 }
 
+/// Creates an artifact from an approved tool call (REQ-036).
+///
+/// The bytes are sniffed before anything is stored (defect D-03): the member who approved the
+/// card sees the file the bytes actually are, or a refusal naming why.
+async fn approved_artifact_create(
+    app: &App,
+    context: &TenantContext,
+    bot: &Bot,
+    call: &crate::ports::PendingToolCall,
+) -> (serde_json::Value, bool) {
+    let string = |key: &str| -> Option<String> {
+        call.arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let Some(name) = string("name") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `name` argument" } }),
+            false,
+        );
+    };
+    let Some(mime_type) = string("mimeType") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `mimeType` argument" } }),
+            false,
+        );
+    };
+    let Some(encoded) = string("contentBase64") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `contentBase64` argument" } }),
+            false,
+        );
+    };
+    let Ok(bytes) = decode_base64(&encoded) else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the `contentBase64` does not decode" } }),
+            false,
+        );
+    };
+    let body = match artifact_create(
+        app,
+        context,
+        ArtifactInput {
+            bot_id: Some(bot.id.to_string()),
+            group_id: None,
+            run_id: Some(call.run_id.to_string()),
+            name,
+            description: string("description").unwrap_or_default(),
+            declared_mime: mime_type,
+            content: bytes,
+            root_artifact_id: string("rootArtifactId"),
+            client_nonce: Some(format!("artifact-tool:{}", call.call_id)),
+        },
+    )
+    .await
+    {
+        Ok(summary) => serde_json::json!({
+            "ok": true,
+            "body": {
+                "id": summary.id,
+                "version": summary.version,
+                "rootArtifactId": summary.root_artifact_id,
+                "size": summary.size,
+                "hash": summary.hash,
+            },
+        }),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "body": { "error": format!("the artifact was not created: {error}") },
+        }),
+    };
+    (body, false)
+}
+
 /// Runs one approved tool call and reports what happened in a body shaped `{ ok, body }`,
 /// plus whether the call created an asynchronous child run the parent must wait for.
 ///
@@ -4149,6 +4432,7 @@ async fn approved_skill_teach(
 async fn execute_approved_tool(
     app: &App,
     context: &TenantContext,
+    bot: &Bot,
     call: &crate::ports::PendingToolCall,
 ) -> (serde_json::Value, bool) {
     let string = |key: &str| -> Option<String> {
@@ -4190,6 +4474,7 @@ async fn execute_approved_tool(
             (body, false)
         }
         "skill.teach" => approved_skill_teach(app, context, call).await,
+        "artifact.create" => approved_artifact_create(app, context, bot, call).await,
         key if key.starts_with("mcp.") => approved_mcp_call(app, context, call).await,
         "delegate.helper" => {
             let Some(prompt) = string("prompt") else {
@@ -4418,6 +4703,13 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
         ToolSpec {
             key: "skill.teach".to_owned(),
             description: "Teach this space a new skill from instructions.".to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Write,
+        },
+        ToolSpec {
+            key: "artifact.create".to_owned(),
+            description: "Create a file artifact for this space (a report, a chart, a export)."
+                .to_owned(),
             kind: boma_domain::ToolKind::Builtin,
             effect: boma_domain::ToolEffect::Write,
         },

@@ -90,6 +90,11 @@ pub struct Config {
     /// Empty by default: stdio MCP servers are refused everywhere in this build until the
     /// operator names their programs here.
     pub stdio_allowed: Vec<String>,
+    /// Where artifact bytes live (`BOMA_ARTIFACT_DIR`).
+    ///
+    /// `None` means a per-process ephemeral directory with a warning; set it in every
+    /// deployment that expects artifacts to survive a restart.
+    pub artifact_dir: Option<String>,
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -231,6 +236,7 @@ impl Config {
             auth_capabilities,
             provider,
             stdio_allowed: parse_string_list(&env, "MCP_STDIO_ALLOWED_COMMANDS"),
+            artifact_dir: optional(&env, "BOMA_ARTIFACT_DIR"),
         })
     }
 }

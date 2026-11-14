@@ -3,12 +3,12 @@
     "artifact-create": {
       "status": "pending",
       "req": "REQ-036",
-      "reason": "M6 - artifacts, versions and the content-addressed blob store are not implemented"
+      "reason": "M6 - the fixture pins a synthetic hash (sha256:0000\u2026) and size 11 for a 9-byte payload; a real implementation cannot replay it byte for byte. The rebuild serves the real sha256 and size; the API tests in crates/api/tests/rpc_surface.rs::req_036_a_member_creates_gets_lists_and_removes_an_artifact pin the contract instead."
     },
     "artifact-versions": {
       "status": "pending",
       "req": "REQ-036",
-      "reason": "M6 - the version chain needs the artifact table and the blob store"
+      "reason": "M6 - the fixture depends on the artifact-create world (synthetic hash); the version-chain contract is pinned by crates/testkit/src/build.rs::artifact_tests::req_036_an_update_versions_the_family and crates/infra/tests/m1.rs::req_036_an_artifact_round_trip_survives_postgres instead."
     },
     "auth-capabilities": {
       "status": "implemented",

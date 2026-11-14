@@ -4,6 +4,7 @@
 //! [`crate::tenant`], so the database always knows which tenant the query acts in (REQ-043).
 
 pub mod accounts;
+pub mod artifacts;
 pub mod audit;
 pub mod bots;
 pub mod cards;

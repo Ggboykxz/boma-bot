@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 
 pub mod account;
+pub mod artifact;
 pub mod audit;
 pub mod bot;
 pub mod card;
@@ -30,6 +31,10 @@ pub mod tenancy;
 pub mod thread;
 
 pub use account::{Email, Session, Space, SpaceRole, User, validate_password};
+pub use artifact::{
+    ARTIFACT_MAX_BYTES, detect_mime, sniff_artifact_mime, validate_artifact_description,
+    validate_artifact_name,
+};
 pub use audit::AuditKind;
 pub use bot::Bot;
 pub use card::{

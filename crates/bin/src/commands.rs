@@ -7,9 +7,9 @@ use boma_api::{AppState, router};
 use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
-    PostgresAuditStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
-    PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresInvitationStore,
-    PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
+    PostgresArtifactStore, PostgresAuditStore, PostgresBotStore, PostgresCardStore,
+    PostgresComputerStore, PostgresConnectorStore, PostgresEffectStore, PostgresEventStore,
+    PostgresInvitationStore, PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
     PostgresPendingToolCallStore, PostgresPluginInstallStore, PostgresPluginSubmissionStore,
     PostgresRateLimitStore, PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore,
     PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore,
@@ -45,7 +45,12 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             config.computer,
         )
     })?);
-    let app = build_app(&database, computer, config.stdio_allowed.clone())?;
+    let app = build_app(
+        &database,
+        computer,
+        config.stdio_allowed.clone(),
+        config.artifact_dir.as_deref(),
+    )?;
     let state = AppState::new(
         readiness,
         config.capabilities.clone(),
@@ -82,6 +87,7 @@ fn build_app(
     database: &Postgres,
     computer: Option<Arc<dyn ComputerRuntime>>,
     stdio_allowed: Vec<String>,
+    config_artifact_dir: Option<&str>,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -98,6 +104,17 @@ fn build_app(
     );
     let oauth_client = Arc::new(
         boma_infra::OAuthTokenClient::new().context("the OAuth client could not be built")?,
+    );
+    let artifact_root = config_artifact_dir.map_or_else(
+        || {
+            tracing::warn!("BOMA_ARTIFACT_DIR is not set; artifact bytes live in a per-process ephemeral directory");
+            std::env::temp_dir().join(format!("boma-artifacts-{}", std::process::id()))
+        },
+        std::path::PathBuf::from,
+    );
+    let artifact_content = Arc::new(
+        boma_infra::FileArtifactContentStore::new(&artifact_root)
+            .context("the artifact directory could not be prepared")?,
     );
     Ok(App::new(
         Stores::new(
@@ -123,6 +140,7 @@ fn build_app(
             Arc::new(PostgresAuditStore::new(pool.clone())),
             Arc::new(PostgresConnectorStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresPluginInstallStore::new(pool.clone())),
+            Arc::new(PostgresArtifactStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -148,6 +166,7 @@ fn build_app(
                 mcp_transport,
                 plugin_fetcher,
                 oauth_client,
+                artifact_content,
             )
             .with_connectors(connector_runner)
             .with_stdio_commands(stdio_allowed);
@@ -181,6 +200,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         &database,
         computer,
         config.stdio_allowed.clone(),
+        config.artifact_dir.as_deref(),
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

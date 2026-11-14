@@ -90,6 +90,7 @@ fn app_with_scripts(
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -114,6 +115,13 @@ fn app_with_scripts(
             mcp_transport,
             Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
             oauth_client,
+            Arc::new(
+                boma_infra::FileArtifactContentStore::new(concat!(
+                    "/tmp/boma-artifact-test-m1-",
+                    env!("CARGO_PKG_NAME")
+                ))
+                .expect("the artifact root"),
+            ),
         ),
     )
 }
@@ -2232,4 +2240,150 @@ async fn req_033_the_oauth_round_trip_survives_postgres() {
         .await
         .expect("rows removed");
     common::cleanup(&pool, "oauth").await;
+}
+
+/// REQ-036: an artifact round trip through Postgres and the content-addressed blob store,
+/// including versioning, replay and family reclamation.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the round trip is a long happy path; it reads top to bottom
+async fn req_036_an_artifact_round_trip_survives_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "artf").await;
+    let context = fixture.context.clone();
+    let content_root = format!("/tmp/boma-artifact-pg-{}", std::process::id());
+    let _ = std::fs::remove_dir_all(&content_root);
+
+    let app = {
+        let pool = pool.clone();
+        let content_root = content_root.clone();
+        let publisher = Arc::new(BroadcastPublisher::default());
+        let mcp_transport = Arc::new(boma_testkit::ScriptedMcpTransport::new());
+        let oauth_client = Arc::new(boma_testkit::ScriptedOAuthClient::new());
+        App::new(
+            boma_app::Stores::new(
+                Arc::new(PostgresAccountStore::new(pool.clone())),
+                Arc::new(PostgresUserStore::new(pool.clone())),
+                Arc::new(PostgresSessionStore::new(pool.clone())),
+                Arc::new(PostgresSpaceStore::new(pool.clone())),
+                Arc::new(PostgresBotStore::new(pool.clone())),
+                Arc::new(PostgresThreadStore::new(pool.clone())),
+                Arc::new(PostgresMessageStore::new(pool.clone())),
+                Arc::new(PostgresRunStore::new(pool.clone())),
+                Arc::new(PostgresEventStore::new(pool.clone())),
+                Arc::new(PostgresInvitationStore::new(pool.clone())),
+                Arc::new(PostgresCardStore::new(pool.clone())),
+                Arc::new(PostgresPendingToolCallStore::new(pool.clone())),
+                Arc::new(PostgresEffectStore::new(pool.clone())),
+                Arc::new(PostgresToolStore::new(pool.clone())),
+                Arc::new(PostgresRateLimitStore::new(pool.clone())),
+                Arc::new(PostgresSecretStore::new(
+                    pool.clone(),
+                    boma_infra::SecretBox::ephemeral(),
+                )),
+                Arc::new(boma_infra::PostgresPluginSubmissionStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresSkillStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresMcpServerStore::new(
+                    pool.clone(),
+                    boma_infra::SecretBox::ephemeral(),
+                )),
+                Arc::new(boma_infra::PostgresAuditStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresConnectorStore::new(
+                    pool.clone(),
+                    boma_infra::SecretBox::ephemeral(),
+                )),
+                Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
+                Arc::new(PostgresReactionStore::new(pool.clone())),
+                Arc::new(PostgresReadStateStore::new(pool.clone())),
+                Arc::new(PostgresRosterStore::new(pool.clone())),
+                Arc::new(PostgresMemoryStore::new(pool.clone())),
+                Arc::new(PostgresRoutineStore::new(pool.clone())),
+                Arc::new(PostgresComputerStore::new(pool.clone())),
+                Arc::new(PostgresScreenCapabilityStore::new(pool)),
+            ),
+            boma_app::Services::new(
+                publisher,
+                Arc::new(Argon2idHasher::default()),
+                Arc::new(TokenGenerator),
+                Arc::new(IdGenerator),
+                Arc::new(SystemClock),
+                boma_domain::model::DeploymentModels {
+                    reachable: vec!["openai/gpt-5".to_owned()],
+                    default: "openai/gpt-5".to_owned(),
+                },
+                mcp_transport,
+                Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
+                oauth_client,
+                Arc::new(
+                    boma_infra::FileArtifactContentStore::new(&content_root)
+                        .expect("the artifact root"),
+                ),
+            ),
+        )
+    };
+
+    let first = boma_app::usecases::artifact_create(
+        &app,
+        &context,
+        boma_app::usecases::ArtifactInput {
+            bot_id: None,
+            group_id: None,
+            run_id: None,
+            name: "pg.bin".to_owned(),
+            description: String::new(),
+            declared_mime: "application/octet-stream".to_owned(),
+            content: b"payload-one".to_vec(),
+            root_artifact_id: None,
+            client_nonce: None,
+        },
+    )
+    .await
+    .expect("v1 lands");
+    let _second = boma_app::usecases::artifact_create(
+        &app,
+        &context,
+        boma_app::usecases::ArtifactInput {
+            bot_id: None,
+            group_id: None,
+            run_id: None,
+            name: "pg.bin".to_owned(),
+            description: String::new(),
+            declared_mime: "application/octet-stream".to_owned(),
+            content: b"payload-two".to_vec(),
+            root_artifact_id: Some(first.id.clone()),
+            client_nonce: None,
+        },
+    )
+    .await
+    .expect("v2 lands");
+
+    let versions = boma_app::usecases::artifact_versions(&app, &context, &first.id)
+        .await
+        .expect("the versions answer");
+    assert_eq!(versions.len(), 2);
+
+    // The blob exists on disk under the content-addressed path.
+    let blob_dirs = std::fs::read_dir(&content_root)
+        .expect("the root exists")
+        .count();
+    assert!(
+        blob_dirs >= 1,
+        "the content-addressed blob tree is populated"
+    );
+
+    let removed = boma_app::usecases::artifact_remove(&app, &context, &first.id)
+        .await
+        .expect("the family removes");
+    assert_eq!(removed, 2);
+
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM artifacts WHERE space_id = $1")
+        .bind(fixture.space_id.as_str())
+        .fetch_one(&pool)
+        .await
+        .expect("the count answers");
+    assert_eq!(remaining, 0);
+
+    let _ = std::fs::remove_dir_all(&content_root);
+    common::cleanup(&pool, "artf").await;
 }

@@ -520,6 +520,10 @@ pub async fn computer_app(
         Arc::new(boma_testkit::ScriptedMcpTransport::new()),
         Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
         Arc::new(boma_testkit::ScriptedOAuthClient::new()),
+        Arc::new(
+            boma_infra::FileArtifactContentStore::new("/tmp/boma-artifact-test-common")
+                .expect("the artifact root"),
+        ),
     )
     .with_computers(runtime);
     let app = boma_app::App::new(
@@ -555,6 +559,7 @@ pub async fn computer_app(
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReactionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReadStateStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresRosterStore::new(pool.clone())),

@@ -281,6 +281,8 @@ pub struct TestAppBuilder {
     plugin_fetcher: Option<Arc<dyn boma_app::ports::PluginFetcher>>,
     /// The OAuth client to use instead of a fresh scripted one.
     oauth_client: Option<Arc<dyn boma_app::ports::OAuthClient>>,
+    /// The content store to use instead of the shared in-RAM one.
+    artifact_content: Option<Arc<dyn boma_app::ports::ArtifactContentStore>>,
 }
 
 impl Default for TestAppBuilder {
@@ -297,6 +299,7 @@ impl Default for TestAppBuilder {
             connector_runner: None,
             plugin_fetcher: None,
             oauth_client: None,
+            artifact_content: None,
         }
     }
 }
@@ -367,6 +370,16 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with this content store instead of the shared in-RAM one.
+    #[must_use]
+    pub fn artifact_content(
+        mut self,
+        content: Arc<dyn boma_app::ports::ArtifactContentStore>,
+    ) -> Self {
+        self.artifact_content = Some(content);
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -417,6 +430,7 @@ impl TestAppBuilder {
             Arc::new(database.audit()),
             Arc::new(database.connectors()),
             Arc::new(database.plugin_installs()),
+            Arc::new(database.artifacts()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -447,6 +461,9 @@ impl TestAppBuilder {
             self.oauth_client
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::ScriptedOAuthClient::new())),
+            self.artifact_content
+                .clone()
+                .unwrap_or_else(|| Arc::new(database.artifact_content())),
         )
         .with_connectors(
             self.connector_runner
@@ -5000,5 +5017,366 @@ mod oauth_tests {
             .find(|server| server.id == server_id)
             .expect("the server is listed");
         assert_eq!(server.auth_state, "error");
+    }
+}
+
+#[cfg(test)]
+mod artifact_tests {
+    // REQ-036 — artifacts: versions, replay, blob reclamation, the approval-gated bot tool.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+    use crate::ScriptedProvider;
+    use boma_app::worker::Worker;
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(bytes);
+        let mut hex = String::with_capacity(64);
+        for byte in digest {
+            use std::fmt::Write as _;
+            write!(&mut hex, "{byte:02x}").expect("a write to a String cannot fail");
+        }
+        format!("sha256:{hex}")
+    }
+
+    async fn seeded() -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_app::usecases::BotCreated,
+    ) {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        (test, context, created)
+    }
+
+    fn png() -> Vec<u8> {
+        b"\x89PNG\r\n\x1a\nfake-png-body".to_vec()
+    }
+
+    #[tokio::test]
+    async fn req_036_a_create_is_stored_under_its_sniffed_type() {
+        let (test, context, _created) = seeded().await;
+        let bytes = png();
+        let expected_hash = sha256_hex(&bytes);
+        let _ = expected_hash;
+
+        let created = boma_app::usecases::artifact_create(
+            test.app(),
+            &context,
+            boma_app::usecases::ArtifactInput {
+                bot_id: None,
+                group_id: None,
+                run_id: None,
+                name: "chart.png".to_owned(),
+                description: String::new(),
+                declared_mime: "image/png".to_owned(),
+                content: bytes.clone(),
+                root_artifact_id: None,
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("the artifact is stored");
+
+        assert_eq!(created.version, 1);
+        assert_eq!(created.root_artifact_id, created.id);
+        assert_eq!(created.mime_type, "image/png");
+        assert_eq!(created.declared_mime, "image/png");
+        assert_eq!(created.size, bytes.len() as u64);
+        assert_eq!(created.hash, expected_hash);
+
+        let (fetched, stored) =
+            boma_app::usecases::artifact_get(test.app(), &context, &created.id, None)
+                .await
+                .expect("the artifact reads back");
+        assert_eq!(fetched.hash, expected_hash);
+        assert_eq!(stored, bytes);
+    }
+
+    #[tokio::test]
+    async fn req_036_an_update_versions_the_family() {
+        let (test, context, _created) = seeded().await;
+        let first = boma_app::usecases::artifact_create(
+            test.app(),
+            &context,
+            boma_app::usecases::ArtifactInput {
+                bot_id: None,
+                group_id: None,
+                run_id: None,
+                name: "report.md".to_owned(),
+                description: String::new(),
+                declared_mime: "text/markdown".to_owned(),
+                content: b"one".to_vec(),
+                root_artifact_id: None,
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("v1 lands");
+        let second = boma_app::usecases::artifact_create(
+            test.app(),
+            &context,
+            boma_app::usecases::ArtifactInput {
+                bot_id: None,
+                group_id: None,
+                run_id: None,
+                name: "report.md".to_owned(),
+                description: String::new(),
+                declared_mime: "text/markdown".to_owned(),
+                content: b"two".to_vec(),
+                root_artifact_id: Some(first.id.clone()),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("v2 lands");
+        assert_eq!(second.version, 2);
+        assert_eq!(second.root_artifact_id, first.id);
+
+        let third = boma_app::usecases::artifact_create(
+            test.app(),
+            &context,
+            boma_app::usecases::ArtifactInput {
+                bot_id: None,
+                group_id: None,
+                run_id: None,
+                name: "report.md".to_owned(),
+                description: String::new(),
+                declared_mime: "text/markdown".to_owned(),
+                content: b"three".to_vec(),
+                root_artifact_id: Some(first.id.clone()),
+                client_nonce: None,
+            },
+        )
+        .await
+        .expect("v3 lands");
+        assert_eq!(third.version, 3);
+
+        let versions = boma_app::usecases::artifact_versions(test.app(), &context, &first.id)
+            .await
+            .expect("the versions answer");
+        let numbers: Vec<i32> = versions.iter().map(|summary| summary.version).collect();
+        assert_eq!(numbers, vec![3, 2, 1]);
+        let roots: Vec<&str> = versions
+            .iter()
+            .map(|summary| summary.root_artifact_id.as_str())
+            .collect();
+        assert_eq!(roots, vec![first.id.as_str(); 3]);
+
+        // The default read is the latest version.
+        let (latest, bytes) =
+            boma_app::usecases::artifact_get(test.app(), &context, &first.id, None)
+                .await
+                .expect("the latest reads back");
+        assert_eq!(latest.version, 3);
+        assert_eq!(bytes, b"three");
+    }
+
+    #[tokio::test]
+    async fn req_036_a_client_nonce_replay_answers_the_same_row() {
+        let (test, context, _created) = seeded().await;
+        let input = |content: &[u8]| boma_app::usecases::ArtifactInput {
+            bot_id: None,
+            group_id: None,
+            run_id: None,
+            name: "notes.md".to_owned(),
+            description: String::new(),
+            declared_mime: "text/markdown".to_owned(),
+            content: content.to_vec(),
+            root_artifact_id: None,
+            client_nonce: Some("nonce-artifact-0001".to_owned()),
+        };
+        let first = boma_app::usecases::artifact_create(test.app(), &context, input(b"one"))
+            .await
+            .expect("the first write lands");
+        let second = boma_app::usecases::artifact_create(test.app(), &context, input(b"two"))
+            .await
+            .expect("the replay answers");
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.hash, sha256_hex(b"one"));
+        let rows = test.database().artifacts().recorded();
+        assert_eq!(rows.len(), 1, "one row, not two");
+    }
+
+    #[tokio::test]
+    async fn d03_an_html_upload_declared_as_png_is_refused() {
+        let (test, context, _created) = seeded().await;
+        let outcome = boma_app::usecases::artifact_create(
+            test.app(),
+            &context,
+            boma_app::usecases::ArtifactInput {
+                bot_id: None,
+                group_id: None,
+                run_id: None,
+                name: "evil.png".to_owned(),
+                description: String::new(),
+                declared_mime: "image/png".to_owned(),
+                content: b"<!DOCTYPE html><html><body>not a png</body></html>".to_vec(),
+                root_artifact_id: None,
+                client_nonce: None,
+            },
+        )
+        .await;
+        assert!(outcome.is_err(), "HTML declared as PNG is refused");
+        assert_eq!(test.database().artifacts().recorded().len(), 0);
+        assert_eq!(test.database().artifact_content().blob_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn req_036_removing_a_family_reclaims_the_unreferenced_blobs() {
+        let (test, context, _created) = seeded().await;
+        let make = |content: &[u8]| boma_app::usecases::ArtifactInput {
+            bot_id: None,
+            group_id: None,
+            run_id: None,
+            name: "data.bin".to_owned(),
+            description: String::new(),
+            declared_mime: "application/octet-stream".to_owned(),
+            content: content.to_vec(),
+            root_artifact_id: None,
+            client_nonce: None,
+        };
+        let first = boma_app::usecases::artifact_create(test.app(), &context, make(b"one"))
+            .await
+            .expect("v1 lands");
+        boma_app::usecases::artifact_create(
+            test.app(),
+            &context,
+            boma_app::usecases::ArtifactInput {
+                root_artifact_id: Some(first.id.clone()),
+                ..make(b"two")
+            },
+        )
+        .await
+        .expect("v2 lands");
+
+        let keys: Vec<String> = test
+            .database()
+            .artifacts()
+            .recorded()
+            .iter()
+            .map(|row| row.storage_key.clone())
+            .collect();
+        for key in &keys {
+            assert!(test.database().artifact_content().contains(key));
+        }
+
+        let removed = boma_app::usecases::artifact_remove(test.app(), &context, &first.id)
+            .await
+            .expect("the family removes");
+        assert_eq!(removed, 2);
+        assert_eq!(test.database().artifacts().recorded().len(), 0);
+        for key in &keys {
+            assert!(
+                !test.database().artifact_content().contains(key),
+                "the unreferenced blob {key} is reclaimed"
+            );
+        }
+
+        // Every member of the space sees the artifact gone.
+        let outcome = boma_app::usecases::artifact_get(test.app(), &context, &first.id, None).await;
+        assert!(outcome.is_err());
+    }
+
+    #[tokio::test]
+    async fn req_036_a_bot_creates_an_artifact_through_the_approval_gate() {
+        let (test, context, created) = seeded().await;
+        let bot_id = created.bot.id.clone();
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "Write the release report.".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let _ = outcome;
+
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_1".to_owned(),
+                name: "artifact.create".to_owned(),
+                arguments: serde_json::json!({
+                    "name": "release-report.md",
+                    "description": "The release report.",
+                    "mimeType": "text/markdown",
+                    "contentBase64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"# Report\n"),
+                }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["Done.".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            provider,
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let messages = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread.id, None, 20)
+            .await
+            .expect("the page answers")
+            .messages;
+        let card_id = messages
+            .into_iter()
+            .flat_map(|message| message.blocks.into_iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+
+        assert_eq!(
+            test.database().artifacts().recorded().len(),
+            0,
+            "nothing exists before the approval"
+        );
+
+        let answered = boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        assert!(answered.effect_recorded);
+
+        let artifacts = test.database().artifacts().recorded();
+        assert_eq!(
+            artifacts.len(),
+            1,
+            "the approval created exactly one artifact"
+        );
+        assert_eq!(artifacts[0].name, "release-report.md");
+        assert_eq!(artifacts[0].bot_id.as_deref(), Some(bot_id.as_str()));
+        assert_eq!(artifacts[0].mime_type, "text/markdown");
+        assert_eq!(artifacts[0].size, 9);
+        assert!(
+            test.database()
+                .artifact_content()
+                .contains(&artifacts[0].storage_key)
+        );
     }
 }

@@ -544,6 +544,10 @@ struct State {
     connector_installs: Vec<ConnectorRow>,
     /// The plugin installs a space installed (REQ-034).
     plugin_installs: Vec<PluginInstallRow>,
+    /// The artifact rows of the space (REQ-036).
+    artifacts: Vec<ArtifactRow>,
+    /// The artifact blobs, content-addressed (REQ-036).
+    artifact_content: std::collections::HashMap<String, Vec<u8>>,
     /// The pending OAuth attempts, one per server (REQ-033).
     oauth_sessions: Vec<OAuthSessionRow>,
     /// The probed tools of those servers (REQ-033).
@@ -775,6 +779,18 @@ impl MemoryDatabase {
     #[must_use]
     pub fn plugin_installs(&self) -> MemoryPluginInstallStore {
         MemoryPluginInstallStore::new(self)
+    }
+
+    /// The store of artifact rows (REQ-036).
+    #[must_use]
+    pub fn artifacts(&self) -> MemoryArtifactStore {
+        MemoryArtifactStore::new(self)
+    }
+
+    /// The store of artifact blobs (REQ-036).
+    #[must_use]
+    pub fn artifact_content(&self) -> MemoryArtifactContentStore {
+        MemoryArtifactContentStore::new(self)
     }
 
     /// The store of effects.
@@ -5533,5 +5549,455 @@ impl MemorySkillStore {
                 plugin_source: row.plugin_source.clone(),
             })
             .collect()
+    }
+}
+
+/// One artifact row (REQ-036). The fake computes versions like the PG store: root at id, then
+/// max(version)+1 per family.
+#[derive(Debug, Clone)]
+struct ArtifactRow {
+    /// The artifact's id.
+    id: String,
+    /// The space the artifact belongs to.
+    space_id: SpaceId,
+    /// The bot that produced it, when one did.
+    bot_id: Option<String>,
+    /// The group thread it belongs to, when one does.
+    group_id: Option<String>,
+    /// The person who owns the artifact.
+    user_id: UserId,
+    /// The run that produced it, when one did.
+    run_id: Option<String>,
+    /// The member's file name.
+    name: String,
+    /// One line about what the file is.
+    description: String,
+    /// What the client declared.
+    declared_mime: String,
+    /// What the bytes proved.
+    mime_type: String,
+    /// Size in bytes.
+    size: u64,
+    /// `sha256:<hex>` of the content.
+    hash: String,
+    /// The storage key (equals the hash).
+    storage_key: String,
+    /// The root of the version family.
+    root_artifact_id: String,
+    /// 1 for the first version, +1 per update.
+    version: i32,
+    /// The client's idempotency token.
+    client_nonce: Option<String>,
+    /// When it was stored.
+    created_at: String,
+}
+
+fn artifact_summary(row: &ArtifactRow) -> boma_app::ports::ArtifactSummary {
+    boma_app::ports::ArtifactSummary {
+        id: row.id.clone(),
+        bot_id: row.bot_id.clone(),
+        group_id: row.group_id.clone(),
+        user_id: row.user_id.as_str().to_owned(),
+        run_id: row.run_id.clone(),
+        name: row.name.clone(),
+        description: row.description.clone(),
+        declared_mime: row.declared_mime.clone(),
+        mime_type: row.mime_type.clone(),
+        size: row.size,
+        hash: row.hash.clone(),
+        storage_key: row.storage_key.clone(),
+        root_artifact_id: row.root_artifact_id.clone(),
+        version: row.version,
+        created_at: row.created_at.clone(),
+    }
+}
+
+/// The store of artifact rows (REQ-036).
+#[derive(Debug, Clone)]
+pub struct MemoryArtifactStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryArtifactStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The family of rows an artifact id roots.
+    #[must_use]
+    pub fn recorded(&self) -> Vec<boma_app::ports::ArtifactSummary> {
+        let state = read(&self.state);
+        state.artifacts.iter().map(artifact_summary).collect()
+    }
+}
+
+impl Default for MemoryArtifactStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ArtifactStore for MemoryArtifactStore {
+    async fn find_by_nonce(
+        &self,
+        context: &TenantContext,
+        client_nonce: &str,
+    ) -> Result<Option<boma_app::ports::ArtifactSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let user_id = match context {
+            TenantContext::Member { user_id, .. } => user_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .artifacts
+            .iter()
+            .find(|row| {
+                row.space_id == space_id
+                    && row.user_id == user_id
+                    && row.client_nonce.as_deref() == Some(client_nonce)
+            })
+            .map(artifact_summary))
+    }
+
+    async fn put(
+        &self,
+        context: &TenantContext,
+        artifact: boma_app::ports::NewArtifact,
+    ) -> Result<boma_app::ports::ArtifactSummary, AppError> {
+        let (space_id, user_id) = match context {
+            TenantContext::Member { space_id, user_id } => (space_id.clone(), user_id.clone()),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        let root = artifact
+            .root_artifact_id
+            .clone()
+            .unwrap_or_else(|| artifact.id.clone());
+        if root != artifact.id
+            && !state
+                .artifacts
+                .iter()
+                .any(|row| row.root_artifact_id == root || row.id == root)
+        {
+            return Err(AppError::NotFound);
+        }
+        let version = state
+            .artifacts
+            .iter()
+            .filter(|row| row.root_artifact_id == root)
+            .map(|row| row.version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let row = ArtifactRow {
+            id: artifact.id,
+            space_id,
+            bot_id: artifact.bot_id,
+            group_id: artifact.group_id,
+            user_id,
+            run_id: artifact.run_id,
+            name: artifact.name,
+            description: artifact.description,
+            declared_mime: artifact.declared_mime,
+            mime_type: artifact.mime_type,
+            size: artifact.size,
+            storage_key: artifact.hash.clone(),
+            hash: artifact.hash,
+            root_artifact_id: root,
+            version,
+            client_nonce: artifact.client_nonce,
+            created_at: artifact.created_at,
+        };
+        state.artifacts.push(row.clone());
+        Ok(artifact_summary(&row))
+    }
+
+    async fn get(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+        version: Option<i32>,
+    ) -> Result<Option<boma_app::ports::ArtifactSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        let family: Vec<&ArtifactRow> = state
+            .artifacts
+            .iter()
+            .filter(|row| {
+                row.space_id == space_id
+                    && (row.id == artifact_id || row.root_artifact_id == artifact_id)
+            })
+            .collect();
+        let family = if family.is_empty() {
+            let root = state
+                .artifacts
+                .iter()
+                .find(|row| row.space_id == space_id && row.id == artifact_id)
+                .map(|row| row.root_artifact_id.clone());
+            match root {
+                Some(root) => state
+                    .artifacts
+                    .iter()
+                    .filter(|row| row.space_id == space_id && row.root_artifact_id == root)
+                    .collect(),
+                None => return Ok(None),
+            }
+        } else {
+            family
+        };
+        let chosen = match version {
+            Some(version) => family.into_iter().find(|row| row.version == version),
+            None => family.into_iter().max_by_key(|row| row.version),
+        };
+        Ok(chosen.map(artifact_summary))
+    }
+
+    async fn get_exact(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<Option<boma_app::ports::ArtifactSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .artifacts
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == artifact_id)
+            .map(artifact_summary))
+    }
+
+    async fn list_versions(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<Vec<boma_app::ports::ArtifactSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let root = state
+            .artifacts
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == artifact_id)
+            .map(|row| row.root_artifact_id.clone());
+        let Some(root) = root else {
+            return Ok(Vec::new());
+        };
+        let mut family: Vec<&ArtifactRow> = state
+            .artifacts
+            .iter()
+            .filter(|row| row.space_id == space_id && row.root_artifact_id == root)
+            .collect();
+        family.sort_by_key(|row| std::cmp::Reverse(row.version));
+        Ok(family.into_iter().map(artifact_summary).collect())
+    }
+
+    async fn list_space(
+        &self,
+        context: &TenantContext,
+        bot_id: Option<&str>,
+        group_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<boma_app::ports::ArtifactSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let limit = usize::try_from(limit.clamp(1, 100)).unwrap_or(100);
+        let state = read(&self.state);
+        let mut latest: std::collections::BTreeMap<String, &ArtifactRow> =
+            std::collections::BTreeMap::new();
+        for row in state
+            .artifacts
+            .iter()
+            .filter(|row| row.space_id == space_id)
+        {
+            if let Some(bot) = bot_id
+                && row.bot_id.as_deref() != Some(bot)
+            {
+                continue;
+            }
+            if let Some(group) = group_id
+                && row.group_id.as_deref() != Some(group)
+            {
+                continue;
+            }
+            latest
+                .entry(row.root_artifact_id.clone())
+                .and_modify(|existing| {
+                    if row.version > existing.version {
+                        *existing = row;
+                    }
+                })
+                .or_insert(row);
+        }
+        let mut rows: Vec<&ArtifactRow> = latest.into_values().collect();
+        rows.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        Ok(rows.into_iter().take(limit).map(artifact_summary).collect())
+    }
+
+    async fn family_keys(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<Vec<String>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let root = state
+            .artifacts
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == artifact_id)
+            .map(|row| row.root_artifact_id.clone());
+        let Some(root) = root else {
+            return Ok(Vec::new());
+        };
+        let mut keys: Vec<String> = state
+            .artifacts
+            .iter()
+            .filter(|row| row.space_id == space_id && row.root_artifact_id == root)
+            .map(|row| row.storage_key.clone())
+            .collect();
+        keys.sort();
+        keys.dedup();
+        Ok(keys)
+    }
+
+    async fn remove_family(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<u64, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(0),
+        };
+        let mut state = write(&self.state);
+        let root = state
+            .artifacts
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == artifact_id)
+            .map(|row| row.root_artifact_id.clone());
+        let Some(root) = root else {
+            return Ok(0);
+        };
+        let before = state.artifacts.len();
+        state
+            .artifacts
+            .retain(|row| !(row.space_id == space_id && row.root_artifact_id == root));
+        Ok(u64::try_from(before - state.artifacts.len()).unwrap_or(u64::MAX))
+    }
+
+    async fn storage_key_refs(
+        &self,
+        context: &TenantContext,
+        storage_key: &str,
+    ) -> Result<i64, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(0),
+        };
+        let state = read(&self.state);
+        Ok(i64::try_from(
+            state
+                .artifacts
+                .iter()
+                .filter(|row| row.space_id == space_id && row.storage_key == storage_key)
+                .count(),
+        )
+        .unwrap_or(i64::MAX))
+    }
+}
+
+/// The content bytes of the artifacts (REQ-036). Content-addressed, kept in RAM.
+#[derive(Debug, Clone)]
+pub struct MemoryArtifactContentStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryArtifactContentStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// Whether a key has bytes.
+    #[must_use]
+    pub fn contains(&self, key: &str) -> bool {
+        let state = read(&self.state);
+        state.artifact_content.contains_key(key)
+    }
+
+    /// The number of blobs held.
+    #[must_use]
+    pub fn blob_count(&self) -> usize {
+        let state = read(&self.state);
+        state.artifact_content.len()
+    }
+}
+
+impl Default for MemoryArtifactContentStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ArtifactContentStore for MemoryArtifactContentStore {
+    async fn put(&self, bytes: &[u8]) -> Result<boma_app::ports::ContentWrite, AppError> {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(bytes);
+        let mut hex = String::with_capacity(64);
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(&mut hex, "{byte:02x}");
+        }
+        let hash = format!("sha256:{hex}");
+        let mut state = write(&self.state);
+        state.artifact_content.insert(hash.clone(), bytes.to_vec());
+        Ok(boma_app::ports::ContentWrite {
+            hash,
+            size: bytes.len() as u64,
+        })
+    }
+
+    async fn read(&self, key: &str) -> Result<Vec<u8>, AppError> {
+        let state = read(&self.state);
+        state.artifact_content.get(key).cloned().ok_or_else(|| {
+            AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the artifact bytes are missing".to_owned(),
+            ))
+        })
+    }
+
+    async fn remove(&self, key: &str) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        state.artifact_content.remove(key);
+        Ok(())
     }
 }

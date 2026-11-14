@@ -482,6 +482,7 @@ name = "boma-testkit"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "boma-app",
  "boma-domain",
  "secrecy",

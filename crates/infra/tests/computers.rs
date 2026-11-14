@@ -44,6 +44,10 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
         Arc::new(boma_testkit::ScriptedMcpTransport::new()),
         Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
         Arc::new(boma_testkit::ScriptedOAuthClient::new()),
+        Arc::new(
+            boma_infra::FileArtifactContentStore::new("/tmp/boma-artifact-test-computers")
+                .expect("the artifact root"),
+        ),
     )
     .with_computers(runtime);
     App::new(
@@ -79,6 +83,7 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

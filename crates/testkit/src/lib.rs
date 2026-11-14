@@ -37,15 +37,15 @@ pub mod scripts;
 
 pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
-    MemoryAccountStore, MemoryAuditStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore,
-    MemoryConnectorStore, MemoryDatabase, MemoryEffectStore, MemoryEventPublisher,
-    MemoryEventStore, MemoryInvitationStore, MemoryMcpServerStore, MemoryMemoryStore,
-    MemoryMessageStore, MemoryPendingToolCallStore, MemoryPluginInstallStore,
-    MemoryPluginSubmissionStore, MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore,
-    MemoryRosterStore, MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore,
-    MemorySecretStore, MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore,
-    MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall, RecordedSkill,
-    RecordedSubmission,
+    MemoryAccountStore, MemoryArtifactContentStore, MemoryArtifactStore, MemoryAuditStore,
+    MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryConnectorStore, MemoryDatabase,
+    MemoryEffectStore, MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore,
+    MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore, MemoryPendingToolCallStore,
+    MemoryPluginInstallStore, MemoryPluginSubmissionStore, MemoryRateLimitStore,
+    MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore, MemoryRoutineStore,
+    MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore, MemorySessionStore,
+    MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryToolStore, MemoryUserStore,
+    Organization, RecordedPluginInstall, RecordedSkill, RecordedSubmission,
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedConnectorRunner,

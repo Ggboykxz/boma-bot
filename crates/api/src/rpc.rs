@@ -14,6 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use base64::Engine as _;
 use boma_app::usecases;
 use boma_domain::SpaceRole;
 use serde::Deserialize;
@@ -23,18 +24,19 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AnswerReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
-        ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
-        ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
-        ConnectionsRemoveReply, ConnectorView, InvitationReply, MarketplaceInstallReply,
-        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
-        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
-        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
-        MessagesReply, PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply,
-        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
-        RunsReply, SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply,
-        SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply, TeachSkillReply,
-        ThreadHeadReply,
+        AnswerReply, ArtifactCreateReply, ArtifactGetReply, ArtifactListSpaceReply,
+        ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply, ArtifactView, BotReply,
+        BotsListReply, CancelReply, ComputerOpenScreenReply, ComputerProviderInfo,
+        ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply,
+        ConnectionsInstallReply, ConnectionsListReply, ConnectionsRemoveReply, ConnectorView,
+        InvitationReply, MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply,
+        McpOAuthStartReply, McpServerReply, McpServerView, McpServersListReply,
+        McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply,
+        MemoryRemoveReply, MemoryWriteReply, MessagesReply, PluginInstallView, ReactReply,
+        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
+        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
+        SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply,
+        SpaceReply, TeachSkillReply, ThreadHeadReply,
     },
 };
 
@@ -64,6 +66,8 @@ pub mod namespaces {
     pub const CONNECTIONS: &str = "connections";
     /// Marketplace: submissions and installs of plugins (REQ-034).
     pub const MARKETPLACE: &str = "marketplace";
+    /// Artifacts: files with versions (REQ-036).
+    pub const ARTIFACTS: &str = "artifacts";
 }
 
 /// Every procedure this deployment serves.
@@ -125,12 +129,42 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::MARKETPLACE, "list"),
         (namespaces::MARKETPLACE, "submit"),
         (namespaces::MARKETPLACE, "install"),
+        (namespaces::ARTIFACTS, "create"),
+        (namespaces::ARTIFACTS, "get"),
+        (namespaces::ARTIFACTS, "getById"),
+        (namespaces::ARTIFACTS, "listVersions"),
+        (namespaces::ARTIFACTS, "listSpace"),
+        (namespaces::ARTIFACTS, "remove"),
     ]
 }
 
 /// Builds the RPC routes.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/rpc/{namespace}/{procedure}", post(dispatch))
+    Router::new()
+        // The only procedure with a larger body cap: artifacts carry bytes (defect D-07).
+        .route(
+            "/rpc/artifacts/create",
+            post(artifacts_create_upload).route_layer(axum::extract::DefaultBodyLimit::max(
+                boma_domain::ARTIFACT_MAX_BYTES * 2 + 1024,
+            )),
+        )
+        .route("/rpc/{namespace}/{procedure}", post(dispatch))
+}
+
+/// The artifact-creation upload, byte cap of its own (defect D-07).
+async fn artifacts_create_upload(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    rpc_inner(
+        state,
+        "artifacts".to_owned(),
+        "create".to_owned(),
+        &headers,
+        body,
+    )
+    .await
 }
 
 /// Dispatches one procedure call.
@@ -144,7 +178,19 @@ async fn dispatch(
     headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Response {
-    let auth = match state.authenticate(&headers).await {
+    rpc_inner(state, namespace, procedure, &headers, body).await
+}
+
+/// Everything after the routes: auth, procedure table, error envelope.
+#[allow(clippy::too_many_lines)] // the match is the procedure table; splitting hides the contract
+async fn rpc_inner(
+    state: AppState,
+    namespace: String,
+    procedure: String,
+    headers: &axum::http::HeaderMap,
+    body: Bytes,
+) -> Response {
+    let auth = match state.authenticate(headers).await {
         Ok(auth) => auth,
         Err(error) => return error.into_response(),
     };
@@ -306,6 +352,24 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::MARKETPLACE, "install") => marketplace_install(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ARTIFACTS, "create") => artifacts_create(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ARTIFACTS, "get") => artifacts_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ARTIFACTS, "getById") => artifacts_get_by_id(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ARTIFACTS, "listVersions") => artifacts_list_versions(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ARTIFACTS, "listSpace") => artifacts_list_space(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ARTIFACTS, "remove") => artifacts_remove(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -1925,4 +1989,227 @@ async fn mcp_oauth_complete(
     Ok(McpServerReply {
         server: mcp_view(summary),
     })
+}
+
+fn decode_base64(encoded: &str) -> Result<Vec<u8>, ()> {
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|_| ())
+}
+
+fn artifact_view(summary: boma_app::ports::ArtifactSummary) -> ArtifactView {
+    ArtifactView {
+        id: summary.id,
+        bot_id: summary.bot_id,
+        group_id: summary.group_id,
+        run_id: summary.run_id,
+        name: summary.name,
+        description: summary.description,
+        declared_mime: summary.declared_mime,
+        mime_type: summary.mime_type,
+        size: summary.size,
+        hash: summary.hash,
+        root_artifact_id: summary.root_artifact_id,
+        version: summary.version,
+        created_at: summary.created_at,
+    }
+}
+
+/// The body of `artifacts.create` (REQ-036).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactsCreateRequest {
+    /// The bot that produced the artifact, when one did.
+    #[serde(default)]
+    bot_id: Option<String>,
+    /// The group thread it belongs to, when one does.
+    #[serde(default)]
+    group_id: Option<String>,
+    /// The member's file name.
+    name: String,
+    /// One line about what the file is.
+    #[serde(default)]
+    description: String,
+    /// What the client claims the file is; the bytes get the final word (defect D-03).
+    mime_type: String,
+    /// The content, base64-encoded.
+    content_base64: String,
+    /// The family to version; omit to root a new one.
+    #[serde(default)]
+    root_artifact_id: Option<String>,
+    /// The client's idempotency token.
+    #[serde(default)]
+    client_nonce: Option<String>,
+}
+
+/// `artifacts.create` — sniff, store, record. The reply never carries the bytes (the golden).
+async fn artifacts_create(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ArtifactCreateReply, ApiError> {
+    let request: ArtifactsCreateRequest = parse(&body)?;
+    let content = decode_base64(&request.content_base64).map_err(|()| ApiError::bad_request())?;
+    let created = usecases::artifact_create(
+        state.app(),
+        &auth.actor.context,
+        usecases::ArtifactInput {
+            bot_id: request.bot_id,
+            group_id: request.group_id,
+            run_id: None,
+            name: request.name,
+            description: request.description,
+            declared_mime: request.mime_type,
+            content,
+            root_artifact_id: request.root_artifact_id,
+            client_nonce: request.client_nonce,
+        },
+    )
+    .await?;
+    Ok(ArtifactCreateReply {
+        id: created.id,
+        version: created.version,
+        root_artifact_id: created.root_artifact_id,
+        size: created.size,
+        hash: created.hash,
+    })
+}
+
+/// The body of `artifacts.getById`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactsGetByIdRequest {
+    /// The artifact; exactly this row.
+    artifact_id: String,
+}
+
+/// The body of `artifacts.get`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactsGetRequest {
+    /// The artifact; the family root works too.
+    artifact_id: String,
+    /// A specific version; `None` is the latest.
+    #[serde(default)]
+    version: Option<i32>,
+}
+
+/// `artifacts.get` — the artifact plus its bytes (contentBase64).
+async fn artifacts_get(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ArtifactGetReply, ApiError> {
+    let request: ArtifactsGetRequest = parse(&body)?;
+    let (summary, bytes) = usecases::artifact_get(
+        state.app(),
+        &auth.actor.context,
+        &request.artifact_id,
+        request.version,
+    )
+    .await?;
+    Ok(ArtifactGetReply {
+        artifact: artifact_view(summary),
+        content_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+    })
+}
+
+/// `artifacts.getById` — the artifact exactly as identified (no version pin, no family root).
+async fn artifacts_get_by_id(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ArtifactGetReply, ApiError> {
+    let request: ArtifactsGetByIdRequest = parse(&body)?;
+    let (summary, bytes) =
+        usecases::artifact_get_by_id(state.app(), &auth.actor.context, &request.artifact_id)
+            .await?;
+    Ok(ArtifactGetReply {
+        artifact: artifact_view(summary),
+        content_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+    })
+}
+
+/// The body of `artifacts.listVersions`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactsListVersionsRequest {
+    /// The artifact; any version's id works, as does the family root.
+    artifact_id: String,
+}
+
+/// `artifacts.listVersions` — the family, newest first (the golden).
+async fn artifacts_list_versions(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ArtifactVersionsReply, ApiError> {
+    let request: ArtifactsListVersionsRequest = parse(&body)?;
+    let versions =
+        usecases::artifact_versions(state.app(), &auth.actor.context, &request.artifact_id).await?;
+    Ok(ArtifactVersionsReply {
+        versions: versions
+            .into_iter()
+            .map(|summary| ArtifactVersionView {
+                id: summary.id,
+                version: summary.version,
+                root_artifact_id: summary.root_artifact_id,
+            })
+            .collect(),
+    })
+}
+
+/// The body of `artifacts.listSpace`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactsListSpaceRequest {
+    /// Filter by producer bot, when given.
+    #[serde(default)]
+    bot_id: Option<String>,
+    /// Filter by group thread, when given.
+    #[serde(default)]
+    group_id: Option<String>,
+    /// The cap on the answer; 1..=100, default 50.
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// `artifacts.listSpace` — the latest version of every family in the space.
+async fn artifacts_list_space(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ArtifactListSpaceReply, ApiError> {
+    let request: ArtifactsListSpaceRequest = parse(&body)?;
+    let artifacts = usecases::artifact_list_space(
+        state.app(),
+        &auth.actor.context,
+        request.bot_id.as_deref(),
+        request.group_id.as_deref(),
+        request.limit,
+    )
+    .await?;
+    Ok(ArtifactListSpaceReply {
+        artifacts: artifacts.into_iter().map(artifact_view).collect(),
+    })
+}
+
+/// The body of `artifacts.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ArtifactsRemoveRequest {
+    /// The artifact; any member may remove any family of the space.
+    artifact_id: String,
+}
+
+/// `artifacts.remove` — the whole family, rows and unreferenced blobs.
+async fn artifacts_remove(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ArtifactRemoveReply, ApiError> {
+    let request: ArtifactsRemoveRequest = parse(&body)?;
+    let removed =
+        usecases::artifact_remove(state.app(), &auth.actor.context, &request.artifact_id).await?;
+    Ok(ArtifactRemoveReply { removed })
 }

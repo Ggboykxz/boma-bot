@@ -10,12 +10,12 @@ use boma_domain::{Bot, Message, Run, Thread, User};
 use crate::{
     error::AppError,
     ports::{
-        AccountStore, AuditStore, BotStore, CardStore, Clock, ComputerStore, ConnectorStore,
-        EffectStore, EventPublisher, EventStore, IdGenerator, InvitationStore, McpServerStore,
-        MemoryStore, MessageStore, PasswordHasher, PendingToolCallStore, PluginInstallStore,
-        PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore, RosterStore,
-        RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore, SkillStore,
-        SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
+        AccountStore, ArtifactStore, AuditStore, BotStore, CardStore, Clock, ComputerStore,
+        ConnectorStore, EffectStore, EventPublisher, EventStore, IdGenerator, InvitationStore,
+        McpServerStore, MemoryStore, MessageStore, PasswordHasher, PendingToolCallStore,
+        PluginInstallStore, PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore,
+        RosterStore, RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore,
+        SkillStore, SpaceStore, ThreadStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -62,6 +62,8 @@ pub struct Stores {
     pub connectors: Arc<dyn ConnectorStore>,
     /// The plugin installs of the space (REQ-034).
     pub plugin_installs: Arc<dyn PluginInstallStore>,
+    /// The artifact rows of the space (REQ-036).
+    pub artifacts: Arc<dyn ArtifactStore>,
     /// Side effects a run performs, exactly once per effect key.
     pub effects: Arc<dyn EffectStore>,
     /// The per-run tool catalogue.
@@ -112,6 +114,7 @@ impl Stores {
         audit: Arc<dyn AuditStore>,
         connectors: Arc<dyn ConnectorStore>,
         plugin_installs: Arc<dyn PluginInstallStore>,
+        artifacts: Arc<dyn ArtifactStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -141,6 +144,7 @@ impl Stores {
             audit,
             connectors,
             plugin_installs,
+            artifacts,
             effects,
             tools,
             reactions,
@@ -187,6 +191,9 @@ pub struct Services {
     /// The OAuth client for MCP servers (REQ-033); a test doubles it, a deployment wires the
     /// form-encoded token-endpoint client.
     pub oauth_client: Arc<dyn crate::ports::OAuthClient>,
+    /// The out-of-band artifact bytes (REQ-036). Content-addressed; a test doubles it with a
+    /// RAM map, a deployment wires the filesystem store.
+    pub artifact_content: Arc<dyn crate::ports::ArtifactContentStore>,
 }
 
 impl Services {
@@ -203,6 +210,7 @@ impl Services {
         mcp_transport: Arc<dyn crate::ports::McpTransport>,
         plugin_fetcher: Arc<dyn crate::ports::PluginFetcher>,
         oauth_client: Arc<dyn crate::ports::OAuthClient>,
+        artifact_content: Arc<dyn crate::ports::ArtifactContentStore>,
     ) -> Self {
         Self {
             publisher,
@@ -217,6 +225,7 @@ impl Services {
             connector_runner: None,
             plugin_fetcher,
             oauth_client,
+            artifact_content,
         }
     }
 

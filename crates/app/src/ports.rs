@@ -2412,6 +2412,213 @@ pub struct McpOAuthStart {
     pub state: String,
 }
 
+/// One artifact as the API exposes it (REQ-036).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactSummary {
+    /// The artifact's id.
+    pub id: String,
+    /// The bot that produced it, when one did.
+    pub bot_id: Option<String>,
+    /// The group thread it belongs to, when one does.
+    pub group_id: Option<String>,
+    /// The person who owns the artifact.
+    pub user_id: String,
+    /// The run that produced it, when one did.
+    pub run_id: Option<String>,
+    /// The member's file name.
+    pub name: String,
+    /// One line about what the file is.
+    pub description: String,
+    /// What the client declared.
+    pub declared_mime: String,
+    /// What the bytes proved (defect D-03).
+    pub mime_type: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// `sha256:<hex>` of the content.
+    pub hash: String,
+    /// The storage key of the bytes (content-addressed; equals the hash).
+    pub storage_key: String,
+    /// The root of the version family.
+    pub root_artifact_id: String,
+    /// 1 for the first version, +1 per update, dense per family.
+    pub version: i32,
+    /// When it was stored.
+    pub created_at: String,
+}
+
+/// The write payload for one artifact version (REQ-036).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewArtifact {
+    /// The artifact's id.
+    pub id: String,
+    /// The bot that produced it, when one did.
+    pub bot_id: Option<String>,
+    /// The group thread it belongs to, when one does.
+    pub group_id: Option<String>,
+    /// The run that produced it, when one did.
+    pub run_id: Option<String>,
+    /// The member's file name.
+    pub name: String,
+    /// One line about what the file is.
+    pub description: String,
+    /// What the client declared.
+    pub declared_mime: String,
+    /// What the bytes proved.
+    pub mime_type: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// `sha256:<hex>` of the content.
+    pub hash: String,
+    /// The root of the version family; `None` roots a new family at `id`.
+    pub root_artifact_id: Option<String>,
+    /// The client's idempotency token.
+    pub client_nonce: Option<String>,
+    /// When it was stored.
+    pub created_at: String,
+}
+
+/// The bytes-and-proof part of a content write, returned by the out-of-band store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentWrite {
+    /// `sha256:<hex>` of what was written.
+    pub hash: String,
+    /// Size in bytes.
+    pub size: u64,
+}
+
+/// Artifact metadata rows (REQ-036). Bytes live out of band.
+#[async_trait]
+pub trait ArtifactStore: Send + Sync {
+    /// An existing row for the same (space, user, client_nonce), if any — replay detection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_by_nonce(
+        &self,
+        context: &TenantContext,
+        client_nonce: &str,
+    ) -> Result<Option<ArtifactSummary>, AppError>;
+
+    /// Inserts one version, computing the root and version. A `root_artifact_id` that does not
+    /// exist in this space roots a new family — guessing roots is not a read primitive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn put(
+        &self,
+        context: &TenantContext,
+        artifact: NewArtifact,
+    ) -> Result<ArtifactSummary, AppError>;
+
+    /// One artifact, the latest version unless `version` pins one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn get(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+        version: Option<i32>,
+    ) -> Result<Option<ArtifactSummary>, AppError>;
+
+    /// The row with this exact id. Unlike `get`, the family root does not resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn get_exact(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<Option<ArtifactSummary>, AppError>;
+
+    /// Every version of the family, newest first (the golden's order).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list_versions(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<Vec<ArtifactSummary>, AppError>;
+
+    /// The latest version of every family in the space, optional bot/group filter, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list_space(
+        &self,
+        context: &TenantContext,
+        bot_id: Option<&str>,
+        group_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<ArtifactSummary>, AppError>;
+
+    /// The storage keys of the whole family.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn family_keys(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<Vec<String>, AppError>;
+
+    /// Removes every row of the family. Returns how many went.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn remove_family(
+        &self,
+        context: &TenantContext,
+        artifact_id: &str,
+    ) -> Result<u64, AppError>;
+
+    /// How many rows reference a storage key (cross-family dedup).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn storage_key_refs(
+        &self,
+        context: &TenantContext,
+        storage_key: &str,
+    ) -> Result<i64, AppError>;
+}
+
+/// The out-of-band artifact bytes (REQ-036). Content-addressed, idempotent writes.
+#[async_trait]
+pub trait ArtifactContentStore: Send + Sync {
+    /// Writes bytes, hashing them. Writing the same bytes twice answers the same hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot write.
+    async fn put(&self, bytes: &[u8]) -> Result<ContentWrite, AppError>;
+
+    /// Reads a blob by its key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob cannot be read.
+    async fn read(&self, key: &str) -> Result<Vec<u8>, AppError>;
+
+    /// Removes a blob. Removing a missing blob is a success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot remove the blob.
+    async fn remove(&self, key: &str) -> Result<(), AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

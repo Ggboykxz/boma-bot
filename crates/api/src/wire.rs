@@ -855,6 +855,104 @@ pub struct MarketplaceSubmitReply {
     pub id: String,
 }
 
+/// One artifact as the API exposes it (REQ-036).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactView {
+    /// The artifact's id.
+    pub id: String,
+    /// The bot that produced it, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    /// The group thread it belongs to, when one does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    /// The run that produced it, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// The member's file name.
+    pub name: String,
+    /// One line about what the file is.
+    #[serde(default)]
+    pub description: String,
+    /// What the client declared.
+    pub declared_mime: String,
+    /// What the bytes proved (defect D-03).
+    pub mime_type: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// `sha256:<hex>` of the content.
+    pub hash: String,
+    /// The root of the version family.
+    pub root_artifact_id: String,
+    /// 1 for the first version, +1 per update.
+    pub version: i32,
+    /// When it was stored.
+    pub created_at: String,
+}
+
+/// The reply of `artifacts.create` — the golden: metadata only, never the bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactCreateReply {
+    /// The artifact's id.
+    pub id: String,
+    /// Its version in the family.
+    pub version: i32,
+    /// The family root.
+    pub root_artifact_id: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// `sha256:<hex>` of the content.
+    pub hash: String,
+}
+
+/// The reply of `artifacts.get` / `artifacts.getById` — the artifact plus its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactGetReply {
+    /// The artifact's metadata.
+    pub artifact: ArtifactView,
+    /// The content, base64-encoded.
+    pub content_base64: String,
+}
+
+/// One artifact in a versions list (REQ-036): id, version and family, newest first (the golden).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactVersionView {
+    /// The artifact's id.
+    pub id: String,
+    /// Its version in the family.
+    pub version: i32,
+    /// The family root.
+    pub root_artifact_id: String,
+}
+
+/// The reply of `artifacts.listVersions`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactVersionsReply {
+    /// Every version of the family, newest first.
+    pub versions: Vec<ArtifactVersionView>,
+}
+
+/// The reply of `artifacts.listSpace`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactListSpaceReply {
+    /// The latest version of every family in the space.
+    pub artifacts: Vec<ArtifactView>,
+}
+
+/// The reply of `artifacts.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactRemoveReply {
+    /// How many version rows went with the family.
+    pub removed: u64,
+}
+
 /// One skill in a list (REQ-035). Built-ins carry no timestamps; taught and plugin skills do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

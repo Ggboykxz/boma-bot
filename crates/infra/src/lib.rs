@@ -14,6 +14,7 @@
 
 mod space_keys;
 
+pub mod artifact_files;
 pub mod cdp;
 pub mod computer;
 pub mod config;
@@ -33,6 +34,7 @@ pub mod secret_box;
 pub mod stores;
 pub mod tenant;
 
+pub use artifact_files::FileArtifactContentStore;
 pub use cdp::{Cdp, CdpError};
 pub use computer::{DockerComputerRuntime, NoneComputerRuntime};
 pub use config::{ConfigError, DatabaseSettings};
@@ -49,6 +51,7 @@ pub use plugin::GitHubPluginFetcher;
 pub use provider::ScriptedProvider;
 pub use secret_box::{SecretBox, SecretBoxError};
 pub use stores::accounts::PostgresAccountStore;
+pub use stores::artifacts::PostgresArtifactStore;
 pub use stores::audit::PostgresAuditStore;
 pub use stores::bots::PostgresBotStore;
 pub use stores::cards::{PostgresCardStore, PostgresEffectStore};

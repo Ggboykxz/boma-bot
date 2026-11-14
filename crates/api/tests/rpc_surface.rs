@@ -2218,3 +2218,127 @@ async fn req_033_an_oauth_start_runs_end_to_end_and_a_replay_is_refused() {
     let body = json(response).await;
     assert!(!body.to_string().contains("shh"));
 }
+
+#[tokio::test]
+async fn req_036_a_member_creates_gets_lists_and_removes_an_artifact() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Create: a real PNG, declared honestly.
+    let png = b"\x89PNG\r\n\x1a\nfake-png-body";
+    let response = post(
+        app_state.clone(),
+        "/rpc/artifacts/create",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "chart.png",
+            "mimeType": "image/png",
+            "contentBase64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png),
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let id = body["id"].as_str().expect("an id").to_owned();
+    assert_eq!(body["version"], serde_json::json!(1));
+    assert_eq!(body["rootArtifactId"], serde_json::json!(id));
+    assert_eq!(body["size"], serde_json::json!(png.len() as u64));
+    assert!(
+        body["hash"]
+            .as_str()
+            .expect("a hash")
+            .starts_with("sha256:")
+    );
+    assert!(
+        !body.to_string().contains("PNG"),
+        "the reply never carries the bytes"
+    );
+
+    // Get: metadata plus contentBase64.
+    let response = post(
+        app_state.clone(),
+        "/rpc/artifacts/get",
+        Some(&world.caller),
+        serde_json::json!({ "artifactId": id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["artifact"]["name"], serde_json::json!("chart.png"));
+    assert_eq!(body["artifact"]["mimeType"], serde_json::json!("image/png"));
+    let decoded = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        body["contentBase64"].as_str().expect("contentBase64"),
+    )
+    .expect("the bytes decode");
+    assert_eq!(decoded, png);
+
+    // listVersions: the golden's shape, newest first, version 1.
+    let response = post(
+        app_state.clone(),
+        "/rpc/artifacts/listVersions",
+        Some(&world.caller),
+        serde_json::json!({ "artifactId": id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let versions = body["versions"].as_array().expect("a list");
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0]["id"], serde_json::json!(id));
+    assert_eq!(versions[0]["version"], serde_json::json!(1));
+    assert_eq!(versions[0]["rootArtifactId"], versions[0]["id"]);
+
+    // listSpace: the artifact shows up as the latest version of its family.
+    let response = post(
+        app_state.clone(),
+        "/rpc/artifacts/listSpace",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    let body = json(response).await;
+    let artifacts = body["artifacts"].as_array().expect("a list");
+    assert!(
+        artifacts
+            .iter()
+            .any(|entry| entry["id"] == serde_json::json!(id))
+    );
+
+    // Remove: the family is gone, and so is the content.
+    let response = post(
+        app_state.clone(),
+        "/rpc/artifacts/remove",
+        Some(&world.caller),
+        serde_json::json!({ "artifactId": id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(1));
+    let response = post(
+        app_state,
+        "/rpc/artifacts/get",
+        Some(&world.caller),
+        serde_json::json!({ "artifactId": id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn d03_an_html_upload_declared_as_png_is_refused_over_rpc() {
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/artifacts/create",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "evil.png",
+            "mimeType": "image/png",
+            "contentBase64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"<!DOCTYPE html><html>x</html>"),
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

@@ -84,9 +84,28 @@ with every other `.env` parser in the binary and with `.env.example`), with a un
 owner: **CI must be green on every push, verified, not assumed** — every push from here watches the
 run to conclusion and reports it.
 
-**M5 — complete (pending CI). Seven slices committed: REQ-046 (`835d8e7`), REQ-034 slice 1
-(`bc03d1e`), REQ-035 (`d56f248`), REQ-033 (`494d194` + `d427ee7`), REQ-032 (`fc8de75`),
-REQ-034 slice 2 (`e9cb7ff`), REQ-033 remaining gaps — SSE, opt-in stdio, OAuth (this revision).**
+**M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
+
+**M6 — in flight. Slice 1 committed (REQ-036 artifacts + defect D-03, in this revision).**
+
+1. **REQ-036 (artifacts with versions, MUST) + D-03 (magic-byte sniff) — slice 1.**
+   `artifacts.create|get|getById|listVersions|listSpace|remove` RPC. Content lives out of band,
+   content-addressed (`storage_key = sha256:<hex>`, two-level fan-out under `BOMA_ARTIFACT_DIR`;
+   unset means a per-process ephemeral directory with a startup warning — never silently lost
+   between processes). Versions form a chain by `root_artifact_id`; the unique index
+   `(space_id, root_artifact_id, version)` makes concurrent uploads mint distinct versions; the
+   reply of create carries metadata only (the golden's shape); versions list newest first; listSpace
+   answers the latest version per family; remove deletes the family and reclaims unreferenced
+   blobs. **D-03 policy**: magic-byte sniff (PNG/JPEG/GIF/PDF/ZIP; HTML by doctype/`<html`/`<script`
+   in the first 4 KiB; UTF-8 text otherwise). Declared generic (`application/octet-stream`) →
+   corrected to sniffed; declared specific ≠ sniffed specific → refused; declared text but the
+   bytes are HTML → refused; nothing recognised → refused. Bots create via the builtin Write-class
+   tool `artifact.create` (approval gate, exactly-once — tested end to end through the worker
+   and the card answer). The `spec/golden/artifact-create.json` and `artifact-versions.json`
+   fixtures pin a synthetic hash (`sha256:0000…`) and size 11 for a 9-byte payload — not
+   replayable byte for byte against a real implementation; they stay `pending` in
+   `golden-status.json` with the reason recorded, and the contract is pinned by the API and
+   PG tests instead. **346 + 15 tests green locally** (docker-gated suites excluded as ever).
 
 7. **REQ-033 — remaining gaps closed (SSE, opt-in stdio, OAuth, this revision).**
    - **SSE**: the HTTP transport asks for `application/json, text/event-stream` and parses the
