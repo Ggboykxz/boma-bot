@@ -86,7 +86,21 @@ run to conclusion and reports it.
 
 **M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
 
-**M7 — in flight. Slices 1–2 committed: REQ-050 (`8c1e37f`), REQ-047 (in this revision).**
+**M7 — complete. Three slices committed: REQ-050 (`8c1e37f`), REQ-047 (`5327764`), REQ-048
+(in this revision).** REQ-049 stays deferred by its COULD classification.
+
+1. **REQ-050 (bot webhooks + repository events, SHOULD) — slice 1.** `POST /api/v1/bots/{botId}/webhook`,
+   cookieless, bot-authenticated by its `WEBHOOK` bot secret (REQ-046 machinery, sealed per space), 64 KiB cap.
+   **Uniform 401** for unknown bot, archived bot, missing secret and wrong bearer — the body is
+   `{"error": "Unauthorized."}` byte-identical and the golden `bot-webhook-denied` **replays** against
+   the real router. A valid bearer inserts the payload as the newest message of the bot's thread and
+   starts a `webhook`-triggered run; a repository-shaped payload additionally wakes the bot's routines
+   with `github_enabled` (new `routines.github_enabled`, column migration 0039) — each with its own
+   `routine`-triggered run, an open run suppresses the duplicate wake, and the schedule is untouched.
+   Wire: `routines.create` accepts `githubEnabled` and echoes it (`RoutineView`). Named gaps: no
+   repository/owner filtering, no signature verification beyond the bot bearer (GitHub's HMAC is an
+   M11 candidate), and `routine_wakes` exists in the answer for visibility.
+
 
 2. **REQ-047 (inbound mail per bot, SHOULD) — slice 2.** `POST /api/v1/email/inbound` with a
    deployment relay token (`BOMA_EMAIL_RELAY_TOKEN` + `BOMA_EMAIL_DOMAIN`, both-or-neither at
@@ -103,17 +117,31 @@ run to conclusion and reports it.
    and no attachments as artifacts in this build — a relay is a trusted SMTP front, not a mail
    filter. Sweat: 403 tests green.
 
-1. **REQ-050 (bot webhooks + repository events, SHOULD) — slice 1.** `POST /api/v1/bots/{botId}/webhook`,
-   cookieless, bot-authenticated by its `WEBHOOK` bot secret (REQ-046 machinery, sealed per space), 64 KiB cap.
-   **Uniform 401** for unknown bot, archived bot, missing secret and wrong bearer — the body is
-   `{"error": "Unauthorized."}` byte-identical and the golden `bot-webhook-denied` **replays** against
-   the real router. A valid bearer inserts the payload as the newest message of the bot's thread and
-   starts a `webhook`-triggered run; a repository-shaped payload additionally wakes the bot's routines
-   with `github_enabled` (new `routines.github_enabled`, column migration 0039) — each with its own
-   `routine`-triggered run, an open run suppresses the duplicate wake, and the schedule is untouched.
-   Wire: `routines.create` accepts `githubEnabled` and echoes it (`RoutineView`). Named gaps: no
-   repository/owner filtering, no signature verification beyond the bot bearer (GitHub's HMAC is an
-   M11 candidate), and `routine_wakes` exists in the answer for visibility.
+3. **REQ-048 (messaging platforms, SHOULD) — slice 3.** A member installs the product into a
+   workspace; messages map to **external threads** (`threads.kind = 'external'`,
+   `(external_platform, external_workspace_id, external_conversation_id)` unique, bot of the
+   installation); a user messages the bot there, a run starts, and when the run ends the bot's
+   final reply is delivered to the conversation. Slack is the full reference: OAuth install
+   handshake (`messaging.installUrl` → `GET /api/v1/messaging/install/slack/callback`, single-use
+   ten-minute state, `oauth.v2.access`), inbound `X-Slack-Signature` v0 HMAC-SHA256 with a ±5
+   minute clock, `url_verification` answered with the challenge, `chat.postMessage` with the
+   sealed per-installation bot token (sealed like a bot secret), `team_id` must match the
+   installation. Telegram: member pastes the BotFather token; `getMe` validates and seals it,
+   a per-installation webhook secret is generated and `setWebhook` is attempted best-effort
+   (`webhookSecret` returned once), inbound verified by the secret-token header. Generic:
+   HMAC-SHA256 over the body (`X-Boma-Signature: sha256=<hex>`), Discord-class surfaces; member
+   supplies the HTTPS reply target, sent signed replies; the target's SSRF rules hold at the
+   delivery boundary (`net_safety`, opt-in per installation for LAN, audited, D-05). The whole
+   surface is `BOMA_MESSAGING=true` or absent — 404 everywhere, signed in or not. Without Slack
+   credentials the messaging surface still exists and Slack installs refuse clearly. Removal of
+   an installation stops deliveries; the external threads keep their history. **Uniform 401**
+   for unknown installation, removed installation, platform mismatch, wrong signature — no
+   enumeration, golden-shape. Teams is deliberately out of scope (one adapter + one verifier
+   away, same skeleton). Named gaps: no realtime push to platforms (only the final reply is
+   delivered), no delivery retry queue, no group chats (REQ-010, M11), install `setWebhook`
+   failures are reported, not retried, and delivery failures are logged, never user-visible
+   in the run — the bot's answer is always written in the thread. Sweat: 420 tests green,
+   docker-gated suites green in CI.
 
 **M6 — complete. Four slices committed and CI green: REQ-036 (`c369833`, run 50),
 REQ-037 (`33cf6eb`, run 51), REQ-039 (`06d41c1`, run 52), REQ-038 (`23d3fca`, run 53 — rust,

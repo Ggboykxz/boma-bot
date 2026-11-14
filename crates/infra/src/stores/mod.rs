@@ -17,6 +17,7 @@ pub mod mail;
 pub mod mcp;
 pub mod memory;
 pub mod messages;
+pub mod messaging;
 pub mod pages;
 pub mod pending_tool_calls;
 pub mod plugin_installs;

@@ -230,6 +230,50 @@ async fn world() -> World {
     world_with_board(false).await
 }
 
+async fn world_with_messaging() -> (
+    World,
+    std::sync::Arc<boma_testkit::ScriptedMessagingTransport>,
+) {
+    let transport = std::sync::Arc::new(
+        boma_testkit::ScriptedMessagingTransport::new().with_get_responses(vec![
+            serde_json::json!({
+                "ok": true,
+                "result": { "id": 424_242, "username": "boma_bot" },
+            }),
+        ]),
+    );
+    let test_app = TestApp::builder()
+        .messaging(true)
+        .slack("client-id-1", "client-secret-1", "signing-secret-1")
+        .messaging_transport(std::sync::Arc::clone(&transport))
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot_id, thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    (
+        World {
+            app: test_app,
+            caller: Caller {
+                cookie,
+                space_id: space_id.as_str().to_owned(),
+            },
+            bot_id: bot_id.as_str().to_owned(),
+            thread_id: thread_id.as_str().to_owned(),
+        },
+        transport,
+    )
+}
+
 async fn world_with_mail() -> World {
     let test_app = TestApp::builder()
         .email_inbound("mail.example.com", "relay-token-1234567890")
@@ -3172,4 +3216,226 @@ async fn req_047_the_mail_policy_rpc_round_trips() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn req_048_the_messaging_surface_is_absent_without_the_flag() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    for procedure in [
+        "installUrl",
+        "installTelegram",
+        "installGeneric",
+        "list",
+        "remove",
+        "conversations",
+    ] {
+        let response = post(
+            app_state.clone(),
+            &format!("/rpc/messaging/{procedure}"),
+            Some(&world.caller),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "messaging.{procedure}"
+        );
+    }
+
+    let response = post_bytes_path(
+        app_state,
+        "/api/v1/messaging/slack/inbound/msg_1",
+        "{}",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the round trip is the test
+async fn req_048_messaging_rpc_install_and_inbound_round_trip() {
+    let (world, _transport) = world_with_messaging().await;
+    let app_state = state(&world.app);
+
+    // The install handshake URL names the deployment and the bot's space.
+    let response = post(
+        app_state.clone(),
+        "/rpc/messaging/installUrl",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id, "platform": "slack" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let url = json(response).await["url"]
+        .as_str()
+        .expect("an authorize url")
+        .to_owned();
+    assert!(url.contains("client-id-1"));
+    assert!(url.contains("state="));
+
+    // Telegram installs with a token validated against getMe (scripted).
+    let response = post(
+        app_state.clone(),
+        "/rpc/messaging/installTelegram",
+        Some(&world.caller),
+        serde_json::json!({
+            "botId": world.bot_id,
+            "botToken": "424242:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let installed = json(response).await;
+    let installation_id = installed["installationId"]
+        .as_str()
+        .expect("an installation id")
+        .to_owned();
+    let webhook_secret = installed["webhookSecret"]
+        .as_str()
+        .expect("the webhook secret")
+        .to_owned();
+    assert_eq!(installed["registered"], serde_json::json!(true));
+    assert_eq!(installed["botUsername"], serde_json::json!("boma_bot"));
+
+    // A wrong webhook secret is the same refusal as an unknown installation.
+    let unknown_body = br#"{"update_id":7,"message":{"message_id":42,"from":{"id":424242},"chat":{"id":-100123,"type":"supergroup"},"text":"build the report"}}"#;
+    let response = post_bytes_path(
+        app_state.clone(),
+        &format!("/api/v1/messaging/telegram/inbound/{installation_id}"),
+        std::str::from_utf8(unknown_body).expect("utf-8"),
+        Some("Bearer unused"),
+    )
+    .await;
+    // The telegram route reads the secret from a dedicated header; a wrong value is refused.
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let refused = json(response).await;
+    assert_eq!(refused, serde_json::json!({ "error": "Unauthorized." }));
+
+    // The right secret delivers.
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/api/v1/messaging/telegram/inbound/{installation_id}"
+        ))
+        .header("content-type", "application/json")
+        .header("x-telegram-bot-api-secret-token", webhook_secret)
+        .body(Body::from(unknown_body.as_ref().to_owned()))
+        .expect("the request builds");
+    let response = router(app_state.clone())
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["ok"], serde_json::json!(true));
+    assert_eq!(body["conversationId"], serde_json::json!("-100123"));
+    assert!(body["runId"].as_str().is_some());
+
+    // The member sees the installation and the conversation.
+    let response = post(
+        app_state.clone(),
+        "/rpc/messaging/list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let installations = json(response).await["installations"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(installations.len(), 1);
+    assert_eq!(installations[0]["platform"], serde_json::json!("telegram"));
+
+    let response = post(
+        app_state.clone(),
+        "/rpc/messaging/conversations",
+        Some(&world.caller),
+        serde_json::json!({ "installationId": installation_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let conversations = json(response).await["conversations"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(
+        conversations[0]["conversationId"],
+        serde_json::json!("-100123")
+    );
+
+    // Removing the installation stops deliveries; history stays.
+    let response = post(
+        app_state.clone(),
+        "/rpc/messaging/remove",
+        Some(&world.caller),
+        serde_json::json!({ "installationId": installation_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["removed"], serde_json::json!(true));
+
+    let response = post_bytes_path(
+        app_state,
+        &format!("/api/v1/messaging/telegram/inbound/{installation_id}"),
+        std::str::from_utf8(unknown_body).expect("utf-8"),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn req_048_slack_not_configured_is_a_clear_refusal_not_a_crash() {
+    let (world, _transport) = world_with_slack_missing().await;
+    let app_state = state(&world.app);
+    let response = post(
+        app_state,
+        "/rpc/messaging/installUrl",
+        Some(&world.caller),
+        serde_json::json!({ "botId": world.bot_id, "platform": "slack" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+async fn world_with_slack_missing() -> (
+    World,
+    std::sync::Arc<boma_testkit::ScriptedMessagingTransport>,
+) {
+    let transport = std::sync::Arc::new(boma_testkit::ScriptedMessagingTransport::new());
+    let test_app = TestApp::builder()
+        .messaging(true)
+        .messaging_transport(std::sync::Arc::clone(&transport))
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot_id, thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    (
+        World {
+            app: test_app,
+            caller: Caller {
+                cookie,
+                space_id: space_id.as_str().to_owned(),
+            },
+            bot_id: bot_id.as_str().to_owned(),
+            thread_id: thread_id.as_str().to_owned(),
+        },
+        transport,
+    )
 }

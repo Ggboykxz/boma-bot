@@ -681,6 +681,7 @@ mod tests {
                 next_message_seq: 2,
                 next_event_seq: 1,
                 created_at: "2026-01-01T00:00:00Z".to_owned(),
+                external: None,
             },
             prompt: prompt.to_owned(),
             history: Vec::new(),
@@ -1029,5 +1030,137 @@ impl boma_app::ports::OAuthClient for ScriptedOAuthClient {
                 ),
             ))
         })
+    }
+}
+
+/// One recorded GET the messaging transport received: url and headers.
+pub type MessagingHttpCall = (String, Vec<(String, String)>);
+
+/// One recorded form POST the messaging transport received: url, marker, and a JSON rendering of the form.
+pub type MessagingFormCall = (String, String, serde_json::Value);
+
+/// One recorded JSON POST the messaging transport received: url, headers, body.
+pub type MessagingJsonCall = (String, Vec<(String, String)>, serde_json::Value);
+
+/// A scripted messaging platform (REQ-048): records what would have gone out and answers
+/// with queued responses. The network never sees a test.
+#[derive(Debug, Default)]
+pub struct ScriptedMessagingTransport {
+    get_responses: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    post_responses: std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>,
+    get_calls: std::sync::Mutex<Vec<MessagingHttpCall>>,
+    post_calls: std::sync::Mutex<Vec<MessagingFormCall>>,
+    post_json_statuses: std::sync::Mutex<Vec<u16>>,
+    post_json_calls: std::sync::Mutex<Vec<MessagingJsonCall>>,
+}
+
+impl ScriptedMessagingTransport {
+    /// A transport with nothing queued: `get_json`/`post_form` answer the empty object,
+    /// `post_json` answers 200.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            get_responses: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            post_responses: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            get_calls: std::sync::Mutex::new(Vec::new()),
+            post_calls: std::sync::Mutex::new(Vec::new()),
+            post_json_statuses: std::sync::Mutex::new(Vec::new()),
+            post_json_calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Queues the GET answers.
+    #[must_use]
+    pub fn with_get_responses(mut self, responses: Vec<serde_json::Value>) -> Self {
+        for response in responses.into_iter().rev() {
+            self.get_responses
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push_front(response);
+        }
+        self
+    }
+
+    /// Queues the POST-form answers (the OAuth handshake).
+    #[must_use]
+    pub fn with_post_responses(mut self, responses: Vec<serde_json::Value>) -> Self {
+        for response in responses.into_iter().rev() {
+            self.post_responses
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push_front(response);
+        }
+        self
+    }
+
+    /// The GETs the transport received.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn get_calls(&self) -> Vec<MessagingHttpCall> {
+        lock(&self.get_calls).clone()
+    }
+
+    /// The POST forms the transport received.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn post_calls(&self) -> Vec<MessagingFormCall> {
+        lock(&self.post_calls).clone()
+    }
+
+    /// The JSON posts the transport received: url, headers, body.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn post_json_calls(&self) -> Vec<MessagingJsonCall> {
+        lock(&self.post_json_calls).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::MessagingTransport for ScriptedMessagingTransport {
+    async fn get_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<serde_json::Value, boma_app::AppError> {
+        lock(&self.get_calls).push((url.to_owned(), headers.to_vec()));
+        Ok(lock(&self.get_responses)
+            .pop_front()
+            .unwrap_or_else(|| serde_json::json!({})))
+    }
+
+    async fn post_form(
+        &self,
+        url: &str,
+        form: &[(String, String)],
+    ) -> Result<serde_json::Value, boma_app::AppError> {
+        let body = serde_json::Value::Object(
+            form.iter()
+                .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+                .collect(),
+        );
+        lock(&self.post_calls).push((url.to_owned(), "form".to_owned(), body));
+        Ok(lock(&self.post_responses)
+            .pop_front()
+            .unwrap_or_else(|| serde_json::json!({})))
+    }
+
+    async fn post_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &serde_json::Value,
+        _allow_private: bool,
+    ) -> Result<u16, boma_app::AppError> {
+        lock(&self.post_json_calls).push((url.to_owned(), headers.to_vec(), body.clone()));
+        Ok(lock(&self.post_json_statuses).pop().unwrap_or(200))
     }
 }

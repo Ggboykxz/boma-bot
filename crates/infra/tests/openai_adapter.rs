@@ -45,6 +45,7 @@ fn request(prompt: &str) -> boma_app::ports::ProviderRequest {
         next_message_seq: 1,
         next_event_seq: 1,
         created_at: "2026-01-01T00:00:00Z".to_owned(),
+        external: None,
     };
     boma_app::ports::ProviderRequest {
         bot,

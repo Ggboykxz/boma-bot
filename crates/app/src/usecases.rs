@@ -24,6 +24,8 @@ use boma_domain::{
 
 pub use crate::accounts::{SignIn, SignUp};
 
+use hmac::KeyInit as _;
+
 use crate::{
     accounts::Accounts,
     error::AppError,
@@ -2492,6 +2494,869 @@ pub async fn mail_held_drop(
     Ok(app.stores.mail.take_held(context, held_id).await?.is_some())
 }
 
+/// The default Slack OAuth redirect, unless `BOMA_SLACK_REDIRECT_URI` overrides it.
+pub const MESSAGING_SLACK_CALLBACK_URI: &str =
+    "http://127.0.0.1/api/v1/messaging/install/slack/callback";
+
+/// The install handshake of a Slack installation (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagingInstallUrl {
+    /// The URL the browser opens.
+    pub authorization_url: String,
+}
+
+/// One verified inbound delivery outcome (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagingInboundOutcome {
+    /// The run the message started.
+    pub run_id: String,
+    /// The external thread the conversation lives in.
+    pub thread_id: String,
+    /// The conversation the platform used.
+    pub conversation_id: String,
+}
+
+/// Starts the Slack install handshake (REQ-048).
+///
+/// The member opens the returned URL in their browser; Slack redirects back to the deployment's
+/// callback with a `code`; the state is single-use and ten minutes long. Telegram and generic
+/// surfaces install directly (`messaging_install_telegram` / `messaging_install_generic`).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist in the caller's space,
+/// [`AppError::Rule`] when the platform is not Slack or Slack is not configured.
+pub async fn messaging_install_url(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    platform: &str,
+) -> Result<MessagingInstallUrl, AppError> {
+    let platform = boma_domain::ChannelPlatform::parse(platform).map_err(|_| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "unknown platform".to_owned(),
+        ))
+    })?;
+    if platform != boma_domain::ChannelPlatform::Slack {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "only Slack installs with a handshake; Telegram and generic install directly"
+                .to_owned(),
+        )));
+    }
+    let Some(slack) = app.services.slack.as_ref() else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "Slack is not configured for this deployment".to_owned(),
+        )));
+    };
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let state = app.services.tokens.generate()?;
+    let expires_at = app.services.clock.now_plus_seconds(600);
+    app.stores
+        .messaging
+        .store_install_state(context, &state, &bot.id, &expires_at)
+        .await?;
+    let sep = if slack.redirect_uri.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    Ok(MessagingInstallUrl {
+        authorization_url: format!(
+            "https://slack.com/oauth/v2/authorize{sep}client_id={}&scope=chat%3Awrite&redirect_uri={}&state={}",
+            boma_domain::percent_encode(&slack.client_id),
+            boma_domain::percent_encode(&slack.redirect_uri),
+            boma_domain::percent_encode(&state),
+        ),
+    })
+}
+
+/// Completes the Slack handshake (REQ-048): exchanges the code, seals the bot token, stores the
+/// installation.
+///
+/// The `state` is single-use: replaying the same URL fails. The exchange itself is one POST to
+/// `slack.com`; a failed exchange refuses with a uniform error and nothing is stored.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the state is unknown, expired, or its bot is gone, and
+/// [`AppError::Rule`] when Slack refuses the code.
+pub async fn messaging_slack_callback(
+    app: &App,
+    code: &str,
+    state: &str,
+) -> Result<crate::ports::MessagingInstallation, AppError> {
+    let context = TenantContext::System {
+        reason: boma_domain::SystemReason::WebhookDelivery,
+        user_id: None,
+    };
+    let Some(slack) = app.services.slack.as_ref() else {
+        return Err(AppError::NotFound);
+    };
+    let grant = app
+        .stores
+        .messaging
+        .take_install_state(&context, state)
+        .await?;
+    let Some(grant) = grant else {
+        return Err(AppError::NotFound);
+    };
+    let bot_id = grant.bot_id.clone();
+    let response = app
+        .services
+        .messaging_transport
+        .post_form(
+            "https://slack.com/api/oauth.v2.access",
+            &[
+                ("client_id".to_owned(), slack.client_id.clone()),
+                (
+                    "client_secret".to_owned(),
+                    secrecy::ExposeSecret::expose_secret(&slack.client_secret).to_owned(),
+                ),
+                ("code".to_owned(), code.to_owned()),
+                ("redirect_uri".to_owned(), slack.redirect_uri.clone()),
+            ],
+        )
+        .await?;
+    if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "Slack refused the install code".to_owned(),
+        )));
+    }
+    let Some(token) = response
+        .get("access_token")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "Slack returned no bot token".to_owned(),
+        )));
+    };
+    let team_id = response
+        .get("team")
+        .and_then(|team| team.get("id").and_then(serde_json::Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    if team_id.is_empty() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "Slack returned no workspace id".to_owned(),
+        )));
+    }
+    let workspace_name = response
+        .get("team")
+        .and_then(|team| team.get("name").and_then(serde_json::Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    let member = TenantContext::Member {
+        space_id: grant.space_id.clone(),
+        user_id: grant.user_id.clone(),
+    };
+    app.stores
+        .messaging
+        .create(
+            &member,
+            crate::ports::NewMessagingInstallation {
+                id: app.services.ids.new_id("msg"),
+                space_id: grant.space_id,
+                bot_id,
+                installed_by: grant.user_id,
+                platform: boma_domain::ChannelPlatform::Slack,
+                workspace_id: team_id,
+                workspace_name,
+                token: secrecy::SecretString::from(token.to_owned()),
+                webhook_secret: None,
+                reply_url: None,
+                allow_private: false,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await
+}
+
+/// The outcome of a Telegram install (REQ-048). The secret is returned exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagingInstallTelegramOutcome {
+    /// The installation id.
+    pub installation_id: String,
+    /// The bot username Telegram reported.
+    pub bot_username: String,
+    /// The webhook URL Telegram should point at.
+    pub webhook_url: String,
+    /// The secret token Telegram presents on every delivery. Shown once, here only.
+    pub webhook_secret: String,
+}
+
+/// Installs a Telegram bot (REQ-048): validates the token with `getMe`, seals it, generates the
+/// webhook secret, and best-effort calls `setWebhook`.
+///
+/// If `setWebhook` fails the install still stands: the member can point Telegram at the
+/// returned URL manually. `webhook_registered` reports which happened.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist, [`AppError::Rule`] when the
+/// token is malformed or Telegram refuses it, and [`AppError::Conflict`] when the Telegram bot
+/// is already installed.
+pub async fn messaging_install_telegram(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    bot_token: &str,
+) -> Result<(MessagingInstallTelegramOutcome, bool), AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    if !telegram_token_shape_ok(bot_token) {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the Telegram bot token must look like `<id>:<secret>`".to_owned(),
+        )));
+    }
+    let get_me_url = format!("https://api.telegram.org/bot{bot_token}/getMe");
+    let me = app
+        .services
+        .messaging_transport
+        .get_json(&get_me_url, &[])
+        .await?;
+    if me.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "Telegram refused the bot token".to_owned(),
+        )));
+    }
+    let result = me.get("result").ok_or_else(|| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "Telegram returned no bot".to_owned(),
+        ))
+    })?;
+    let telegram_bot_id = result
+        .get("id")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| {
+            AppError::Rule(boma_domain::DomainError::InvalidName(
+                "Telegram returned no bot id".to_owned(),
+            ))
+        })?;
+    let bot_username = result
+        .get("username")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("bot")
+        .to_owned();
+    let webhook_secret = app.services.tokens.generate()?;
+    let installation_id = app.services.ids.new_id("msg");
+    let base = app.services.public_base_url.trim_end_matches('/');
+    let webhook_url = format!("{base}/api/v1/messaging/telegram/inbound/{installation_id}");
+    let outcome = app
+        .stores
+        .messaging
+        .create(
+            context,
+            crate::ports::NewMessagingInstallation {
+                id: installation_id,
+                space_id: bot.space_id.clone(),
+                bot_id: bot.id.clone(),
+                installed_by: context.user_id().cloned().ok_or(AppError::NotFound)?,
+                platform: boma_domain::ChannelPlatform::Telegram,
+                workspace_id: telegram_bot_id.to_string(),
+                workspace_name: bot_username.clone(),
+                token: secrecy::SecretString::from(bot_token.to_owned()),
+                webhook_secret: Some(secrecy::SecretString::from(webhook_secret.clone())),
+                reply_url: None,
+                allow_private: false,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    // Best effort: point Telegram at the new URL. If it fails, the member registers manually.
+    let set_webhook_url = format!("https://api.telegram.org/bot{bot_token}/setWebhook");
+    let registered = matches!(
+        app.services
+            .messaging_transport
+            .post_json(
+                &set_webhook_url,
+                &[],
+                &serde_json::json!({
+                    "url": webhook_url,
+                    "secret_token": webhook_secret,
+                }),
+                false,
+            )
+            .await,
+        Ok(200)
+    );
+    Ok((
+        MessagingInstallTelegramOutcome {
+            installation_id: outcome.id,
+            bot_username,
+            webhook_url,
+            webhook_secret,
+        },
+        registered,
+    ))
+}
+
+/// The outcome of a generic install (REQ-048). The secret is returned exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagingInstallGenericOutcome {
+    /// The installation id.
+    pub installation_id: String,
+    /// The webhook URL the member configures in their platform.
+    pub webhook_url: String,
+    /// The `X-Boma-Signature` secret. Shown once, here only.
+    pub secret: String,
+}
+
+/// Installs a generic HMAC surface (REQ-048): generates the secret, seals it, returns it once.
+///
+/// Replies are POSTed to `reply_url` as JSON with `X-Boma-Signature` (HMAC-SHA256 of the body
+/// the member can verify with the same secret). HTTPS is required unless `allow_private`, and a
+/// private target under `allow_private` is audited (D-05).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist, [`AppError::Rule`] when the name
+/// or the reply URL is refused, and [`AppError::Conflict`] when the name is already installed.
+pub async fn messaging_install_generic(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    name: &str,
+    reply_url: &str,
+    allow_private: bool,
+) -> Result<MessagingInstallGenericOutcome, AppError> {
+    let name = validate_channel_name(name)?;
+    boma_domain::validate_mcp_server_url(reply_url, allow_private)?;
+    if allow_private {
+        let _ = app
+            .stores
+            .audit
+            .append(crate::ports::NewAuditEvent {
+                id: app.services.ids.new_id("aud"),
+                space_id: context.space_id().cloned().ok_or(AppError::NotFound)?,
+                actor_user_id: context.user_id().cloned(),
+                kind: boma_domain::AuditKind::MessagingPrivateEndpoint,
+                target: name.clone(),
+                metadata: serde_json::json!({ "replyUrl": reply_url }),
+                created_at: app.services.clock.now(),
+            })
+            .await;
+    }
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let secret = app.services.tokens.generate()?;
+    let id = app.services.ids.new_id("msg");
+    let outcome = app
+        .stores
+        .messaging
+        .create(
+            context,
+            crate::ports::NewMessagingInstallation {
+                id: id.clone(),
+                space_id: bot.space_id.clone(),
+                bot_id: bot.id.clone(),
+                installed_by: context.user_id().cloned().ok_or(AppError::NotFound)?,
+                platform: boma_domain::ChannelPlatform::Generic,
+                workspace_id: name,
+                workspace_name: String::new(),
+                token: secrecy::SecretString::from(secret.clone()),
+                webhook_secret: None,
+                reply_url: Some(reply_url.to_owned()),
+                allow_private,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(MessagingInstallGenericOutcome {
+        installation_id: outcome.id.clone(),
+        webhook_url: format!(
+            "{}/api/v1/messaging/generic/inbound/{id}",
+            app.services.public_base_url.trim_end_matches('/')
+        ),
+        secret,
+    })
+}
+
+/// The member-visible list of installations, newest first.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn messaging_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::MessagingInstallation>, AppError> {
+    app.stores.messaging.list(context).await
+}
+
+/// Removes one installation. The external threads keep their history (REQ-021).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn messaging_remove(
+    app: &App,
+    context: &TenantContext,
+    installation_id: &str,
+) -> Result<bool, AppError> {
+    app.stores
+        .messaging
+        .mark_removed(context, installation_id)
+        .await
+}
+
+/// One external conversation of an installation, as the member sees it (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagingConversation {
+    /// The external thread's id.
+    pub thread_id: String,
+    /// The conversation the platform used.
+    pub conversation_id: String,
+    /// When the conversation opened.
+    pub created_at: String,
+}
+
+/// The external conversations of one installation (REQ-048).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the installation does not exist in the caller's space,
+/// and an error when a store cannot answer.
+pub async fn messaging_conversations(
+    app: &App,
+    context: &TenantContext,
+    installation_id: &str,
+) -> Result<Vec<MessagingConversation>, AppError> {
+    Ok(app
+        .stores
+        .messaging
+        .list_external_threads(context, installation_id)
+        .await?
+        .into_iter()
+        .filter_map(|thread| {
+            thread.external.map(|external| MessagingConversation {
+                thread_id: thread.id.as_str().to_owned(),
+                conversation_id: external.conversation_id,
+                created_at: thread.created_at,
+            })
+        })
+        .collect())
+}
+
+/// Which credential rides an ingress, by platform.
+#[derive(Debug, Clone)]
+pub struct IngressHeaders<'a> {
+    /// `X-Slack-Request-Timestamp` (Slack).
+    pub slack_timestamp: Option<&'a str>,
+    /// `X-Slack-Signature` (Slack).
+    pub slack_signature: Option<&'a str>,
+    /// `X-Telegram-Bot-Api-Secret-Token` (Telegram).
+    pub telegram_secret_token: Option<&'a str>,
+    /// `X-Boma-Signature` (generic).
+    pub generic_signature: Option<&'a str>,
+}
+
+/// Routes a verified platform delivery to a run (REQ-048).
+///
+/// Every failure answers the same refusal: unknown installation, removed installation, platform
+/// mismatch, bad signature, bad team, malformed body — all `NotFound`, so nothing enumerates.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] for every refusal named above, and an error when a store
+/// cannot answer.
+#[allow(clippy::too_many_lines)] // the ingress is the contract, in order
+pub async fn messaging_inbound(
+    app: &App,
+    platform: boma_domain::ChannelPlatform,
+    installation_id: &str,
+    headers: &IngressHeaders<'_>,
+    body: &[u8],
+) -> Result<MessagingInboundOutcome, AppError> {
+    let context = TenantContext::System {
+        reason: boma_domain::SystemReason::WebhookDelivery,
+        user_id: None,
+    };
+    let installation = app
+        .stores
+        .messaging
+        .find_active(&context, installation_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if installation.platform != platform {
+        return Err(AppError::NotFound);
+    }
+    let now = unix_seconds(&app.services.clock.now());
+    // Proving the sender: one comparison per platform, constant time, uniform refusal otherwise.
+    match platform {
+        boma_domain::ChannelPlatform::Slack => {
+            let Some(slack) = app.services.slack.as_ref() else {
+                return Err(AppError::NotFound);
+            };
+            let secret = secrecy::ExposeSecret::expose_secret(&slack.signing_secret);
+            let ok = match (headers.slack_timestamp, headers.slack_signature) {
+                (Some(timestamp), Some(signature)) => {
+                    boma_domain::verify_slack(secret.as_bytes(), timestamp, body, signature, now)
+                }
+                _ => false,
+            };
+            if !ok {
+                return Err(AppError::NotFound);
+            }
+        }
+        boma_domain::ChannelPlatform::Telegram => {
+            let Some(expected) = app
+                .stores
+                .messaging
+                .reveal_webhook_secret(&context, &installation.id)
+                .await?
+            else {
+                return Err(AppError::NotFound);
+            };
+            let expected = secrecy::ExposeSecret::expose_secret(&expected);
+            let ok = headers
+                .telegram_secret_token
+                .is_some_and(|provided| boma_domain::verify_telegram(expected, provided));
+            if !ok {
+                return Err(AppError::NotFound);
+            }
+        }
+        boma_domain::ChannelPlatform::Generic => {
+            let Some(secret) = app
+                .stores
+                .messaging
+                .reveal_token(&context, &installation.id)
+                .await?
+            else {
+                return Err(AppError::NotFound);
+            };
+            let secret = secrecy::ExposeSecret::expose_secret(&secret).to_owned();
+            let ok = headers.generic_signature.is_some_and(|provided| {
+                boma_domain::verify_generic(secret.as_bytes(), body, provided)
+            });
+            if !ok {
+                return Err(AppError::NotFound);
+            }
+        }
+    }
+    let message = match platform {
+        boma_domain::ChannelPlatform::Slack => boma_domain::parse_slack_event(body)?,
+        boma_domain::ChannelPlatform::Telegram => boma_domain::parse_telegram_update(body)?,
+        boma_domain::ChannelPlatform::Generic => boma_domain::parse_generic_message(body)?,
+    };
+    // Slack deliveries carry the team; an installation never receives another workspace's mail.
+    if platform == boma_domain::ChannelPlatform::Slack
+        && message.workspace_id != installation.workspace_id
+    {
+        return Err(AppError::NotFound);
+    }
+    let thread = app
+        .stores
+        .messaging
+        .resolve_external_thread(&context, &installation.id, &message.conversation_id)
+        .await?;
+    let bot_id =
+        boma_domain::BotId::new(installation.bot_id.clone()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(&context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let space_id = bot.space_id.clone();
+    let member = TenantContext::Member {
+        space_id: space_id.clone(),
+        user_id: bot.user_id.clone(),
+    };
+    let now = app.services.clock.now();
+    let text = format!(
+        "[{}:{}] {}",
+        platform.as_str(),
+        message.user_id,
+        message.text
+    );
+    let stored = app
+        .stores
+        .messages
+        .insert(
+            &member,
+            NewMessage {
+                id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                space_id: space_id.clone(),
+                thread_id: thread.id.clone(),
+                role: boma_domain::MessageRole::User,
+                blocks: vec![boma_domain::Block::Text { text }],
+                bot_id: None,
+                author_user_id: None,
+                run_id: None,
+                client_nonce: None,
+                created_at: now.clone(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await?;
+    let choice = model_choice_for(&bot, &app.services.models)?;
+    let run = app
+        .stores
+        .runs
+        .create(NewRun {
+            id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+            space_id,
+            bot_id: bot.id.clone(),
+            thread_id: thread.id.clone(),
+            user_id: bot.user_id.clone(),
+            trigger: boma_domain::RunTrigger::User,
+            client_nonce: None,
+            source_message_id: Some(stored.message.id.clone()),
+            created_at: app.services.clock.now(),
+            model_provider: Some(choice.provider),
+            model_id: Some(choice.model),
+            model_pinned: choice.pinned,
+            parent_run_id: None,
+            routine_id: None,
+        })
+        .await?;
+    Ok(MessagingInboundOutcome {
+        run_id: run.id.as_str().to_owned(),
+        thread_id: thread.id.as_str().to_owned(),
+        conversation_id: message.conversation_id,
+    })
+}
+
+/// Delivers the bot's final reply to an external conversation (REQ-048).
+///
+/// Members of the space cannot see the run's thread in their own bot conversation, so the reply
+/// is POSTed to the platform. A failed delivery is logged and swallowed: the run must not fail
+/// because Slack is having a bad day. There is no retry queue: delivering an answer twice is
+/// worse than delivering it never.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer; a platform that refuses the reply is a log line,
+/// not a failure.
+#[allow(clippy::too_many_lines)] // one delivery path per platform; one place to read
+pub async fn deliver_external_reply(
+    app: &App,
+    context: &TenantContext,
+    thread: &boma_domain::Thread,
+    text: &str,
+) -> Result<(), AppError> {
+    let Some(external) = &thread.external else {
+        return Ok(());
+    };
+    let platform = external.platform;
+    let Some(installation) = app
+        .stores
+        .messaging
+        .find_active_by_platform_workspace(context, platform, &external.workspace_id)
+        .await?
+    else {
+        tracing::warn!(
+            ?platform,
+            "the installation is gone; the reply stays in the thread"
+        );
+        return Ok(());
+    };
+    let truncated: String = text.chars().take(4000).collect();
+    match platform {
+        boma_domain::ChannelPlatform::Slack => {
+            let Some(token) = app
+                .stores
+                .messaging
+                .reveal_token(context, &installation.id)
+                .await?
+            else {
+                tracing::warn!(
+                    "the Slack installation holds no bot token; the reply stays in the thread"
+                );
+                return Ok(());
+            };
+            let status = app
+                .services
+                .messaging_transport
+                .post_json(
+                    "https://slack.com/api/chat.postMessage",
+                    &[(
+                        "authorization".to_owned(),
+                        format!("Bearer {}", secrecy::ExposeSecret::expose_secret(&token)),
+                    )],
+                    &serde_json::json!({
+                        "channel": external.conversation_id,
+                        "text": truncated,
+                    }),
+                    false,
+                )
+                .await?;
+            if status >= 400 {
+                tracing::warn!(status, "Slack refused the reply delivery");
+            }
+        }
+        boma_domain::ChannelPlatform::Telegram => {
+            let Some(token) = app
+                .stores
+                .messaging
+                .reveal_token(context, &installation.id)
+                .await?
+            else {
+                tracing::warn!(
+                    "the Telegram installation holds no bot token; the reply stays in the thread"
+                );
+                return Ok(());
+            };
+            let url = format!(
+                "https://api.telegram.org/bot{}/sendMessage",
+                secrecy::ExposeSecret::expose_secret(&token)
+            );
+            let status = app
+                .services
+                .messaging_transport
+                .post_json(
+                    &url,
+                    &[],
+                    &serde_json::json!({
+                        "chat_id": external.conversation_id,
+                        "text": truncated,
+                    }),
+                    false,
+                )
+                .await?;
+            if status >= 400 {
+                tracing::warn!(status, "Telegram refused the reply delivery");
+            }
+        }
+        boma_domain::ChannelPlatform::Generic => {
+            let Some(reply_url) = installation.reply_url.clone() else {
+                tracing::warn!(
+                    "the generic installation declares no reply target; the reply stays in the thread"
+                );
+                return Ok(());
+            };
+            let body = serde_json::json!({
+                "conversationId": external.conversation_id,
+                "text": truncated,
+            });
+            let body_bytes = serde_json::to_vec(&body).map_err(|_| AppError::Unavailable)?;
+            let Some(secret) = app
+                .stores
+                .messaging
+                .reveal_token(context, &installation.id)
+                .await?
+            else {
+                tracing::warn!(
+                    "the generic installation holds no secret; the reply stays in the thread"
+                );
+                return Ok(());
+            };
+            let secret = secrecy::ExposeSecret::expose_secret(&secret).to_owned();
+            let Ok(mut mac) = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()) else {
+                tracing::warn!("the HMAC key is rejected; the reply stays in the thread");
+                return Ok(());
+            };
+            hmac::Mac::update(&mut mac, &body_bytes);
+            let mut signature = String::with_capacity(71);
+            signature.push_str("sha256=");
+            for byte in hmac::Mac::finalize(mac).into_bytes() {
+                use std::fmt::Write as _;
+                let _ = write!(signature, "{byte:02x}");
+            }
+            let status = app
+                .services
+                .messaging_transport
+                .post_json(
+                    &reply_url,
+                    &[("x-boma-signature".to_owned(), signature)],
+                    &body,
+                    installation.allow_private,
+                )
+                .await?;
+            if installation.allow_private {
+                let _ = app
+                    .stores
+                    .audit
+                    .append(crate::ports::NewAuditEvent {
+                        id: app.services.ids.new_id("aud"),
+                        space_id: boma_domain::SpaceId::new(installation.space_id.clone())
+                            .map_err(|_| AppError::Unavailable)?,
+                        actor_user_id: None,
+                        kind: boma_domain::AuditKind::MessagingPrivateEndpoint,
+                        target: installation.workspace_id.clone(),
+                        metadata: serde_json::json!({
+                            "conversationId": external.conversation_id,
+                            "via": "reply",
+                        }),
+                        created_at: app.services.clock.now(),
+                    })
+                    .await;
+            }
+            if status >= 400 {
+                tracing::warn!(status, "the generic platform refused the reply delivery");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parses the deployment clock's RFC 3339 answer into seconds since the epoch.
+#[doc(hidden)]
+#[must_use]
+pub fn unix_seconds(now_rfc3339: &str) -> i64 {
+    match time::OffsetDateTime::parse(now_rfc3339, &time::format_description::well_known::Rfc3339) {
+        Ok(instant) => instant.unix_timestamp(),
+        Err(_) => 0,
+    }
+}
+
+fn telegram_token_shape_ok(token: &str) -> bool {
+    let mut parts = token.split(':');
+    let Some(id) = parts.next() else { return false };
+    let Some(secret) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()) && secret.len() >= 20
+}
+
+fn validate_channel_name(name: &str) -> Result<String, AppError> {
+    let name = name.trim().to_ascii_lowercase();
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        });
+    if !ok {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the workspace name must be 1-64 of lowercase letters, digits, hyphens or underscores"
+                .to_owned(),
+        )));
+    }
+    Ok(name)
+}
+
 /// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors
@@ -4786,6 +5651,12 @@ pub async fn write_reply(
             },
         )
         .await?;
+    // An external thread's reply goes to the platform as well (REQ-048).
+    if thread.external.is_some()
+        && let Err(error) = deliver_external_reply(app, context, thread, text).await
+    {
+        tracing::warn!(%error, "the external reply could not be delivered");
+    }
     Ok(stored.message)
 }
 

@@ -1,6 +1,16 @@
 # ADR-011 — Channels: e-mail ingestion, messaging webhooks and bot webhooks as signed adapters
 
-Status: proposed (awaiting owner go)
+Status: accepted (shipped in M7; owner deferred the platform selection to the build team)
+
+Selected scope: Slack (full reference — OAuth install, HMAC-SHA256 ingress, `chat.postMessage`),
+Telegram (BotFather token install, webhook secret header), and a generic HMAC-SHA256 platform
+(Discord-class). Teams is out of scope; adding it is one adapter and one verifier on the same
+skeleton, and nothing else. Inbound routes sit behind `BOMA_MESSAGING`; absent flag, absent
+surface (404). The ingress owns signature verification, body caps (256 KiB), the clock window
+and uniform refusals; adapters translate a verified payload into `ChannelMessage`; the
+application routes it into the (bot, external conversation) thread. Replies are delivered once,
+at run end, to the conversation; there is no retry queue and no delivery acknowledgement back
+into the platform beyond the HTTP answer.
 
 ## Context
 

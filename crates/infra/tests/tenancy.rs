@@ -9,7 +9,7 @@
 mod common;
 
 use boma_app::ports::{
-    BotStore, MailStore, MessageStore, ReadStateStore, RosterStore, TicketStore,
+    BotStore, MailStore, MessageStore, MessagingStore, ReadStateStore, RosterStore, TicketStore,
 };
 use boma_domain::{SystemReason, TenantContext};
 use boma_infra::{PostgresBotStore, PostgresMessageStore, PostgresReadStateStore};
@@ -335,6 +335,88 @@ async fn req_043_a_held_mail_cannot_cross_tenants() {
         .await
         .expect("the take answers");
     assert!(taken.is_some());
+
+    common::cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn req_043_an_installation_and_an_external_thread_cannot_cross_tenants() {
+    let database = common::database().await;
+    let pool = common::tenant_pool(&database).await;
+    let prefix = common::unique_id();
+
+    let first = common::fixture(&pool, &format!("{prefix}a")).await;
+    let second = common::fixture(&pool, &format!("{prefix}b")).await;
+
+    let system = boma_domain::TenantContext::System {
+        reason: boma_domain::SystemReason::WebhookDelivery,
+        user_id: None,
+    };
+    let messaging =
+        boma_infra::PostgresMessagingStore::new(pool.clone(), boma_infra::SecretBox::ephemeral());
+
+    // The first tenant installs a generic platform and opens a conversation.
+    let created = messaging
+        .create(
+            &first.context,
+            boma_app::ports::NewMessagingInstallation {
+                id: format!("{prefix}msg"),
+                space_id: first.space_id.clone(),
+                bot_id: first.bot_id.clone(),
+                installed_by: first.user_id.clone(),
+                platform: boma_domain::ChannelPlatform::Generic,
+                workspace_id: "acme-internal".to_owned(),
+                workspace_name: String::new(),
+                token: secrecy::SecretString::from("super-secret-token".to_owned()),
+                webhook_secret: None,
+                reply_url: Some("https://hooks.example.com/reply".to_owned()),
+                allow_private: false,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the installation is written");
+    let thread = messaging
+        .resolve_external_thread(&system, &created.id, "chan_a")
+        .await
+        .expect("the external thread opens");
+
+    // The other tenant sees nothing of it.
+    let visible = messaging
+        .find(&second.context, &created.id)
+        .await
+        .expect("the read answers");
+    assert!(
+        visible.is_none(),
+        "the installation is invisible across tenants"
+    );
+    let listed = messaging
+        .list(&second.context)
+        .await
+        .expect("the list answers");
+    assert!(
+        listed.is_empty(),
+        "the installation is not listed for the other tenant"
+    );
+    let revealed = messaging
+        .reveal_token(&second.context, &created.id)
+        .await
+        .expect("the reveal answers");
+    assert!(revealed.is_none(), "the credential does not cross tenants");
+    let threads = messaging
+        .list_external_threads(&second.context, &created.id)
+        .await;
+    assert!(
+        threads.is_err(),
+        "the external threads refuse the other tenant"
+    );
+
+    // And the tenant the thread belongs to reads it fine, with a real message in it.
+    let first_thread = messaging
+        .resolve_external_thread(&system, &created.id, "chan_a")
+        .await
+        .expect("the resolution is idempotent");
+    assert_eq!(first_thread.id, thread.id);
 
     common::cleanup(&pool, &prefix).await;
 }

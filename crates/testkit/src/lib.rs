@@ -40,18 +40,18 @@ pub use memory::{
     MemoryAccountStore, MemoryArtifactContentStore, MemoryArtifactStore, MemoryAuditStore,
     MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryConnectorStore, MemoryDatabase,
     MemoryEffectStore, MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore,
-    MemoryMailStore, MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore, MemoryPageStore,
-    MemoryPendingToolCallStore, MemoryPluginInstallStore, MemoryPluginSubmissionStore,
-    MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
-    MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,
-    MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryTicketStore,
-    MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall, RecordedSkill,
-    RecordedSubmission,
+    MemoryMailStore, MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore,
+    MemoryMessagingStore, MemoryPageStore, MemoryPendingToolCallStore, MemoryPluginInstallStore,
+    MemoryPluginSubmissionStore, MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore,
+    MemoryRosterStore, MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore,
+    MemorySecretStore, MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore,
+    MemoryTicketStore, MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall,
+    RecordedSkill, RecordedSubmission,
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedConnectorRunner,
-    ScriptedIds, ScriptedMcpTransport, ScriptedOAuthClient, ScriptedPluginFetcher,
-    ScriptedProvider, ScriptedTokens,
+    ScriptedIds, ScriptedMcpTransport, ScriptedMessagingTransport, ScriptedOAuthClient,
+    ScriptedPluginFetcher, ScriptedProvider, ScriptedTokens,
 };
 
 /// The application crate, re-exported so that a test needs only one dependency.

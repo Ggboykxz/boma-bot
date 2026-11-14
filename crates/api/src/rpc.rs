@@ -29,17 +29,19 @@ use crate::{
         BoardsGetReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
         ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
         ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
-        ConnectionsRemoveReply, ConnectorView, HeldDropReply, HeldListReply, HeldMailView,
-        HeldReleaseReply, InvitationReply, MailPolicyReply, MailPolicyView,
+        ConnectionsRemoveReply, ConnectorView, ConversationView, ConversationsReply, HeldDropReply,
+        HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply, InstallTelegramReply,
+        InstallUrlReply, InstallationsReply, InvitationReply, MailPolicyReply, MailPolicyView,
         MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply,
         McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
         MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
-        MemoryWriteReply, MessagesReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply,
-        PagesShareReply, PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply,
-        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
-        RunsReply, SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply,
-        SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply, TeachSkillReply,
-        ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply, TicketView,
+        MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
+        PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
+        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
+        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
+        SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply,
+        SnoozeReply, SpaceReply, TeachSkillReply, ThreadHeadReply, TicketCommentReply,
+        TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -79,6 +81,8 @@ pub mod namespaces {
     pub const TICKETS: &str = "tickets";
     /// Mail: the bot mail rules and the held queue (REQ-047).
     pub const MAIL: &str = "mail";
+    /// Messaging: the platform installations and their conversations (REQ-048).
+    pub const MESSAGING: &str = "messaging";
 }
 
 /// Every procedure this deployment serves.
@@ -159,6 +163,12 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::MAIL, "heldList"),
         (namespaces::MAIL, "heldRelease"),
         (namespaces::MAIL, "heldDrop"),
+        (namespaces::MESSAGING, "installUrl"),
+        (namespaces::MESSAGING, "installTelegram"),
+        (namespaces::MESSAGING, "installGeneric"),
+        (namespaces::MESSAGING, "list"),
+        (namespaces::MESSAGING, "remove"),
+        (namespaces::MESSAGING, "conversations"),
     ]
 }
 
@@ -224,6 +234,10 @@ async fn rpc_inner(
     if matches!(namespace.as_str(), namespaces::BOARDS | namespaces::TICKETS)
         && !state.app().services.board_enabled
     {
+        return ApiError::not_found().into_response();
+    }
+    // The messaging surface is absent unless the deployment enabled it (REQ-048): 404, not 403.
+    if namespace.as_str() == namespaces::MESSAGING && !state.app().services.messaging_enabled {
         return ApiError::not_found().into_response();
     }
 
@@ -441,6 +455,24 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::MAIL, "heldDrop") => mail_held_drop(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MESSAGING, "installUrl") => messaging_install_url(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MESSAGING, "installTelegram") => messaging_install_telegram(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MESSAGING, "installGeneric") => messaging_install_generic(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MESSAGING, "list") => messaging_list(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MESSAGING, "remove") => messaging_remove(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MESSAGING, "conversations") => messaging_conversations(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -2672,4 +2704,172 @@ async fn mail_held_drop(
     let dropped =
         usecases::mail_held_drop(state.app(), &auth.actor.context, &request.held_id).await?;
     Ok(HeldDropReply { dropped })
+}
+
+/// The body of `messaging.installUrl`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MessagingInstallUrlRequest {
+    /// The bot the installation will belong to.
+    bot_id: String,
+    /// The platform; only `slack` installs with a handshake.
+    platform: String,
+}
+
+/// `messaging.installUrl` — the Slack OAuth URL the member opens (REQ-048).
+async fn messaging_install_url(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<InstallUrlReply, ApiError> {
+    let request: MessagingInstallUrlRequest = parse(&body)?;
+    let outcome = usecases::messaging_install_url(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.platform,
+    )
+    .await?;
+    Ok(InstallUrlReply {
+        url: outcome.authorization_url,
+    })
+}
+
+/// The body of `messaging.installTelegram`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MessagingInstallTelegramRequest {
+    /// The bot the Telegram bot will drive.
+    bot_id: String,
+    /// The token from BotFather.
+    bot_token: String,
+}
+
+/// `messaging.installTelegram` — validate the token, seal everything, register the webhook (REQ-048).
+async fn messaging_install_telegram(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<InstallTelegramReply, ApiError> {
+    let request: MessagingInstallTelegramRequest = parse(&body)?;
+    let (outcome, registered) = usecases::messaging_install_telegram(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.bot_token,
+    )
+    .await?;
+    Ok(InstallTelegramReply {
+        installation_id: outcome.installation_id,
+        bot_username: outcome.bot_username,
+        webhook_url: outcome.webhook_url,
+        webhook_secret: outcome.webhook_secret,
+        registered,
+    })
+}
+
+/// The body of `messaging.installGeneric`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MessagingInstallGenericRequest {
+    /// The bot the installation will belong to.
+    bot_id: String,
+    /// The workspace name: lowercase letters, digits, hyphens, underscores.
+    name: String,
+    /// The HTTPS reply target.
+    reply_url: String,
+    /// Whether the reply target may be a private host (audited, D-05).
+    #[serde(default)]
+    allow_private: bool,
+}
+
+/// `messaging.installGeneric` — mint the secret, return it once (REQ-048).
+async fn messaging_install_generic(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<InstallGenericReply, ApiError> {
+    let request: MessagingInstallGenericRequest = parse(&body)?;
+    let outcome = usecases::messaging_install_generic(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.name,
+        &request.reply_url,
+        request.allow_private,
+    )
+    .await?;
+    Ok(InstallGenericReply {
+        installation_id: outcome.installation_id,
+        webhook_url: outcome.webhook_url,
+        secret: outcome.secret,
+    })
+}
+
+/// `messaging.list` — the installations of this space, newest first.
+async fn messaging_list(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<InstallationsReply, ApiError> {
+    let installations = usecases::messaging_list(state.app(), &auth.actor.context).await?;
+    Ok(InstallationsReply {
+        installations: installations
+            .iter()
+            .map(MessagingInstallationView::from)
+            .collect(),
+    })
+}
+
+/// The body of `messaging.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MessagingRemoveRequest {
+    /// The installation to remove.
+    installation_id: String,
+}
+
+/// `messaging.remove` — stop the installation answering; history keeps (REQ-048).
+async fn messaging_remove(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<MessagingRemoveReply, ApiError> {
+    let request: MessagingRemoveRequest = parse(&body)?;
+    let removed =
+        usecases::messaging_remove(state.app(), &auth.actor.context, &request.installation_id)
+            .await?;
+    Ok(MessagingRemoveReply { removed })
+}
+
+/// The body of `messaging.conversations`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MessagingConversationsRequest {
+    /// The installation whose conversations to list.
+    installation_id: String,
+}
+
+/// `messaging.conversations` — the external conversations of one installation (REQ-048).
+async fn messaging_conversations(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ConversationsReply, ApiError> {
+    let request: MessagingConversationsRequest = parse(&body)?;
+    let conversations = usecases::messaging_conversations(
+        state.app(),
+        &auth.actor.context,
+        &request.installation_id,
+    )
+    .await?;
+    Ok(ConversationsReply {
+        conversations: conversations
+            .into_iter()
+            .map(|conversation| ConversationView {
+                thread_id: conversation.thread_id,
+                conversation_id: conversation.conversation_id,
+                created_at: conversation.created_at,
+            })
+            .collect(),
+    })
 }

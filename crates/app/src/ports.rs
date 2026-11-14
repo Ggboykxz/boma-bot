@@ -3022,6 +3022,283 @@ pub struct EmailInboundSettings {
     pub relay_token: secrecy::SecretString,
 }
 
+/// The Slack app credentials of this deployment (REQ-048).
+///
+/// The signing secret verifies every inbound Slack request; the client id and secret are used
+/// for the install handshake. All three come from one Slack app; a deployment without them
+/// simply cannot install Slack, and says so.
+#[derive(Debug, Clone)]
+pub struct SlackAppConfig {
+    /// The app's client id.
+    pub client_id: String,
+    /// The app's client secret.
+    pub client_secret: secrecy::SecretString,
+    /// The signing secret Slack signs every request with.
+    pub signing_secret: secrecy::SecretString,
+    /// The exact redirect URI the Slack app registers. Defaults to this deployment's callback.
+    pub redirect_uri: String,
+}
+
+/// One messaging installation as the application sees it (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagingInstallation {
+    /// The installation's id.
+    pub id: String,
+    /// The tenant it belongs to.
+    pub space_id: String,
+    /// The bot its replies come from.
+    pub bot_id: String,
+    /// Who installed it.
+    pub installed_by: String,
+    /// The platform it talks to.
+    pub platform: boma_domain::ChannelPlatform,
+    /// The platform's workspace/team id (`team_id` for Slack, the bot id for Telegram, the
+    /// member-chosen name for generic).
+    pub workspace_id: String,
+    /// The human-readable workspace name, when the platform offers one.
+    pub workspace_name: String,
+    /// The generic platform's HTTPS reply target (`None` for Slack and Telegram).
+    pub reply_url: Option<String>,
+    /// Whether the generic reply target may be a private host; always audited (D-05).
+    pub allow_private: bool,
+    /// `active` or `removed`.
+    pub status: String,
+    /// When it was created.
+    pub created_at: String,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+/// One installation to create (REQ-048).
+#[derive(Debug, Clone)]
+pub struct NewMessagingInstallation {
+    /// The installation's id.
+    pub id: String,
+    /// The tenant it belongs to.
+    pub space_id: boma_domain::SpaceId,
+    /// The bot its replies come from.
+    pub bot_id: boma_domain::BotId,
+    /// Who installed it.
+    pub installed_by: boma_domain::UserId,
+    /// The platform it talks to.
+    pub platform: boma_domain::ChannelPlatform,
+    /// The platform's workspace/team id.
+    pub workspace_id: String,
+    /// The human-readable workspace name, when the platform offers one.
+    pub workspace_name: String,
+    /// The platform credential, sealed under the space's data key on write.
+    pub token: secrecy::SecretString,
+    /// The per-installation webhook secret (Telegram), sealed the same way.
+    pub webhook_secret: Option<secrecy::SecretString>,
+    /// The generic platform's HTTPS reply target.
+    pub reply_url: Option<String>,
+    /// Whether the reply target may be a private host.
+    pub allow_private: bool,
+    /// When it is created.
+    pub created_at: String,
+}
+
+/// Messaging installations and their external threads (REQ-048).
+#[async_trait]
+pub trait MessagingStore: Send + Sync {
+    /// Creates one installation, sealing its credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the platform workspace already has an installation,
+    /// [`AppError::NotFound`] when the bot does not exist in the caller's tenant, and an error
+    /// when the store cannot answer.
+    async fn create(
+        &self,
+        context: &TenantContext,
+        installation: NewMessagingInstallation,
+    ) -> Result<MessagingInstallation, AppError>;
+
+    /// One installation by id, any status. Member-scoped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn find(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<MessagingInstallation>, AppError>;
+
+    /// The installations of one platform workspace, active only, system-scoped. The ingress
+    /// uses this to route a verified delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn find_active_by_platform_workspace(
+        &self,
+        context: &TenantContext,
+        platform: boma_domain::ChannelPlatform,
+        workspace_id: &str,
+    ) -> Result<Option<MessagingInstallation>, AppError>;
+
+    /// The installations of one workspace by id, active only, system-scoped. The ingress uses
+    /// this when the route carries the installation id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn find_active(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<MessagingInstallation>, AppError>;
+
+    /// The installations the caller's space holds, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn list(&self, context: &TenantContext) -> Result<Vec<MessagingInstallation>, AppError>;
+
+    /// Removes one installation (status `removed`). The threads keep their history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn mark_removed(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<bool, AppError>;
+
+    /// The platform credential of one installation, revealed for one delivery. The caller
+    /// must never log or return it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn reveal_token(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError>;
+
+    /// The webhook secret of one installation, revealed for one verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn reveal_webhook_secret(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError>;
+
+    /// Resolves the external thread for a conversation, creating it on first use.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::NotFound`] when the installation is unknown, removed, or its bot is
+    /// archived, and an error when the store cannot answer.
+    async fn resolve_external_thread(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+        conversation_id: &str,
+    ) -> Result<boma_domain::Thread, AppError>;
+
+    /// The external threads of one installation, newest first (REQ-048 visibility for members).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn list_external_threads(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Vec<boma_domain::Thread>, AppError>;
+
+    /// Stores the single-use state of a Slack install handshake (REQ-048).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn store_install_state(
+        &self,
+        context: &TenantContext,
+        state: &str,
+        bot_id: &boma_domain::BotId,
+        expires_at: &str,
+    ) -> Result<(), AppError>;
+
+    /// Consumes one install state, exactly once; `None` when unknown or expired.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn take_install_state(
+        &self,
+        context: &TenantContext,
+        state: &str,
+    ) -> Result<Option<InstallState>, AppError>;
+}
+
+/// One Slack install handshake, consumed exactly once (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallState {
+    /// The space the install started in.
+    pub space_id: boma_domain::SpaceId,
+    /// The bot the installation will belong to.
+    pub bot_id: boma_domain::BotId,
+    /// The member who started it.
+    pub user_id: boma_domain::UserId,
+}
+
+/// How the deployment talks to messaging platforms (REQ-048).
+///
+/// A test doubles it; a deployment wires the HTTP client. Returning the status code keeps the
+/// ingress honest: a platform refusing the call is a logged failure, never a retry loop.
+#[async_trait]
+pub trait MessagingTransport: Send + Sync {
+    /// GET JSON; used for Telegram `getMe` and Slack `oauth.v2.access` (POST instead, kept in
+    /// `post_form`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the call itself fails.
+    async fn get_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<serde_json::Value, AppError>;
+
+    /// POST form-encoded; the OAuth handshake (Slack `oauth.v2.access`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the call itself fails.
+    async fn post_form(
+        &self,
+        url: &str,
+        form: &[(String, String)],
+    ) -> Result<serde_json::Value, AppError>;
+
+    /// POST JSON; the delivery calls (Slack `chat.postMessage`, Telegram `sendMessage`, the
+    /// generic platform's reply target).
+    ///
+    /// `allow_private` applies the SSRF rules at the network boundary: a private or LAN host is
+    /// refused unless the installation opted in (D-05). The scripted double ignores it; the
+    /// deployment's HTTP client enforces it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the non-2xx status and an error when the call itself fails.
+    async fn post_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &serde_json::Value,
+        allow_private: bool,
+    ) -> Result<u16, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

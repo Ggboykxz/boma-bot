@@ -103,6 +103,7 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryPageStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryTicketStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryMailStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryMessagingStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReactionStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryReadStateStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryRosterStore::default()),
@@ -128,6 +129,7 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
                 std::sync::Arc::new(boma_testkit::ScriptedOAuthClient::new()),
                 std::sync::Arc::new(boma_testkit::MemoryArtifactContentStore::default()),
+                std::sync::Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
             ),
         ),
     )

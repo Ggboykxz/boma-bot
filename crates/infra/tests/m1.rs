@@ -9,6 +9,7 @@
 // once and in writing.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
+use hmac::{Hmac, KeyInit, Mac};
 use std::{collections::BTreeMap, sync::Arc};
 
 use boma_app::ports::IdGenerator as _;
@@ -94,6 +95,10 @@ fn app_with_scripts(
             Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresMailStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMessagingStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -125,6 +130,7 @@ fn app_with_scripts(
                 ))
                 .expect("the artifact root"),
             ),
+            Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
         ),
     )
 }
@@ -2304,6 +2310,10 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                 Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresMailStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresMessagingStore::new(
+                    pool.clone(),
+                    boma_infra::SecretBox::ephemeral(),
+                )),
                 Arc::new(PostgresReactionStore::new(pool.clone())),
                 Arc::new(PostgresReadStateStore::new(pool.clone())),
                 Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -2329,6 +2339,7 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                     boma_infra::FileArtifactContentStore::new(&content_root)
                         .expect("the artifact root"),
                 ),
+                Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
             ),
         )
     };
@@ -2774,4 +2785,238 @@ async fn req_047_a_mail_rule_and_a_held_message_round_trip_through_postgres() {
         .await
         .expect("rows removed");
     common::cleanup(&pool, "mail").await;
+}
+
+/// REQ-048: a messaging installation, its external thread and an ingress round trip through Postgres.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the round trip is the test
+async fn req_048_a_messaging_install_and_ingress_round_trip_through_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "msg4801").await;
+    let context = fixture.context.clone();
+    let bot_id = fixture.bot_id.as_str().to_owned();
+    let thread_id = fixture.thread_id.as_str().to_owned();
+    let _ = thread_id;
+
+    let publisher = Arc::new(BroadcastPublisher::default());
+    let app = App::new(
+        boma_app::Stores::new(
+            Arc::new(PostgresAccountStore::new(pool.clone())),
+            Arc::new(PostgresUserStore::new(pool.clone())),
+            Arc::new(PostgresSessionStore::new(pool.clone())),
+            Arc::new(PostgresSpaceStore::new(pool.clone())),
+            Arc::new(PostgresBotStore::new(pool.clone())),
+            Arc::new(PostgresThreadStore::new(pool.clone())),
+            Arc::new(PostgresMessageStore::new(pool.clone())),
+            Arc::new(PostgresRunStore::new(pool.clone())),
+            Arc::new(PostgresEventStore::new(pool.clone())),
+            Arc::new(PostgresInvitationStore::new(pool.clone())),
+            Arc::new(PostgresCardStore::new(pool.clone())),
+            Arc::new(PostgresPendingToolCallStore::new(pool.clone())),
+            Arc::new(PostgresEffectStore::new(pool.clone())),
+            Arc::new(PostgresToolStore::new(pool.clone())),
+            Arc::new(PostgresRateLimitStore::new(pool.clone())),
+            Arc::new(PostgresSecretStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresPluginSubmissionStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresSkillStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMcpServerStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresAuditStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresConnectorStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMailStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMessagingStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(PostgresReactionStore::new(pool.clone())),
+            Arc::new(PostgresReadStateStore::new(pool.clone())),
+            Arc::new(PostgresRosterStore::new(pool.clone())),
+            Arc::new(PostgresMemoryStore::new(pool.clone())),
+            Arc::new(PostgresRoutineStore::new(pool.clone())),
+            Arc::new(PostgresComputerStore::new(pool.clone())),
+            Arc::new(PostgresScreenCapabilityStore::new(pool.clone())),
+        ),
+        boma_app::Services::new(
+            publisher,
+            Arc::new(Argon2idHasher::default()),
+            Arc::new(TokenGenerator),
+            Arc::new(IdGenerator),
+            Arc::new(SystemClock),
+            boma_domain::model::DeploymentModels {
+                reachable: vec!["anthropic/claude-sonnet".to_owned()],
+                default: "anthropic/claude-sonnet".to_owned(),
+            },
+            Arc::new(boma_testkit::ScriptedMcpTransport::new()),
+            Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
+            Arc::new(boma_testkit::ScriptedOAuthClient::new()),
+            Arc::new(
+                boma_infra::FileArtifactContentStore::new("/tmp/boma-artifact-test-msg")
+                    .expect("the artifact root"),
+            ),
+            Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
+        )
+        .with_messaging(true),
+    );
+
+    // Install a generic platform through the use case.
+    let install = boma_app::usecases::messaging_install_generic(
+        &app,
+        &context,
+        &bot_id,
+        "acme-discord",
+        "https://hooks.example.com/boma-reply",
+        false,
+    )
+    .await
+    .expect("the install mints a secret");
+
+    // The installation is listed, and the credential reveals to the original.
+    let installations = boma_app::usecases::messaging_list(&app, &context)
+        .await
+        .expect("the installations answer");
+    assert_eq!(installations.len(), 1);
+    assert_eq!(installations[0].workspace_id, "acme-discord");
+    let revealed = app
+        .stores
+        .messaging
+        .reveal_token(&context, &install.installation_id)
+        .await
+        .expect("the reveal answers")
+        .expect("the credential is sealed");
+    assert_eq!(
+        secrecy::ExposeSecret::expose_secret(&revealed),
+        install.secret
+    );
+
+    // A signed inbound delivery starts a run in an external thread.
+    let body = br#"{"conversationId":"chan_general","userId":"user_1","text":"deploy the site","messageId":"m-1"}"#;
+    let mut mac =
+        Hmac::<sha2::Sha256>::new_from_slice(install.secret.as_bytes()).expect("any length");
+    mac.update(body);
+    let signature = format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .fold(String::new(), |mut acc, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(acc, "{byte:02x}");
+                acc
+            })
+    );
+    let headers = boma_app::usecases::IngressHeaders {
+        slack_timestamp: None,
+        slack_signature: None,
+        telegram_secret_token: None,
+        generic_signature: Some(&signature),
+    };
+    let outcome = boma_app::usecases::messaging_inbound(
+        &app,
+        boma_domain::ChannelPlatform::Generic,
+        &install.installation_id,
+        &headers,
+        body,
+    )
+    .await
+    .expect("the signed delivery is accepted");
+    assert_eq!(outcome.conversation_id, "chan_general");
+
+    // The external thread is one row kind `external` with its identity.
+    let external_threads: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT kind, external_platform, external_workspace_id, external_conversation_id
+           FROM threads WHERE id = $1",
+    )
+    .bind(&outcome.thread_id)
+    .fetch_all(&pool)
+    .await
+    .expect("the external thread answers");
+    assert_eq!(
+        external_threads,
+        vec![(
+            "external".to_owned(),
+            "generic".to_owned(),
+            "acme-discord".to_owned(),
+            "chan_general".to_owned(),
+        )]
+    );
+
+    // A second signed delivery to the same conversation reuses the thread.
+    let body2 = br#"{"conversationId":"chan_general","userId":"user_2","text":"status?"}"#;
+    let mut mac2 =
+        Hmac::<sha2::Sha256>::new_from_slice(install.secret.as_bytes()).expect("any length");
+    mac2.update(body2);
+    let signature2 = format!(
+        "sha256={}",
+        mac2.finalize()
+            .into_bytes()
+            .iter()
+            .fold(String::new(), |mut acc, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(acc, "{byte:02x}");
+                acc
+            })
+    );
+    let headers2 = boma_app::usecases::IngressHeaders {
+        slack_timestamp: None,
+        slack_signature: None,
+        telegram_secret_token: None,
+        generic_signature: Some(&signature2),
+    };
+    let second = boma_app::usecases::messaging_inbound(
+        &app,
+        boma_domain::ChannelPlatform::Generic,
+        &install.installation_id,
+        &headers2,
+        body2,
+    )
+    .await
+    .expect("the signed delivery is accepted");
+    assert_eq!(second.thread_id, outcome.thread_id);
+
+    // The stale signature over the first body is refused for the second body.
+    let third = boma_app::usecases::messaging_inbound(
+        &app,
+        boma_domain::ChannelPlatform::Generic,
+        &install.installation_id,
+        &headers,
+        body2,
+    )
+    .await;
+    assert!(third.is_err());
+
+    // Remove the installation; deliveries refuse.
+    assert!(
+        boma_app::usecases::messaging_remove(&app, &context, &install.installation_id)
+            .await
+            .expect("the removal answers")
+    );
+    let removed = boma_app::usecases::messaging_inbound(
+        &app,
+        boma_domain::ChannelPlatform::Generic,
+        &install.installation_id,
+        &headers,
+        body,
+    )
+    .await;
+    assert!(removed.is_err());
+
+    sqlx::query("DELETE FROM messaging_installations WHERE bot_id = $1")
+        .bind(&bot_id)
+        .execute(&pool)
+        .await
+        .expect("rows removed");
+    common::cleanup(&pool, "msg4801").await;
 }

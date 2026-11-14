@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{BotId, SpaceId, ThreadId, UserId};
 
+/// The external identity of a thread that is not a bot's own (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalThread {
+    /// The platform the conversation lives on.
+    pub platform: crate::messaging::ChannelPlatform,
+    /// The workspace/team the installation belongs to.
+    pub workspace_id: String,
+    /// The conversation the platform used.
+    pub conversation_id: String,
+}
+
 /// A conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Thread {
@@ -21,6 +32,8 @@ pub struct Thread {
     pub next_event_seq: i64,
     /// When it was created.
     pub created_at: String,
+    /// The external identity, for threads kind `external` (REQ-048). `None` for a bot's thread.
+    pub external: Option<ExternalThread>,
 }
 
 /// The number of messages a page may hold at most.

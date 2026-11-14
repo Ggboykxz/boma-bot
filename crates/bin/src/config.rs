@@ -48,6 +48,12 @@ pub enum ConfigError {
     /// The inbound-mail settings are half-configured or invalid.
     #[error("{0}")]
     EmailInbound(String),
+    /// The Slack app credentials are half-configured or invalid.
+    #[error("{0}")]
+    Slack(String),
+    /// The public base URL is invalid.
+    #[error("{0}")]
+    PublicBaseUrl(String),
 }
 
 /// How logs are rendered.
@@ -106,6 +112,16 @@ pub struct Config {
     ///
     /// Both or neither: a half-configured relay is a startup error, not a degraded mode.
     pub email_inbound: Option<boma_app::ports::EmailInboundSettings>,
+    /// The Slack app credentials (`BOMA_SLACK_CLIENT_ID` + `BOMA_SLACK_CLIENT_SECRET` +
+    /// `BOMA_SLACK_SIGNING_SECRET`).
+    ///
+    /// All three or none: a half-configured Slack app is a startup error. Without them the
+    /// messaging surface still exists (Telegram and generic), and Slack installs refuse with a
+    /// clear error.
+    pub slack: Option<boma_app::ports::SlackAppConfig>,
+    /// The public base URL (`BOMA_PUBLIC_BASE_URL`), used for the webhook URLs members paste
+    /// into a platform. Loopback by default for development.
+    pub public_base_url: String,
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -250,6 +266,8 @@ impl Config {
             artifact_dir: optional(&env, "BOMA_ARTIFACT_DIR"),
             board: optional_parsed(&env, "BOMA_BOARD", false)?,
             email_inbound: parse_email_inbound(&env)?,
+            slack: parse_slack(&env)?,
+            public_base_url: parse_public_base_url(&env)?,
         })
     }
 }
@@ -384,6 +402,55 @@ fn domain_shape_ok(value: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         })
+}
+
+/// Parses the Slack app credentials: all three or none (REQ-048).
+fn parse_slack(
+    env: &BTreeMap<String, String>,
+) -> Result<Option<boma_app::ports::SlackAppConfig>, ConfigError> {
+    let id = optional(env, "BOMA_SLACK_CLIENT_ID");
+    let secret = optional(env, "BOMA_SLACK_CLIENT_SECRET");
+    let signing = optional(env, "BOMA_SLACK_SIGNING_SECRET");
+    match (id, secret, signing) {
+        (Some(client_id), Some(client_secret), Some(signing_secret)) => {
+            if client_secret.len() < 8 || signing_secret.len() < 8 {
+                return Err(ConfigError::Slack(
+                    "BOMA_SLACK_CLIENT_SECRET and BOMA_SLACK_SIGNING_SECRET must not be trivially short".to_owned(),
+                ));
+            }
+            let redirect_uri = optional(env, "BOMA_SLACK_REDIRECT_URI")
+                .unwrap_or_else(|| boma_app::usecases::MESSAGING_SLACK_CALLBACK_URI.to_owned());
+            Ok(Some(boma_app::ports::SlackAppConfig {
+                client_id,
+                client_secret: secrecy::SecretString::from(client_secret),
+                signing_secret: secrecy::SecretString::from(signing_secret),
+                redirect_uri,
+            }))
+        }
+        (None, None, None) => Ok(None),
+        _ => Err(ConfigError::Slack(
+            "BOMA_SLACK_CLIENT_ID, BOMA_SLACK_CLIENT_SECRET and BOMA_SLACK_SIGNING_SECRET must be set together".to_owned(),
+        )),
+    }
+}
+
+/// Parses the public base URL: http or https, no trailing slash (REQ-048).
+fn parse_public_base_url(env: &BTreeMap<String, String>) -> Result<String, ConfigError> {
+    let Some(value) = optional(env, "BOMA_PUBLIC_BASE_URL") else {
+        return Ok("http://127.0.0.1:3000".to_owned());
+    };
+    let value = value.trim_end_matches('/').to_owned();
+    if !(value.starts_with("http://") || value.starts_with("https://")) {
+        return Err(ConfigError::PublicBaseUrl(
+            "BOMA_PUBLIC_BASE_URL must start with http:// or https://".to_owned(),
+        ));
+    }
+    if value.contains("://") && value[value.find("://").unwrap_or(0) + 3..].is_empty() {
+        return Err(ConfigError::PublicBaseUrl(
+            "BOMA_PUBLIC_BASE_URL must name a host".to_owned(),
+        ));
+    }
+    Ok(value)
 }
 
 fn parse_string_list(env: &BTreeMap<String, String>, name: &str) -> Vec<String> {

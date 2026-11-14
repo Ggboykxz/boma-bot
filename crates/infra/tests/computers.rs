@@ -48,6 +48,7 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             boma_infra::FileArtifactContentStore::new("/tmp/boma-artifact-test-computers")
                 .expect("the artifact root"),
         ),
+        Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
     )
     .with_computers(runtime);
     App::new(
@@ -87,6 +88,10 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresMailStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMessagingStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),

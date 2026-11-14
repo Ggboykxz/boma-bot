@@ -20,3 +20,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 url = "2.5.8"
 base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }

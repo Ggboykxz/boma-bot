@@ -876,6 +876,122 @@ pub struct MailPolicyView {
     pub updated_at: String,
 }
 
+/// The reply of `messaging.installUrl` (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallUrlReply {
+    /// The URL the member opens.
+    pub url: String,
+}
+
+/// The reply of `messaging.installTelegram`. The secret is shown exactly once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallTelegramReply {
+    /// The installation id.
+    pub installation_id: String,
+    /// The bot username Telegram reported.
+    pub bot_username: String,
+    /// The webhook URL to register.
+    pub webhook_url: String,
+    /// The secret Telegram presents on every delivery. Shown here only.
+    pub webhook_secret: String,
+    /// Whether `setWebhook` succeeded. When false, register the URL manually.
+    pub registered: bool,
+}
+
+/// The reply of `messaging.installGeneric`. The secret is shown exactly once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallGenericReply {
+    /// The installation id.
+    pub installation_id: String,
+    /// The webhook URL the member configures in their platform.
+    pub webhook_url: String,
+    /// The `X-Boma-Signature` secret. Shown here only.
+    pub secret: String,
+}
+
+/// One messaging installation as the member sees it (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagingInstallationView {
+    /// The installation's id.
+    pub id: String,
+    /// The platform it talks to.
+    pub platform: String,
+    /// The bot its replies come from.
+    pub bot_id: String,
+    /// The platform's workspace/team id.
+    pub workspace_id: String,
+    /// The human-readable workspace name, when the platform offers one.
+    pub workspace_name: String,
+    /// The generic platform's reply target (`None` for Slack and Telegram).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_url: Option<String>,
+    /// Whether the reply target may be a private host.
+    pub allow_private: bool,
+    /// `active` or `removed`.
+    pub status: String,
+    /// When it was created.
+    pub created_at: String,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+impl From<&boma_app::ports::MessagingInstallation> for MessagingInstallationView {
+    fn from(installation: &boma_app::ports::MessagingInstallation) -> Self {
+        Self {
+            id: installation.id.clone(),
+            platform: installation.platform.as_str().to_owned(),
+            bot_id: installation.bot_id.clone(),
+            workspace_id: installation.workspace_id.clone(),
+            workspace_name: installation.workspace_name.clone(),
+            reply_url: installation.reply_url.clone(),
+            allow_private: installation.allow_private,
+            status: installation.status.clone(),
+            created_at: installation.created_at.clone(),
+            updated_at: installation.updated_at.clone(),
+        }
+    }
+}
+
+/// The reply of `messaging.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationsReply {
+    /// The installations of the caller's space, newest first.
+    pub installations: Vec<MessagingInstallationView>,
+}
+
+/// The reply of `messaging.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagingRemoveReply {
+    /// Whether something was there to remove.
+    pub removed: bool,
+}
+
+/// One external conversation as the member sees it (REQ-048).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationView {
+    /// The external thread's id.
+    pub thread_id: String,
+    /// The conversation the platform used.
+    pub conversation_id: String,
+    /// When the conversation opened.
+    pub created_at: String,
+}
+
+/// The reply of `messaging.conversations`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationsReply {
+    /// The conversations of the installation, oldest first.
+    pub conversations: Vec<ConversationView>,
+}
+
 /// One held message as the API exposes it (REQ-047).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

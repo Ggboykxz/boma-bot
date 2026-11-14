@@ -33,7 +33,8 @@ impl ThreadStore for PostgresThreadStore {
             Box::pin(async move {
                 sqlx::query_as::<_, ThreadRow>(
                     "SELECT id, space_id, bot_id, user_id, next_message_seq, next_event_seq,
-                            boma.rfc3339(created_at) AS created_at
+                            boma.rfc3339(created_at) AS created_at, kind,
+                            external_platform, external_workspace_id, external_conversation_id
                      FROM threads
                      WHERE id = $1",
                 )
@@ -58,9 +59,10 @@ impl ThreadStore for PostgresThreadStore {
             Box::pin(async move {
                 sqlx::query_as::<_, ThreadRow>(
                     "SELECT id, space_id, bot_id, user_id, next_message_seq, next_event_seq,
-                            boma.rfc3339(created_at) AS created_at
+                            boma.rfc3339(created_at) AS created_at, kind,
+                            external_platform, external_workspace_id, external_conversation_id
                      FROM threads
-                     WHERE bot_id = $1
+                     WHERE bot_id = $1 AND kind = 'bot'
                      ORDER BY created_at ASC
                      LIMIT 1",
                 )

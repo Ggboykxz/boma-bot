@@ -429,3 +429,216 @@ pub async fn email_inbound(
         Err(_) => deny(),
     }
 }
+
+/// The per-minute allowance for messaging deliveries; a busy workspace bursts.
+const MESSAGING_PER_IP_PER_MINUTE: u64 = 600;
+
+/// The body cap of a messaging delivery (spec/04-nonfunctional.md).
+pub const MESSAGING_BODY_LIMIT: usize = 256 * 1024;
+
+/// The uniform refusal for every messaging ingress failure (REQ-048).
+fn messaging_deny() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [
+            (HeaderName::from_static("content-type"), "application/json"),
+            (HeaderName::from_static("cache-control"), "no-store"),
+        ],
+        r#"{"error": "Unauthorized."}"#,
+    )
+        .into_response()
+}
+
+/// `POST /api/v1/messaging/{platform}/inbound/{installation_id}` — one platform delivery (REQ-048).
+///
+/// The surface does not exist without `BOMA_MESSAGING`. The platform proves itself per
+/// installation (Slack: the deployment signing secret; Telegram: the installation's webhook
+/// secret; generic: an HMAC of the body). Every failure — unknown platform, unknown
+/// installation, wrong credential, malformed body — answers the same `401`.
+pub async fn messaging_inbound(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    Path((platform, installation_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !state.app().services.messaging_enabled {
+        return (
+            StatusCode::NOT_FOUND,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error": "Not found."}"#,
+        )
+            .into_response();
+    }
+    let client_ip =
+        crate::client::resolve_client_ip(peer, &headers, state.http().trusted_proxies());
+    let key = format!("messaging:{client_ip}");
+    match usecases::hit_rate_limit(state.app(), &key, 60).await {
+        Ok(decision) if decision.count > MESSAGING_PER_IP_PER_MINUTE => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (HeaderName::from_static("content-type"), "application/json"),
+                    (HeaderName::from_static("cache-control"), "no-store"),
+                ],
+                r#"{"error": "Too many requests. Try again later."}"#,
+            )
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(error) => return ApiError::from(error).into_response(),
+    }
+    let Some(platform) = boma_domain::ChannelPlatform::parse(&platform).ok() else {
+        return messaging_deny();
+    };
+    if body.len() > MESSAGING_BODY_LIMIT {
+        return messaging_deny();
+    }
+    let header = |name: &'static str| headers.get(name).and_then(|value| value.to_str().ok());
+    let ingress = usecases::IngressHeaders {
+        slack_timestamp: header("x-slack-request-timestamp"),
+        slack_signature: header("x-slack-signature"),
+        telegram_secret_token: header("x-telegram-bot-api-secret-token"),
+        generic_signature: header("x-boma-signature"),
+    };
+    // A Slack handshake is answered with the challenge, not a run.
+    if platform == boma_domain::ChannelPlatform::Slack
+        && let Some(challenge) = boma_domain::slack_url_verification_challenge(&body)
+    {
+        let expected =
+            state.app().services.slack.as_ref().map(|slack| {
+                secrecy::ExposeSecret::expose_secret(&slack.signing_secret).to_owned()
+            });
+        let ok = match (expected, ingress.slack_signature, ingress.slack_timestamp) {
+            (Some(secret), Some(signature), Some(timestamp)) => boma_domain::verify_slack(
+                secret.as_bytes(),
+                timestamp,
+                &body,
+                signature,
+                boma_app::usecases::unix_seconds(&state.app().services.clock.now()),
+            ),
+            _ => false,
+        };
+        if ok {
+            return (
+                StatusCode::OK,
+                [
+                    (HeaderName::from_static("content-type"), "application/json"),
+                    (HeaderName::from_static("cache-control"), "no-store"),
+                ],
+                serde_json::json!({ "challenge": challenge }).to_string(),
+            )
+                .into_response();
+        }
+        return messaging_deny();
+    }
+    match usecases::messaging_inbound(state.app(), platform, &installation_id, &ingress, &body)
+        .await
+    {
+        Ok(outcome) => (
+            StatusCode::OK,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            serde_json::json!({
+                "ok": true,
+                "runId": outcome.run_id,
+                "threadId": outcome.thread_id,
+                "conversationId": outcome.conversation_id,
+            })
+            .to_string(),
+        )
+            .into_response(),
+        Err(_) => messaging_deny(),
+    }
+}
+
+/// Reads the `code` and `state` out of a raw query string without pulling the `query` feature.
+fn slack_callback_params(uri: &axum::http::Uri) -> (Option<String>, Option<String>) {
+    let mut code = None;
+    let mut state = None;
+    for pair in uri.query().unwrap_or("").split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        match key {
+            "code" => code = Some(percent_decode(value)),
+            "state" => state = Some(percent_decode(value)),
+            _ => {}
+        }
+    }
+    (code, state)
+}
+
+/// Minimal percent-decoding for the two parameters Slack sends.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hex = &value[i + 1..i + 3];
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            byte => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `GET /api/v1/messaging/install/slack/callback` — Slack's redirect target (REQ-048).
+///
+/// On success the member lands back on the messaging page. The callback never explains
+/// failures: an unknown state or a refused code is the same `401`.
+pub async fn messaging_slack_callback(
+    State(state): State<AppState>,
+    uri: axum::http::Uri,
+) -> Response {
+    if !state.app().services.messaging_enabled {
+        return (
+            StatusCode::NOT_FOUND,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error": "Not found."}"#,
+        )
+            .into_response();
+    }
+    let (Some(code), Some(state_token)) = slack_callback_params(&uri) else {
+        return messaging_deny();
+    };
+    match usecases::messaging_slack_callback(state.app(), &code, &state_token).await {
+        Ok(_installation) => (
+            StatusCode::SEE_OTHER,
+            [
+                (
+                    HeaderName::from_static("location"),
+                    "/settings/messaging?installed=slack",
+                ),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            "",
+        )
+            .into_response(),
+        Err(_) => messaging_deny(),
+    }
+}

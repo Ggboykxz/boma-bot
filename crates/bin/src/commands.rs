@@ -10,7 +10,7 @@ use boma_infra::{
     PostgresArtifactStore, PostgresAuditStore, PostgresBotStore, PostgresCardStore,
     PostgresComputerStore, PostgresConnectorStore, PostgresEffectStore, PostgresEventStore,
     PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore, PostgresMemoryStore,
-    PostgresMessageStore, PostgresPageStore, PostgresPendingToolCallStore,
+    PostgresMessageStore, PostgresMessagingStore, PostgresPageStore, PostgresPendingToolCallStore,
     PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
     PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
     PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
@@ -53,6 +53,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         config.artifact_dir.as_deref(),
         config.board,
         config.email_inbound.clone(),
+        config.capabilities.messaging,
+        config.slack.clone(),
+        config.public_base_url.clone(),
     )?;
     let state = AppState::new(
         readiness,
@@ -86,6 +89,8 @@ fn secrets_vault() -> anyhow::Result<boma_infra::SecretBox> {
         .context("the secret vault could not be built")
 }
 
+#[allow(clippy::too_many_arguments)] // the deployment shape, in order
+#[allow(clippy::too_many_lines)] // the wiring is the point
 fn build_app(
     database: &Postgres,
     computer: Option<Arc<dyn ComputerRuntime>>,
@@ -93,6 +98,9 @@ fn build_app(
     config_artifact_dir: Option<&str>,
     config_board: bool,
     config_email_inbound: Option<boma_app::ports::EmailInboundSettings>,
+    config_messaging: bool,
+    config_slack: Option<boma_app::ports::SlackAppConfig>,
+    config_public_base_url: String,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -120,6 +128,10 @@ fn build_app(
     let artifact_content = Arc::new(
         boma_infra::FileArtifactContentStore::new(&artifact_root)
             .context("the artifact directory could not be prepared")?,
+    );
+    let messaging_transport = Arc::new(
+        boma_infra::HttpMessagingTransport::new()
+            .context("the messaging transport could not be built")?,
     );
     Ok(App::new(
         Stores::new(
@@ -149,6 +161,7 @@ fn build_app(
             Arc::new(PostgresPageStore::new(pool.clone())),
             Arc::new(PostgresTicketStore::new(pool.clone())),
             Arc::new(PostgresMailStore::new(pool.clone())),
+            Arc::new(PostgresMessagingStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -175,11 +188,15 @@ fn build_app(
                 plugin_fetcher,
                 oauth_client,
                 artifact_content,
+                messaging_transport,
             )
             .with_connectors(connector_runner)
             .with_stdio_commands(stdio_allowed)
             .with_board(config_board)
-            .with_email_inbound(config_email_inbound);
+            .with_email_inbound(config_email_inbound)
+            .with_messaging(config_messaging)
+            .with_slack(config_slack)
+            .with_public_base_url(config_public_base_url);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -213,6 +230,9 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         config.artifact_dir.as_deref(),
         config.board,
         config.email_inbound.clone(),
+        config.capabilities.messaging,
+        config.slack.clone(),
+        config.public_base_url.clone(),
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

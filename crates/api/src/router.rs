@@ -67,6 +67,14 @@ pub fn router(state: AppState) -> Router {
             post(public::email_inbound).route_layer(DefaultBodyLimit::max(25 * 1024 * 1024 + 1024)),
         )
         .route(
+            "/api/v1/messaging/{platform}/inbound/{installationId}",
+            post(public::messaging_inbound).route_layer(DefaultBodyLimit::max(256 * 1024 + 1024)),
+        )
+        .route(
+            "/api/v1/messaging/install/slack/callback",
+            get(public::messaging_slack_callback),
+        )
+        .route(
             "/api/v1/assets/page-runtime.js",
             get(pages::page_runtime_js),
         )

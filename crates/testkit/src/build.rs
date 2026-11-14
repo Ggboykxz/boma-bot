@@ -287,6 +287,12 @@ pub struct TestAppBuilder {
     board: bool,
     /// The inbound-mail relay settings (REQ-047).
     email_inbound: Option<(String, String)>,
+    /// Whether the messaging surface exists (REQ-048).
+    messaging: bool,
+    /// The Slack app credentials (REQ-048).
+    slack: Option<(String, String, String)>,
+    /// The scripted messaging transport (REQ-048); one is scripted for every platform call.
+    messaging_transport: Option<Arc<crate::ScriptedMessagingTransport>>,
 }
 
 impl Default for TestAppBuilder {
@@ -306,6 +312,9 @@ impl Default for TestAppBuilder {
             artifact_content: None,
             board: false,
             email_inbound: None,
+            messaging: false,
+            slack: None,
+            messaging_transport: None,
         }
     }
 }
@@ -400,6 +409,34 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with the messaging surface enabled (REQ-048).
+    #[must_use]
+    pub fn messaging(mut self, enabled: bool) -> Self {
+        self.messaging = enabled;
+        self
+    }
+
+    /// Builds the application with the Slack app credentials attached (REQ-048).
+    #[must_use]
+    pub fn slack(mut self, client_id: &str, client_secret: &str, signing_secret: &str) -> Self {
+        self.slack = Some((
+            client_id.to_owned(),
+            client_secret.to_owned(),
+            signing_secret.to_owned(),
+        ));
+        self
+    }
+
+    /// Builds the application with a scripted messaging transport (REQ-048).
+    #[must_use]
+    pub fn messaging_transport(
+        mut self,
+        transport: Arc<crate::ScriptedMessagingTransport>,
+    ) -> Self {
+        self.messaging_transport = Some(transport);
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -455,6 +492,7 @@ impl TestAppBuilder {
             Arc::new(database.pages()),
             Arc::new(database.tickets()),
             Arc::new(database.mail()),
+            Arc::new(database.messaging()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -488,6 +526,9 @@ impl TestAppBuilder {
             self.artifact_content
                 .clone()
                 .unwrap_or_else(|| Arc::new(database.artifact_content())),
+            self.messaging_transport
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::ScriptedMessagingTransport::new())),
         )
         .with_connectors(
             self.connector_runner
@@ -500,7 +541,16 @@ impl TestAppBuilder {
                 domain,
                 relay_token: secrecy::SecretString::from(relay_token),
             }
-        }));
+        }))
+        .with_messaging(self.messaging)
+        .with_slack(self.slack.clone().map(
+            |(client_id, client_secret, signing_secret)| boma_app::ports::SlackAppConfig {
+                client_id,
+                client_secret: secrecy::SecretString::from(client_secret),
+                signing_secret: secrecy::SecretString::from(signing_secret),
+                redirect_uri: boma_app::usecases::MESSAGING_SLACK_CALLBACK_URI.to_owned(),
+            },
+        ));
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
         } else if self.computers {
@@ -5069,11 +5119,12 @@ mod artifact_tests {
     use boma_app::worker::Worker;
 
     fn sha256_hex(bytes: &[u8]) -> String {
+        use std::fmt::Write as _;
+
         use sha2::{Digest, Sha256};
         let digest = Sha256::digest(bytes);
         let mut hex = String::with_capacity(64);
         for byte in digest {
-            use std::fmt::Write as _;
             write!(&mut hex, "{byte:02x}").expect("a write to a String cannot fail");
         }
         format!("sha256:{hex}")
@@ -5913,5 +5964,451 @@ mod mail_tests {
             events.iter().any(|event| event.kind == "mail.dropped"
                 && event.target == "stranger@elsewhere.example")
         );
+    }
+}
+
+#[cfg(test)]
+mod messaging_tests {
+    use std::fmt::Write as _;
+
+    // REQ-048 — messaging platforms: install flows, ingress verification, reply delivery, removal.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+    use hmac::{Hmac, KeyInit, Mac};
+
+    fn seeded_messaging_world(
+        get_responses: Vec<serde_json::Value>,
+        post_responses: Vec<serde_json::Value>,
+    ) -> (TestApp, Arc<crate::ScriptedMessagingTransport>) {
+        let transport = Arc::new(
+            crate::ScriptedMessagingTransport::new()
+                .with_get_responses(get_responses)
+                .with_post_responses(post_responses),
+        );
+        let test = TestApp::builder()
+            .messaging(true)
+            .slack("client-id-1", "client-secret-1", "signing-secret-1")
+            .messaging_transport(Arc::clone(&transport))
+            .build();
+        (test, transport)
+    }
+
+    async fn world_with_bot(
+        test: &TestApp,
+    ) -> (boma_domain::TenantContext, boma_app::usecases::BotCreated) {
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        (context, created)
+    }
+
+    #[tokio::test]
+    async fn req_048_the_slack_install_handshake_completes_exactly_once() {
+        let (test, transport) = seeded_messaging_world(
+            vec![],
+            vec![serde_json::json!({
+                "ok": true,
+                "access_token": "xoxb-y",
+                "team": { "id": "T_ACME", "name": "Acme" },
+            })],
+        );
+        let (context, created) = world_with_bot(&test).await;
+
+        let url = boma_app::usecases::messaging_install_url(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            "slack",
+        )
+        .await
+        .expect("the handshake starts");
+        assert!(url.authorization_url.contains("client-id-1"));
+        let state = url
+            .authorization_url
+            .split("state=")
+            .nth(1)
+            .expect("a state is minted")
+            .to_owned();
+
+        let installation =
+            boma_app::usecases::messaging_slack_callback(test.app(), "the-code", &state)
+                .await
+                .expect("the handshake completes");
+        assert_eq!(installation.platform, boma_domain::ChannelPlatform::Slack);
+        assert_eq!(installation.workspace_id, "T_ACME");
+
+        // The state is single-use.
+        let replayed =
+            boma_app::usecases::messaging_slack_callback(test.app(), "the-code", &state).await;
+        assert!(replayed.is_err());
+
+        let calls = transport.post_calls();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].0.contains("slack.com"));
+    }
+
+    #[tokio::test]
+    async fn req_048_a_slack_delivery_starts_a_run_and_replies_to_slack() {
+        let (test, transport) = seeded_messaging_world(
+            vec![],
+            vec![serde_json::json!({
+                "ok": true,
+                "access_token": "xoxb-y",
+                "team": { "id": "T_ACME", "name": "Acme" },
+            })],
+        );
+        let (context, created) = world_with_bot(&test).await;
+        let url = boma_app::usecases::messaging_install_url(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            "slack",
+        )
+        .await
+        .expect("the handshake starts");
+        let state = url
+            .authorization_url
+            .split("state=")
+            .nth(1)
+            .expect("a state")
+            .to_owned();
+        let installation =
+            boma_app::usecases::messaging_slack_callback(test.app(), "the-code", &state)
+                .await
+                .expect("the handshake completes");
+
+        // A signed Slack event lands in a fresh external thread and starts a run.
+        let body = br#"{"type":"event_callback","team_id":"T_ACME","event":{"type":"message","channel":"C0123","user":"U_BOSS","text":"ship the report","ts":"1700000000.0001"}}"#;
+        let signature =
+            boma_domain::slack_signature(b"signing-secret-1", &unix_now_string(&test), body);
+        let headers = boma_app::usecases::IngressHeaders {
+            slack_timestamp: Some(&unix_now_string(&test)),
+            slack_signature: Some(&signature),
+            telegram_secret_token: None,
+            generic_signature: None,
+        };
+        let outcome = boma_app::usecases::messaging_inbound(
+            test.app(),
+            boma_domain::ChannelPlatform::Slack,
+            &installation.id,
+            &headers,
+            body,
+        )
+        .await
+        .expect("the delivery is accepted");
+        assert_eq!(outcome.conversation_id, "C0123");
+
+        // A wrong signature is the same refusal as an unknown installation.
+        let bad = boma_app::usecases::IngressHeaders {
+            slack_timestamp: Some(&unix_now_string(&test)),
+            slack_signature: Some("v0=deadbeef"),
+            telegram_secret_token: None,
+            generic_signature: None,
+        };
+        let refused = boma_app::usecases::messaging_inbound(
+            test.app(),
+            boma_domain::ChannelPlatform::Slack,
+            &installation.id,
+            &bad,
+            body,
+        )
+        .await;
+        assert!(refused.is_err());
+
+        // The member sees the conversation, and the reply is delivered to Slack.
+        let conversations =
+            boma_app::usecases::messaging_conversations(test.app(), &context, &installation.id)
+                .await
+                .expect("the conversations answer");
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].conversation_id, "C0123");
+
+        let thread = test
+            .app()
+            .stores
+            .threads
+            .find(
+                &context,
+                &boma_domain::ThreadId::new(conversations[0].thread_id.clone())
+                    .expect("a thread id"),
+            )
+            .await
+            .expect("the store answers")
+            .expect("the external thread exists");
+        boma_app::usecases::deliver_external_reply(test.app(), &context, &thread, "report shipped")
+            .await
+            .expect("the delivery is accepted");
+        let posts = transport.post_json_calls();
+        assert_eq!(posts.len(), 1);
+        assert!(posts[0].0.contains("slack.com"));
+        assert_eq!(posts[0].2["text"], serde_json::json!("report shipped"));
+        assert_eq!(posts[0].2["channel"], serde_json::json!("C0123"));
+
+        // Remove the installation: deliveries now refuse, and so do new messages.
+        boma_app::usecases::messaging_remove(test.app(), &context, &installation.id)
+            .await
+            .expect("the removal answers");
+        let removed = boma_app::usecases::messaging_inbound(
+            test.app(),
+            boma_domain::ChannelPlatform::Slack,
+            &installation.id,
+            &headers,
+            body,
+        )
+        .await;
+        assert!(removed.is_err());
+    }
+
+    #[tokio::test]
+    async fn req_048_a_telegram_install_and_inbound_round_trip() {
+        let (test, transport) = seeded_messaging_world(
+            vec![serde_json::json!({
+                "ok": true,
+                "result": { "id": 424_242, "username": "boma_bot" },
+            })],
+            vec![],
+        );
+        let (context, created) = world_with_bot(&test).await;
+
+        let (outcome, registered) = boma_app::usecases::messaging_install_telegram(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            "424242:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .await
+        .expect("the install validates and seals");
+        assert!(registered);
+        assert_eq!(outcome.bot_username, "boma_bot");
+
+        // The webhook secret verifies a Telegram update.
+        let body = br#"{"update_id":7,"message":{"message_id":42,"from":{"id":424242},"chat":{"id":-100123,"type":"supergroup"},"text":"build the report"}}"#;
+        let headers = boma_app::usecases::IngressHeaders {
+            slack_timestamp: None,
+            slack_signature: None,
+            telegram_secret_token: Some(&outcome.webhook_secret),
+            generic_signature: None,
+        };
+        let result = boma_app::usecases::messaging_inbound(
+            test.app(),
+            boma_domain::ChannelPlatform::Telegram,
+            &outcome.installation_id,
+            &headers,
+            body,
+        )
+        .await
+        .expect("the delivery is accepted");
+        assert_eq!(result.conversation_id, "-100123");
+
+        // The same delivery with a wrong secret is refused.
+        let denied = boma_app::usecases::IngressHeaders {
+            slack_timestamp: None,
+            slack_signature: None,
+            telegram_secret_token: Some("wrong"),
+            generic_signature: None,
+        };
+        assert!(
+            boma_app::usecases::messaging_inbound(
+                test.app(),
+                boma_domain::ChannelPlatform::Telegram,
+                &outcome.installation_id,
+                &denied,
+                body,
+            )
+            .await
+            .is_err()
+        );
+
+        // A stranger cannot enumerate installations: an unknown id answers the same refusal.
+        let unknown = boma_app::usecases::IngressHeaders {
+            slack_timestamp: None,
+            slack_signature: None,
+            telegram_secret_token: Some(&outcome.webhook_secret),
+            generic_signature: None,
+        };
+        assert!(
+            boma_app::usecases::messaging_inbound(
+                test.app(),
+                boma_domain::ChannelPlatform::Telegram,
+                "msg_unknown",
+                &unknown,
+                body,
+            )
+            .await
+            .is_err()
+        );
+
+        // setWebhook was attempted against the http transport (scripted), token never logged.
+        let calls = transport.post_json_calls();
+        assert!(calls.iter().any(|(url, _, _)| url.contains("setWebhook")));
+    }
+
+    #[tokio::test]
+    async fn req_048_a_generic_install_mints_a_secret_and_signs_replies() {
+        let (test, transport) = seeded_messaging_world(vec![], vec![]);
+        let (context, created) = world_with_bot(&test).await;
+
+        let outcome = boma_app::usecases::messaging_install_generic(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            "acme-discord",
+            "https://hooks.example.com/boma-reply",
+            false,
+        )
+        .await
+        .expect("the install mints a secret");
+        assert!(outcome.webhook_url.contains(&outcome.installation_id));
+
+        // A signed inbound delivery starts a run.
+        let body = br#"{"conversationId":"chan_general","userId":"user_1","text":"deploy the site","messageId":"m-1"}"#;
+        let mut mac =
+            Hmac::<sha2::Sha256>::new_from_slice(outcome.secret.as_bytes()).expect("any length");
+        mac.update(body);
+        let mut signature = String::from("sha256=");
+        for byte in mac.finalize().into_bytes() {
+            let _ = write!(signature, "{byte:02x}");
+        }
+        let headers = boma_app::usecases::IngressHeaders {
+            slack_timestamp: None,
+            slack_signature: None,
+            telegram_secret_token: None,
+            generic_signature: Some(&signature),
+        };
+        let result = boma_app::usecases::messaging_inbound(
+            test.app(),
+            boma_domain::ChannelPlatform::Generic,
+            &outcome.installation_id,
+            &headers,
+            body,
+        )
+        .await
+        .expect("the signed delivery is accepted");
+        assert_eq!(result.conversation_id, "chan_general");
+
+        // A tampered body is refused.
+        let tampered = br#"{"conversationId":"chan_general","userId":"user_1","text":"deploy the OTHER site","messageId":"m-1"}"#;
+        let headers = boma_app::usecases::IngressHeaders {
+            slack_timestamp: None,
+            slack_signature: None,
+            telegram_secret_token: None,
+            generic_signature: Some(&signature),
+        };
+        assert!(
+            boma_app::usecases::messaging_inbound(
+                test.app(),
+                boma_domain::ChannelPlatform::Generic,
+                &outcome.installation_id,
+                &headers,
+                tampered,
+            )
+            .await
+            .is_err()
+        );
+
+        // The reply goes to the configured target, signed with the same secret.
+        let thread = test
+            .app()
+            .stores
+            .threads
+            .find(
+                &context,
+                &boma_domain::ThreadId::new(result.thread_id.clone()).expect("a thread id"),
+            )
+            .await
+            .expect("the store answers")
+            .expect("the external thread exists");
+        boma_app::usecases::deliver_external_reply(test.app(), &context, &thread, "deployed")
+            .await
+            .expect("the delivery is accepted");
+        let posts = transport.post_json_calls();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].0, "https://hooks.example.com/boma-reply");
+        let sent_signature = posts[0]
+            .1
+            .iter()
+            .find(|(name, _)| name == "x-boma-signature")
+            .map(|(_, value)| value.clone())
+            .expect("the reply is signed");
+        let body_bytes = serde_json::to_vec(&posts[0].2).expect("the body serialises");
+        let mut check =
+            Hmac::<sha2::Sha256>::new_from_slice(outcome.secret.as_bytes()).expect("any length");
+        check.update(&body_bytes);
+        let mut expected = String::from("sha256=");
+        for byte in check.finalize().into_bytes() {
+            let _ = write!(expected, "{byte:02x}");
+        }
+        assert_eq!(sent_signature, expected);
+
+        // An http (non-TLS) reply target is refused at install time.
+        let refused = boma_app::usecases::messaging_install_generic(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            "acme-http",
+            "http://hooks.example.com/boma-reply",
+            false,
+        )
+        .await;
+        assert!(refused.is_err());
+    }
+
+    #[tokio::test]
+    async fn req_048_a_private_reply_target_requires_the_opt_in_and_is_audited() {
+        let (test, _transport) = seeded_messaging_world(vec![], vec![]);
+        let (context, created) = world_with_bot(&test).await;
+
+        // HTTPS is required without the opt-in; plain HTTP is refused.
+        let refused = boma_app::usecases::messaging_install_generic(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            "acme-lan",
+            "http://192.168.0.10/hook",
+            false,
+        )
+        .await;
+        assert!(refused.is_err());
+
+        // The opt-in releases plain HTTP for the LAN, and the use is audited (D-05).
+        let accepted = boma_app::usecases::messaging_install_generic(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            "acme-lan",
+            "http://192.168.0.10/hook",
+            true,
+        )
+        .await
+        .expect("the opt-in is honored");
+        let _ = accepted;
+        let events = test.database().audit().events();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "messaging.private_endpoint"
+                    && event.target == "acme-lan")
+        );
+    }
+
+    fn unix_now_string(test: &TestApp) -> String {
+        // The scripted clock answers for 2026-01-01T00:00:00Z; parse it the same way the ingress does.
+        let now = test.app().services.clock.now();
+        boma_app::usecases::unix_seconds(&now).to_string()
     }
 }

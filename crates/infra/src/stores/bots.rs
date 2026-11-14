@@ -93,6 +93,7 @@ impl BotStore for PostgresBotStore {
                         next_message_seq: 1,
                         next_event_seq: 1,
                         created_at: thread.created_at,
+                        external: None,
                     },
                 ))
             })

@@ -23,6 +23,7 @@ pub mod mail;
 pub mod mcp;
 pub mod memory;
 pub mod message;
+pub mod messaging;
 pub mod model;
 pub mod page;
 pub mod plugin;
@@ -68,6 +69,11 @@ pub use message::{
     Block, Message, MessagePage, MessageRole, Reaction, cursor_from_seq, parse_cursor,
     validate_message_text,
 };
+pub use messaging::{
+    ChannelMessage, ChannelPlatform, external_key, parse_generic_message, parse_slack_event,
+    parse_telegram_update, slack_signature, slack_url_verification_challenge, verify_generic,
+    verify_slack, verify_telegram,
+};
 pub use model::{DeploymentModels, ModelChoice, ModelPreferences, resolve};
 pub use page::{PageBlock, PageSource, validate_page_name, validate_page_source};
 pub use plugin::{PluginSourceError, PluginSourceRef, parse_plugin_source};
@@ -82,7 +88,7 @@ pub use skill::{
     validate_skill_name,
 };
 pub use tenancy::{SystemReason, TenantContext};
-pub use thread::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Thread, validate_page_size};
+pub use thread::{DEFAULT_PAGE_SIZE, ExternalThread, MAX_PAGE_SIZE, Thread, validate_page_size};
 pub use ticket::{
     TICKET_COMMENT_MAX, TICKET_DESCRIPTION_MAX, TicketState, validate_ticket_text,
     validate_ticket_title,

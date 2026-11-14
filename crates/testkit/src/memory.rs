@@ -552,6 +552,10 @@ struct State {
     pages: Vec<PageRow>,
     /// The immutable page versions (REQ-037).
     page_versions: Vec<PageVersionRow>,
+    /// The messaging installations (REQ-048).
+    messaging_installations: Vec<MessagingInstallationRow>,
+    /// The pending Slack install handshakes (REQ-048).
+    messaging_install_states: Vec<MessagingInstallStateRow>,
     /// The mail rules of the bots (REQ-047).
     mail_rules: Vec<MailRuleRow>,
     /// The held messages (REQ-047).
@@ -823,6 +827,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn mail(&self) -> MemoryMailStore {
         MemoryMailStore::new(self)
+    }
+
+    /// The store of messaging installations (REQ-048).
+    #[must_use]
+    pub fn messaging(&self) -> MemoryMessagingStore {
+        MemoryMessagingStore::new(self)
     }
 
     /// The store of effects.
@@ -1433,6 +1443,7 @@ impl BotStore for MemoryBotStore {
             next_message_seq: 1,
             next_event_seq: 1,
             created_at: thread.created_at.clone(),
+            external: None,
         };
 
         state.bots.push(BotRow {
@@ -6785,4 +6796,385 @@ impl boma_app::ports::MailStore for MemoryMailStore {
                     .is_some_and(|user| user.user.email.as_str().eq_ignore_ascii_case(&sender))
             }))
     }
+}
+
+/// One stored installation (REQ-048). The credentials are the plaintexts the test sealed:
+/// functional double, not a crypto double.
+#[derive(Debug, Clone)]
+struct MessagingInstallationRow {
+    /// The installation (public fields).
+    installation: boma_app::ports::MessagingInstallation,
+    /// The platform credential.
+    token: String,
+    /// The webhook secret, when the platform has one.
+    webhook_secret: Option<String>,
+}
+
+/// One pending Slack install handshake (REQ-048).
+#[derive(Debug, Clone)]
+struct MessagingInstallStateRow {
+    /// The state the browser presents on the redirect.
+    state: String,
+    /// The space the flow started in.
+    space_id: SpaceId,
+    /// The bot the installation will belong to.
+    bot_id: BotId,
+    /// The member who started it.
+    user_id: UserId,
+    /// When the state stops being valid. The memory double skips the expiry check; the
+    /// Postgres store enforces it in SQL. Consumed once either way.
+    #[allow(dead_code)]
+    expires_at: String,
+}
+
+fn messaging_installation(
+    row: &MessagingInstallationRow,
+) -> boma_app::ports::MessagingInstallation {
+    row.installation.clone()
+}
+
+/// The store of messaging installations and external threads (REQ-048).
+#[derive(Debug, Clone)]
+pub struct MemoryMessagingStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryMessagingStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The installations the test stored.
+    #[must_use]
+    pub fn installations(&self) -> Vec<boma_app::ports::MessagingInstallation> {
+        let state = read(&self.state);
+        state
+            .messaging_installations
+            .iter()
+            .map(messaging_installation)
+            .collect()
+    }
+}
+
+impl Default for MemoryMessagingStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::MessagingStore for MemoryMessagingStore {
+    async fn create(
+        &self,
+        context: &TenantContext,
+        installation: boma_app::ports::NewMessagingInstallation,
+    ) -> Result<boma_app::ports::MessagingInstallation, AppError> {
+        let (space_id, _user_id) = match context {
+            TenantContext::Member { space_id, user_id } => (space_id.clone(), user_id.clone()),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let bot_id = installation.bot_id.clone();
+        {
+            let state = read(&self.state);
+            if !state.bots.iter().any(|row| {
+                row.bot.id == bot_id && row.bot.space_id == space_id && !row.bot.is_archived()
+            }) {
+                return Err(AppError::NotFound);
+            }
+            if state.messaging_installations.iter().any(|row| {
+                row.installation.platform == installation.platform
+                    && row.installation.workspace_id == installation.workspace_id
+            }) {
+                return Err(AppError::Conflict);
+            }
+        }
+        let record = boma_app::ports::MessagingInstallation {
+            id: installation.id.clone(),
+            space_id: space_id.as_str().to_owned(),
+            bot_id: bot_id.as_str().to_owned(),
+            installed_by: installation.installed_by.as_str().to_owned(),
+            platform: installation.platform,
+            workspace_id: installation.workspace_id.clone(),
+            workspace_name: installation.workspace_name.clone(),
+            reply_url: installation.reply_url.clone(),
+            allow_private: installation.allow_private,
+            status: "active".to_owned(),
+            created_at: installation.created_at.clone(),
+            updated_at: installation.created_at.clone(),
+        };
+        let mut state = write(&self.state);
+        state
+            .messaging_installations
+            .push(MessagingInstallationRow {
+                installation: record.clone(),
+                token: secrecy::ExposeSecret::expose_secret(&installation.token).to_owned(),
+                webhook_secret: installation
+                    .webhook_secret
+                    .map(|secret| secrecy::ExposeSecret::expose_secret(&secret).to_owned()),
+            });
+        Ok(record)
+    }
+
+    async fn find(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<boma_app::ports::MessagingInstallation>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .messaging_installations
+            .iter()
+            .find(|row| {
+                row.installation.id == installation_id
+                    && match context {
+                        TenantContext::Member { space_id, .. } => {
+                            row.installation.space_id == space_id.as_str()
+                        }
+                        TenantContext::System { .. } => true,
+                    }
+            })
+            .map(messaging_installation))
+    }
+
+    async fn find_active_by_platform_workspace(
+        &self,
+        _context: &TenantContext,
+        platform: boma_domain::ChannelPlatform,
+        workspace_id: &str,
+    ) -> Result<Option<boma_app::ports::MessagingInstallation>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .messaging_installations
+            .iter()
+            .find(|row| {
+                row.installation.platform == platform
+                    && row.installation.workspace_id == workspace_id
+                    && row.installation.status == "active"
+            })
+            .map(messaging_installation))
+    }
+
+    async fn find_active(
+        &self,
+        _context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<boma_app::ports::MessagingInstallation>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .messaging_installations
+            .iter()
+            .find(|row| {
+                row.installation.id == installation_id && row.installation.status == "active"
+            })
+            .map(messaging_installation))
+    }
+
+    async fn list(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::MessagingInstallation>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.as_str().to_owned(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .messaging_installations
+            .iter()
+            .filter(|row| row.installation.space_id == space_id)
+            .map(messaging_installation)
+            .collect())
+    }
+
+    async fn mark_removed(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.as_str().to_owned(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state = write(&self.state);
+        let Some(row) = state.messaging_installations.iter_mut().find(|row| {
+            row.installation.id == installation_id
+                && row.installation.space_id == space_id
+                && row.installation.status == "active"
+        }) else {
+            return Ok(false);
+        };
+        "removed".clone_into(&mut row.installation.status);
+        Ok(true)
+    }
+
+    async fn reveal_token(
+        &self,
+        _context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .messaging_installations
+            .iter()
+            .find(|row| row.installation.id == installation_id)
+            .map(|row| secrecy::SecretString::from(row.token.clone())))
+    }
+
+    async fn reveal_webhook_secret(
+        &self,
+        _context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .messaging_installations
+            .iter()
+            .find(|row| row.installation.id == installation_id)
+            .and_then(|row| row.webhook_secret.clone().map(secrecy::SecretString::from)))
+    }
+
+    async fn resolve_external_thread(
+        &self,
+        _context: &TenantContext,
+        installation_id: &str,
+        conversation_id: &str,
+    ) -> Result<boma_domain::Thread, AppError> {
+        let (platform, workspace_id, bot_id, owner, space_id) = {
+            let state = read(&self.state);
+            let Some(row) = state.messaging_installations.iter().find(|row| {
+                row.installation.id == installation_id && row.installation.status == "active"
+            }) else {
+                return Err(AppError::NotFound);
+            };
+            let bot_id =
+                BotId::new(row.installation.bot_id.clone()).map_err(|_| AppError::NotFound)?;
+            let Some(bot_row) = state
+                .bots
+                .iter()
+                .find(|candidate| candidate.bot.id == bot_id)
+                .filter(|candidate| !candidate.bot.is_archived())
+            else {
+                return Err(AppError::NotFound);
+            };
+            (
+                row.installation.platform,
+                row.installation.workspace_id.clone(),
+                bot_id,
+                bot_row.bot.user_id.clone(),
+                bot_row.bot.space_id.clone(),
+            )
+        };
+        let mut state = write(&self.state);
+        if let Some(row) = state.threads.iter().find(|row| {
+            row.thread.external.as_ref().is_some_and(|external| {
+                external.platform == platform
+                    && external.workspace_id == workspace_id
+                    && external.conversation_id == conversation_id
+            })
+        }) {
+            return Ok(row.thread.clone());
+        }
+        let thread_id = ThreadId::new(format!("thr_ext_{}", uuid_simple()))
+            .map_err(|_| AppError::Unavailable)?;
+        let thread = boma_domain::Thread {
+            id: thread_id,
+            space_id,
+            bot_id,
+            user_id: owner,
+            next_message_seq: 1,
+            next_event_seq: 1,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            external: Some(boma_domain::ExternalThread {
+                platform,
+                workspace_id,
+                conversation_id: conversation_id.to_owned(),
+            }),
+        };
+        state.threads.push(ThreadRow {
+            thread: thread.clone(),
+        });
+        Ok(thread)
+    }
+
+    async fn list_external_threads(
+        &self,
+        context: &TenantContext,
+        installation_id: &str,
+    ) -> Result<Vec<boma_domain::Thread>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.as_str().to_owned(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let Some(installation) = state.messaging_installations.iter().find(|row| {
+            row.installation.id == installation_id && row.installation.space_id == space_id
+        }) else {
+            return Err(AppError::NotFound);
+        };
+        Ok(state
+            .threads
+            .iter()
+            .filter(|row| {
+                row.thread.external.as_ref().is_some_and(|external| {
+                    external.platform == installation.installation.platform
+                        && external.workspace_id == installation.installation.workspace_id
+                })
+            })
+            .map(|row| row.thread.clone())
+            .collect())
+    }
+
+    async fn store_install_state(
+        &self,
+        context: &TenantContext,
+        state: &str,
+        bot_id: &BotId,
+        expires_at: &str,
+    ) -> Result<(), AppError> {
+        let (space_id, user_id) = match context {
+            TenantContext::Member { space_id, user_id } => (space_id.clone(), user_id.clone()),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut rows = write(&self.state);
+        rows.messaging_install_states
+            .push(MessagingInstallStateRow {
+                state: state.to_owned(),
+                space_id,
+                bot_id: bot_id.clone(),
+                user_id,
+                expires_at: expires_at.to_owned(),
+            });
+        Ok(())
+    }
+
+    async fn take_install_state(
+        &self,
+        _context: &TenantContext,
+        state: &str,
+    ) -> Result<Option<boma_app::ports::InstallState>, AppError> {
+        let mut rows = write(&self.state);
+        let Some(position) = rows
+            .messaging_install_states
+            .iter()
+            .position(|row| row.state == state)
+        else {
+            return Ok(None);
+        };
+        let row = rows.messaging_install_states.remove(position);
+        Ok(Some(boma_app::ports::InstallState {
+            space_id: row.space_id,
+            bot_id: row.bot_id,
+            user_id: row.user_id,
+        }))
+    }
+}
+
+fn uuid_simple() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    format!("{}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }

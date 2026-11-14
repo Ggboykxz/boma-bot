@@ -524,6 +524,7 @@ pub async fn computer_app(
             boma_infra::FileArtifactContentStore::new("/tmp/boma-artifact-test-common")
                 .expect("the artifact root"),
         ),
+        Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
     )
     .with_computers(runtime);
     let app = boma_app::App::new(
@@ -563,6 +564,10 @@ pub async fn computer_app(
             Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresMailStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresMessagingStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
             Arc::new(boma_infra::PostgresReactionStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresReadStateStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresRosterStore::new(pool.clone())),

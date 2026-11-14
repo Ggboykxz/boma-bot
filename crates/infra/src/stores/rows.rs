@@ -80,6 +80,14 @@ pub(crate) struct ThreadRow {
     pub(crate) next_message_seq: i64,
     pub(crate) next_event_seq: i64,
     pub(crate) created_at: String,
+    /// `bot` or `external` (REQ-048).
+    pub(crate) kind: String,
+    /// The external platform, for `external` threads.
+    pub(crate) external_platform: Option<String>,
+    /// The external workspace/team, for `external` threads.
+    pub(crate) external_workspace_id: Option<String>,
+    /// The external conversation, for `external` threads.
+    pub(crate) external_conversation_id: Option<String>,
 }
 
 /// A row of `messages`.
@@ -274,6 +282,15 @@ pub(crate) fn thread(row: ThreadRow) -> Result<Thread, AppError> {
         next_message_seq: row.next_message_seq,
         next_event_seq: row.next_event_seq,
         created_at: row.created_at,
+        external: (row.kind == "external").then(|| boma_domain::ExternalThread {
+            platform: match row.external_platform.as_deref() {
+                Some("slack") => boma_domain::ChannelPlatform::Slack,
+                Some("telegram") => boma_domain::ChannelPlatform::Telegram,
+                _ => boma_domain::ChannelPlatform::Generic,
+            },
+            workspace_id: row.external_workspace_id.clone().unwrap_or_default(),
+            conversation_id: row.external_conversation_id.clone().unwrap_or_default(),
+        }),
     })
 }
 

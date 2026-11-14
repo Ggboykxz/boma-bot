@@ -12,11 +12,11 @@ use crate::{
     ports::{
         AccountStore, ArtifactStore, AuditStore, BotStore, CardStore, Clock, ComputerStore,
         ConnectorStore, EffectStore, EventPublisher, EventStore, IdGenerator, InvitationStore,
-        MailStore, McpServerStore, MemoryStore, MessageStore, PageStore, PasswordHasher,
-        PendingToolCallStore, PluginInstallStore, PluginSubmissionStore, RateLimitStore,
-        ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore, ScreenCapabilityStore,
-        SecretStore, SessionStore, SkillStore, SpaceStore, ThreadStore, TicketStore,
-        TokenGenerator, ToolStore, UserStore,
+        MailStore, McpServerStore, MemoryStore, MessageStore, MessagingStore, PageStore,
+        PasswordHasher, PendingToolCallStore, PluginInstallStore, PluginSubmissionStore,
+        RateLimitStore, ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore,
+        ScreenCapabilityStore, SecretStore, SessionStore, SkillStore, SpaceStore, ThreadStore,
+        TicketStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -69,6 +69,8 @@ pub struct Stores {
     pub pages: Arc<dyn PageStore>,
     /// The inbound-mail rules and held messages (REQ-047).
     pub mail: Arc<dyn MailStore>,
+    /// The messaging installations and their external threads (REQ-048).
+    pub messaging: Arc<dyn MessagingStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -125,6 +127,7 @@ impl Stores {
         pages: Arc<dyn PageStore>,
         tickets: Arc<dyn TicketStore>,
         mail: Arc<dyn MailStore>,
+        messaging: Arc<dyn MessagingStore>,
         reactions: Arc<dyn ReactionStore>,
         read_states: Arc<dyn ReadStateStore>,
         roster: Arc<dyn RosterStore>,
@@ -157,6 +160,7 @@ impl Stores {
             artifacts,
             pages,
             mail,
+            messaging,
             tickets,
             effects,
             tools,
@@ -210,6 +214,20 @@ pub struct Services {
     /// The OAuth client for MCP servers (REQ-033); a test doubles it, a deployment wires the
     /// form-encoded token-endpoint client.
     pub oauth_client: Arc<dyn crate::ports::OAuthClient>,
+    /// The messaging transport (REQ-048): a test doubles it, a deployment wires the HTTP
+    /// client. The flag gates the surface, not the transport.
+    pub messaging_transport: Arc<dyn crate::ports::MessagingTransport>,
+    /// The Slack app credentials (REQ-048). `None` means Slack is not configured for this
+    /// deployment: installs refuse with a clear error, and inbound Slack deliveries cannot
+    /// verify.
+    pub slack: Option<crate::ports::SlackAppConfig>,
+    /// Whether the messaging surface exists (`BOMA_MESSAGING`). Off by default: without the
+    /// flag the messaging routes and procedures answer 404, signed in or not.
+    pub messaging_enabled: bool,
+    /// The public base URL this deployment is reached at, for webhooks members must paste into
+    /// a platform (REQ-048). A loopback default for development; set it in every deployment
+    /// that installs a messaging platform.
+    pub public_base_url: String,
     /// The out-of-band artifact bytes (REQ-036). Content-addressed; a test doubles it with a
     /// RAM map, a deployment wires the filesystem store.
     pub artifact_content: Arc<dyn crate::ports::ArtifactContentStore>,
@@ -230,6 +248,7 @@ impl Services {
         plugin_fetcher: Arc<dyn crate::ports::PluginFetcher>,
         oauth_client: Arc<dyn crate::ports::OAuthClient>,
         artifact_content: Arc<dyn crate::ports::ArtifactContentStore>,
+        messaging_transport: Arc<dyn crate::ports::MessagingTransport>,
     ) -> Self {
         Self {
             publisher,
@@ -247,6 +266,10 @@ impl Services {
             plugin_fetcher,
             oauth_client,
             artifact_content,
+            messaging_transport,
+            slack: None,
+            messaging_enabled: false,
+            public_base_url: "http://127.0.0.1:3000".to_owned(),
         }
     }
 
@@ -293,6 +316,27 @@ impl Services {
         settings: Option<crate::ports::EmailInboundSettings>,
     ) -> Self {
         self.email_inbound = settings;
+        self
+    }
+
+    /// Builds the services with the messaging surface enabled or not (REQ-048).
+    #[must_use]
+    pub fn with_messaging(mut self, enabled: bool) -> Self {
+        self.messaging_enabled = enabled;
+        self
+    }
+
+    /// Builds the services with the Slack app credentials attached (REQ-048).
+    #[must_use]
+    pub fn with_slack(mut self, slack: Option<crate::ports::SlackAppConfig>) -> Self {
+        self.slack = slack;
+        self
+    }
+
+    /// Builds the services with the public base URL attached (REQ-048).
+    #[must_use]
+    pub fn with_public_base_url(mut self, url: String) -> Self {
+        self.public_base_url = url;
         self
     }
 }
