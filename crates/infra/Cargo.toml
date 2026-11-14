@@ -19,7 +19,6 @@ base64 = { workspace = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
-hmac = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { workspace = true }
 subtle = { workspace = true }
@@ -43,6 +42,7 @@ url = "2.5.8"
 
 [dev-dependencies]
 boma-testkit = { workspace = true }
+hmac = { workspace = true }
 futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 wiremock = "0.6.5"
