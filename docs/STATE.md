@@ -86,8 +86,9 @@ run to conclusion and reports it.
 
 **M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
 
-**M6 — complete locally (pending CI). Slices 1–4 committed: REQ-036 (`c369833`), REQ-037
-(`33cf6eb`), REQ-039 (`06d41c1`), REQ-038 (in this revision).**
+**M6 — complete. Four slices committed and CI green: REQ-036 (`c369833`, run 50),
+REQ-037 (`33cf6eb`, run 51), REQ-039 (`06d41c1`, run 52), REQ-038 (`23d3fca`, run 53 — rust,
+compose, web all success). 386 tests locally green plus docker-gated suites green in CI.**
 
 4. **REQ-038 (ticket board, COULD, feature-flagged) — slice 4.** `BOMA_BOARD=true` enables
    the surface; unset/false (default) it is absent — `boards.get` and `tickets.*` answer 404
