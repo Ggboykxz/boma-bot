@@ -855,6 +855,73 @@ pub struct MarketplaceSubmitReply {
     pub id: String,
 }
 
+/// One ticket of the board as the API exposes it (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketView {
+    /// The ticket's id.
+    pub id: String,
+    /// The human-facing key: `BOT-<n>`.
+    pub key: String,
+    /// What to do.
+    pub title: String,
+    /// Longer context.
+    pub description: String,
+    /// The board column.
+    pub state: String,
+    /// The assigned bot, when one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_bot_id: Option<String>,
+    /// The number of comments.
+    pub comment_count: i32,
+    /// When it was created.
+    pub created_at: String,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+/// The reply of `boards.get`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardsGetReply {
+    /// Every ticket of the space, in key order.
+    pub tickets: Vec<TicketView>,
+}
+
+/// The reply of `tickets.create` and `tickets.move`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketReply {
+    /// The ticket.
+    pub ticket: TicketView,
+}
+
+/// One comment as the API exposes it (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketCommentView {
+    /// The comment's id.
+    pub id: String,
+    /// The ticket it belongs to.
+    pub ticket_id: String,
+    /// `member` or `bot`.
+    pub author_kind: String,
+    /// Who wrote it.
+    pub author_id: String,
+    /// The body.
+    pub body: String,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// The reply of `tickets.comment`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketCommentReply {
+    /// The comment.
+    pub comment: TicketCommentView,
+}
+
 /// The reply of `pages.save` (REQ-037).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

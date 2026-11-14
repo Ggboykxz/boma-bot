@@ -14,8 +14,8 @@ use boma_infra::{
     PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
     PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
     PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSkillStore,
-    PostgresSpaceStore, PostgresThreadStore, PostgresToolStore, PostgresUserStore,
-    ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore, PostgresToolStore,
+    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -51,6 +51,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         computer,
         config.stdio_allowed.clone(),
         config.artifact_dir.as_deref(),
+        config.board,
     )?;
     let state = AppState::new(
         readiness,
@@ -89,6 +90,7 @@ fn build_app(
     computer: Option<Arc<dyn ComputerRuntime>>,
     stdio_allowed: Vec<String>,
     config_artifact_dir: Option<&str>,
+    config_board: bool,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -143,6 +145,7 @@ fn build_app(
             Arc::new(PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(PostgresArtifactStore::new(pool.clone())),
             Arc::new(PostgresPageStore::new(pool.clone())),
+            Arc::new(PostgresTicketStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -171,7 +174,8 @@ fn build_app(
                 artifact_content,
             )
             .with_connectors(connector_runner)
-            .with_stdio_commands(stdio_allowed);
+            .with_stdio_commands(stdio_allowed)
+            .with_board(config_board);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -203,6 +207,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         computer,
         config.stdio_allowed.clone(),
         config.artifact_dir.as_deref(),
+        config.board,
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

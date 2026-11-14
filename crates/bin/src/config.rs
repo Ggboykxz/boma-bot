@@ -95,6 +95,10 @@ pub struct Config {
     /// `None` means a per-process ephemeral directory with a warning; set it in every
     /// deployment that expects artifacts to survive a restart.
     pub artifact_dir: Option<String>,
+    /// Whether the ticket board is enabled (`BOMA_BOARD`).
+    ///
+    /// Off by default; the board surface does not exist without it.
+    pub board: bool,
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -237,6 +241,7 @@ impl Config {
             provider,
             stdio_allowed: parse_string_list(&env, "MCP_STDIO_ALLOWED_COMMANDS"),
             artifact_dir: optional(&env, "BOMA_ARTIFACT_DIR"),
+            board: optional_parsed(&env, "BOMA_BOARD", false)?,
         })
     }
 }

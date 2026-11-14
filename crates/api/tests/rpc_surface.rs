@@ -154,8 +154,8 @@ struct World {
     thread_id: String,
 }
 
-async fn world() -> World {
-    let test_app = TestApp::builder().build();
+async fn world_with_board(enabled: bool) -> World {
+    let test_app = TestApp::builder().board(enabled).build();
     let user_id = test_app
         .seed_user("person@example.com", "correct horse battery")
         .await
@@ -178,6 +178,10 @@ async fn world() -> World {
         bot_id: bot_id.as_str().to_owned(),
         thread_id: thread_id.as_str().to_owned(),
     }
+}
+
+async fn world() -> World {
+    world_with_board(false).await
 }
 
 #[tokio::test]
@@ -2656,4 +2660,146 @@ async fn req_039_the_shared_page_html_runs_only_inside_the_sandbox() {
         response.headers()["cache-control"],
         "public, max-age=31536000, immutable"
     );
+}
+
+#[tokio::test]
+async fn req_038_the_board_is_absent_when_the_deployment_does_not_enable_it() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Signed in: the board procedures answer 404, not 403, indistinguishable from absent.
+    for path in [
+        "/rpc/boards/get",
+        "/rpc/tickets/create",
+        "/rpc/tickets/move",
+        "/rpc/tickets/comment",
+    ] {
+        let response = post(
+            app_state.clone(),
+            path,
+            Some(&world.caller),
+            serde_json::json!({"title": "x"}),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "{path} must not exist"
+        );
+    }
+    // Signed out: the auth layer refuses before anything, as for every procedure.
+    let response = post(app_state, "/rpc/boards/get", None, serde_json::json!({})).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn req_038_a_member_creates_moves_and_comments_on_the_board() {
+    let world = world_with_board(true).await;
+    let app_state = state(&world.app);
+
+    // boards.get: empty to start.
+    let response = post(
+        app_state.clone(),
+        "/rpc/boards/get",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await["tickets"], serde_json::json!([]));
+
+    // tickets.create allocates keys per space, monotonic.
+    let response = post(
+        app_state.clone(),
+        "/rpc/tickets/create",
+        Some(&world.caller),
+        serde_json::json!({"title": "Write the release report"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let first = json(response).await["ticket"].clone();
+    assert_eq!(first["key"], serde_json::json!("BOT-1"));
+    assert_eq!(first["state"], serde_json::json!("backlog"));
+    let first_id = first["id"].as_str().expect("an id").to_owned();
+
+    let response = post(
+        app_state.clone(),
+        "/rpc/tickets/create",
+        Some(&world.caller),
+        serde_json::json!({"title": "Cut the release", "assigneeBotId": world.bot_id}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let second = json(response).await["ticket"].clone();
+    assert_eq!(second["key"], serde_json::json!("BOT-2"));
+    assert_eq!(second["assigneeBotId"], serde_json::json!(world.bot_id));
+
+    // An assignee outside the space is refused.
+    let response = post(
+        app_state.clone(),
+        "/rpc/tickets/create",
+        Some(&world.caller),
+        serde_json::json!({"title": "x", "assigneeBotId": "bot_does_not_exist"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Move: a bogus state is refused; an unknown ticket is not found.
+    let response = post(
+        app_state.clone(),
+        "/rpc/tickets/move",
+        Some(&world.caller),
+        serde_json::json!({"ticketId": first_id, "state": "closed"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = post(
+        app_state.clone(),
+        "/rpc/tickets/move",
+        Some(&world.caller),
+        serde_json::json!({"ticketId": "tkt_missing", "state": "done"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = post(
+        app_state.clone(),
+        "/rpc/tickets/move",
+        Some(&world.caller),
+        serde_json::json!({"ticketId": first_id, "state": "in_progress"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json(response).await["ticket"]["state"],
+        serde_json::json!("in_progress")
+    );
+
+    // Comments bump the counter atomically.
+    for _ in 0..2 {
+        let response = post(
+            app_state.clone(),
+            "/rpc/tickets/comment",
+            Some(&world.caller),
+            serde_json::json!({"ticketId": first_id, "body": "Working on it."}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // boards.get: both tickets, key order, comment count, assignment.
+    let response = post(
+        app_state,
+        "/rpc/boards/get",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    let body = json(response).await;
+    let tickets = body["tickets"].as_array().expect("a list");
+    assert_eq!(tickets.len(), 2);
+    assert_eq!(tickets[0]["key"], serde_json::json!("BOT-1"));
+    assert_eq!(tickets[0]["commentCount"], serde_json::json!(2));
+    assert_eq!(tickets[0]["state"], serde_json::json!("in_progress"));
+    assert_eq!(tickets[1]["key"], serde_json::json!("BOT-2"));
+    assert_eq!(tickets[1]["assigneeBotId"], serde_json::json!(world.bot_id));
 }

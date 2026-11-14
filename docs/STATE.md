@@ -86,7 +86,23 @@ run to conclusion and reports it.
 
 **M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
 
-**M6 — in flight. Slices 1–3 committed (`c369833`, `33cf6eb`, in this revision): REQ-036, REQ-037, REQ-039.**
+**M6 — complete locally (pending CI). Slices 1–4 committed: REQ-036 (`c369833`), REQ-037
+(`33cf6eb`), REQ-039 (`06d41c1`), REQ-038 (in this revision).**
+
+4. **REQ-038 (ticket board, COULD, feature-flagged) — slice 4.** `BOMA_BOARD=true` enables
+   the surface; unset/false (default) it is absent — `boards.get` and `tickets.*` answer 404
+   for a signed-in caller, byte-for-byte the unknown-procedure answer (an anonymous caller is
+   refused at the auth layer as for every procedure; the spec's "not found signed out" holds
+   at the HTTP route level only once the M10 screen exists — recorded honestly). When on:
+   `boards.get` (flat list, key order), `tickets.create` (`BOT-<n>` allocated in-transaction by
+   `board_state`; an assignee must be a bot of the space), `tickets.move` (closed vocabulary:
+   backlog/todo/in_progress/done), `tickets.comment` (member authorship, atomic counter).
+   RLS on `tickets`/`ticket_comments`/`board_state`; cross-tenant isolation proved against the
+   probe role (`req_043_a_ticket_cannot_cross_tenants`); the m1 PG suite pins key allocation
+   (superuser sees all rows, so visibility is not asserted there — same limit every m1 fixture
+   has). No golden exists for the board (absent upstream); contract pinned by RPC tests. A
+   ticket assigned to a bot does **not** queue a background run yet — named gap for M11
+   planning (needs a `ticket` run trigger in `RunTrigger` + the worker claim path).
 
 3. **REQ-039 (bot-built pages and dashboards, SHOULD) — slice 3.** The public shared-page
    route content-negotiates: JSON keeps the golden path; `Accept: text/html` serves a document

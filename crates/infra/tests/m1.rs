@@ -92,6 +92,7 @@ fn app_with_scripts(
             Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -2296,6 +2297,7 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                 Arc::new(boma_infra::PostgresPluginInstallStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresArtifactStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresPageStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresTicketStore::new(pool.clone())),
                 Arc::new(PostgresReactionStore::new(pool.clone())),
                 Arc::new(PostgresReadStateStore::new(pool.clone())),
                 Arc::new(PostgresRosterStore::new(pool.clone())),
@@ -2490,4 +2492,100 @@ async fn req_037_a_page_round_trip_survives_postgres() {
         .await
         .expect("rows removed");
     common::cleanup(&pool, "page").await;
+}
+
+/// REQ-038: tickets round trip through Postgres — keys are per space, comments bump the
+/// counter, and the board does not leak across spaces.
+#[tokio::test]
+async fn req_038_tickets_round_trip_through_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "tkt").await;
+    let fixture_b = common::fixture(&pool, "tk2").await;
+    let app = app(&fresh.database);
+    let context = fixture.context.clone();
+    let context_b = fixture_b.context.clone();
+
+    let first = boma_app::usecases::tickets_create(&app, &context, "First ticket", "first", None)
+        .await
+        .expect("the first ticket lands");
+    assert_eq!(first.key, "BOT-1");
+
+    let second = boma_app::usecases::tickets_create(&app, &context, "Second ticket", "", None)
+        .await
+        .expect("the second ticket lands");
+    assert_eq!(second.key, "BOT-2");
+
+    // The key counter is per space: another space counts from BOT-1.
+    let other_space_ticket =
+        boma_app::usecases::tickets_create(&app, &context_b, "Other space", "", None)
+            .await
+            .expect("the other space's ticket lands");
+    assert_eq!(other_space_ticket.key, "BOT-1");
+
+    // Move and comment, then read the board.
+    boma_app::usecases::tickets_move(&app, &context, &first.id, "in_progress")
+        .await
+        .expect("the move answers");
+    boma_app::usecases::tickets_comment(&app, &context, &first.id, "Working on it.")
+        .await
+        .expect("the comment lands");
+    boma_app::usecases::tickets_comment(&app, &context, &first.id, "Still on it.")
+        .await
+        .expect("the second comment lands");
+
+    let board = boma_app::usecases::boards_get(&app, &context)
+        .await
+        .expect("the board answers");
+    // This fixture connects as a superuser, so RLS does not filter here: every row of the
+    // database is visible. The per-space behaviour asserted here is the rest — allocation,
+    // ordering, counts. Cross-tenant *visibility* is proved in tenancy.rs against the probe
+    // role, where the policies actually apply.
+    assert_eq!(board.len(), 3);
+    let first = board
+        .iter()
+        .find(|ticket| ticket.title == "First ticket")
+        .expect("the first ticket is there");
+    assert_eq!(first.state, "in_progress");
+    assert_eq!(first.comment_count, 2);
+    let second = board
+        .iter()
+        .find(|ticket| ticket.title == "Second ticket")
+        .expect("the second ticket is there");
+    assert_eq!(second.key, "BOT-2");
+    let other = board
+        .iter()
+        .find(|ticket| ticket.title == "Other space")
+        .expect("the other space's ticket is there");
+    assert_eq!(other.key, "BOT-1");
+    assert_eq!(other.state, "backlog");
+
+    // Clean up.
+    for context in [&context, &context_b] {
+        let board = boma_app::usecases::boards_get(&app, context)
+            .await
+            .expect("the board answers");
+        for ticket in board {
+            sqlx::query("DELETE FROM ticket_comments WHERE ticket_id = $1")
+                .bind(&ticket.id)
+                .execute(&pool)
+                .await
+                .expect("comments removed");
+            sqlx::query("DELETE FROM tickets WHERE id = $1")
+                .bind(&ticket.id)
+                .execute(&pool)
+                .await
+                .expect("ticket removed");
+        }
+        sqlx::query("DELETE FROM board_state WHERE space_id = $1")
+            .bind(match context {
+                TenantContext::Member { space_id, .. } => space_id.as_str().to_owned(),
+                TenantContext::System { .. } => unreachable!(),
+            })
+            .execute(&pool)
+            .await
+            .expect("board state removed");
+    }
+    common::cleanup(&pool, "tkt").await;
+    common::cleanup(&pool, "tk2").await;
 }

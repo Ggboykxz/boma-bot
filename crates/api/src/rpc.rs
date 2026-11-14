@@ -25,19 +25,20 @@ use crate::{
     state::AppState,
     wire::{
         AnswerReply, ArtifactCreateReply, ArtifactGetReply, ArtifactListSpaceReply,
-        ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply, ArtifactView, BotReply,
-        BotsListReply, CancelReply, ComputerOpenScreenReply, ComputerProviderInfo,
-        ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply,
-        ConnectionsInstallReply, ConnectionsListReply, ConnectionsRemoveReply, ConnectorView,
-        InvitationReply, MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply,
-        McpOAuthStartReply, McpServerReply, McpServerView, McpServersListReply,
-        McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply,
-        MemoryRemoveReply, MemoryWriteReply, MessagesReply, PagesGetReply, PagesRevokeShareReply,
-        PagesSaveReply, PagesShareReply, PluginInstallView, ReactReply, RosterBotView,
-        RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply,
-        RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply, SecretView,
-        SecretsReply, SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
-        TeachSkillReply, ThreadHeadReply,
+        ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply, ArtifactView,
+        BoardsGetReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
+        ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
+        ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
+        ConnectionsRemoveReply, ConnectorView, InvitationReply, MarketplaceInstallReply,
+        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
+        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
+        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
+        MessagesReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
+        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
+        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
+        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply,
+        SkillView, SkillsReply, SnoozeReply, SpaceReply, TeachSkillReply, ThreadHeadReply,
+        TicketCommentReply, TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -71,6 +72,10 @@ pub mod namespaces {
     pub const ARTIFACTS: &str = "artifacts";
     /// Pages: block documents, shared by link (REQ-037).
     pub const PAGES: &str = "pages";
+    /// Boards: the ticket board (REQ-038). Absent when the deployment does not enable it.
+    pub const BOARDS: &str = "boards";
+    /// Tickets: the tickets of the board (REQ-038).
+    pub const TICKETS: &str = "tickets";
 }
 
 /// Every procedure this deployment serves.
@@ -142,6 +147,10 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::PAGES, "get"),
         (namespaces::PAGES, "share"),
         (namespaces::PAGES, "revokeShare"),
+        (namespaces::BOARDS, "get"),
+        (namespaces::TICKETS, "create"),
+        (namespaces::TICKETS, "move"),
+        (namespaces::TICKETS, "comment"),
     ]
 }
 
@@ -201,6 +210,14 @@ async fn rpc_inner(
         Ok(auth) => auth,
         Err(error) => return error.into_response(),
     };
+
+    // The board surface is absent unless the deployment enabled it (REQ-038): 404, not 403,
+    // indistinguishable from a procedure that does not exist.
+    if matches!(namespace.as_str(), namespaces::BOARDS | namespaces::TICKETS)
+        && !state.app().services.board_enabled
+    {
+        return ApiError::not_found().into_response();
+    }
 
     let outcome: Result<Response, ApiError> = match (namespace.as_str(), procedure.as_str()) {
         (namespaces::THREADS, "send") => send(state, auth, body)
@@ -389,6 +406,18 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::PAGES, "revokeShare") => pages_revoke_share(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOARDS, "get") => boards_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::TICKETS, "create") => tickets_create(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::TICKETS, "move") => tickets_move(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::TICKETS, "comment") => tickets_comment(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -2350,4 +2379,139 @@ async fn pages_revoke_share(
     let revoked =
         usecases::pages_revoke_share(state.app(), &auth.actor.context, &request.page_id).await?;
     Ok(PagesRevokeShareReply { revoked })
+}
+
+fn ticket_view(summary: boma_app::ports::TicketSummary) -> TicketView {
+    TicketView {
+        id: summary.id,
+        key: summary.key,
+        title: summary.title,
+        description: summary.description,
+        state: summary.state,
+        assignee_bot_id: summary.assignee_bot_id,
+        comment_count: summary.comment_count,
+        created_at: summary.created_at,
+        updated_at: summary.updated_at,
+    }
+}
+
+fn ticket_comment_view(comment: boma_app::ports::TicketComment) -> TicketCommentView {
+    TicketCommentView {
+        id: comment.id,
+        ticket_id: comment.ticket_id,
+        author_kind: comment.author_kind,
+        author_id: comment.author_id,
+        body: comment.body,
+        created_at: comment.created_at,
+    }
+}
+
+/// The body of `boards.get` (REQ-038): nothing, `{}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BoardsGetRequest {}
+
+/// `boards.get` — the tickets of this space, in key order. Absent when the flag is off.
+async fn boards_get(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<BoardsGetReply, ApiError> {
+    let _: BoardsGetRequest = parse(&body)?;
+    let tickets = usecases::boards_get(state.app(), &auth.actor.context).await?;
+    Ok(BoardsGetReply {
+        tickets: tickets.into_iter().map(ticket_view).collect(),
+    })
+}
+
+/// The body of `tickets.create` (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TicketsCreateRequest {
+    /// What to do.
+    title: String,
+    /// Longer context.
+    #[serde(default)]
+    description: String,
+    /// The bot assigned to work it, when one is.
+    #[serde(default)]
+    assignee_bot_id: Option<String>,
+}
+
+/// `tickets.create` — a new ticket with the next key of the space.
+async fn tickets_create(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<TicketReply, ApiError> {
+    let request: TicketsCreateRequest = parse(&body)?;
+    let ticket = usecases::tickets_create(
+        state.app(),
+        &auth.actor.context,
+        &request.title,
+        &request.description,
+        request.assignee_bot_id.as_deref(),
+    )
+    .await?;
+    Ok(TicketReply {
+        ticket: ticket_view(ticket),
+    })
+}
+
+/// The body of `tickets.move` (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TicketsMoveRequest {
+    /// The ticket.
+    ticket_id: String,
+    /// The new column.
+    state: String,
+}
+
+/// `tickets.move` — the ticket lands in another column.
+async fn tickets_move(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<TicketReply, ApiError> {
+    let request: TicketsMoveRequest = parse(&body)?;
+    let ticket = usecases::tickets_move(
+        state.app(),
+        &auth.actor.context,
+        &request.ticket_id,
+        &request.state,
+    )
+    .await?;
+    Ok(TicketReply {
+        ticket: ticket_view(ticket),
+    })
+}
+
+/// The body of `tickets.comment` (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TicketsCommentRequest {
+    /// The ticket.
+    ticket_id: String,
+    /// The comment.
+    body: String,
+}
+
+/// `tickets.comment` — append a comment; the counter bumps atomically.
+async fn tickets_comment(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<TicketCommentReply, ApiError> {
+    let request: TicketsCommentRequest = parse(&body)?;
+    let comment = usecases::tickets_comment(
+        state.app(),
+        &auth.actor.context,
+        &request.ticket_id,
+        &request.body,
+    )
+    .await?;
+    Ok(TicketCommentReply {
+        comment: ticket_comment_view(comment),
+    })
 }

@@ -552,6 +552,12 @@ struct State {
     pages: Vec<PageRow>,
     /// The immutable page versions (REQ-037).
     page_versions: Vec<PageVersionRow>,
+    /// The tickets of the board (REQ-038).
+    tickets: Vec<TicketRow>,
+    /// The comments on the tickets (REQ-038).
+    ticket_comments: Vec<TicketCommentRow>,
+    /// The per-space key counter (REQ-038).
+    board_seq: std::collections::HashMap<SpaceId, i32>,
     /// The pending OAuth attempts, one per server (REQ-033).
     oauth_sessions: Vec<OAuthSessionRow>,
     /// The probed tools of those servers (REQ-033).
@@ -801,6 +807,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn pages(&self) -> MemoryPageStore {
         MemoryPageStore::new(self)
+    }
+
+    /// The store of tickets (REQ-038).
+    #[must_use]
+    pub fn tickets(&self) -> MemoryTicketStore {
+        MemoryTicketStore::new(self)
     }
 
     /// The store of effects.
@@ -6294,5 +6306,225 @@ impl boma_app::ports::PageStore for MemoryPageStore {
             source: row.source.clone(),
             compiled_at: row.compiled_at.clone(),
         }))
+    }
+}
+
+/// One stored ticket (REQ-038).
+#[derive(Debug, Clone)]
+struct TicketRow {
+    /// The ticket's id.
+    id: String,
+    /// The space the ticket belongs to.
+    space_id: SpaceId,
+    /// The human-facing key.
+    key: String,
+    /// What to do.
+    title: String,
+    /// Longer context.
+    description: String,
+    /// The board column.
+    state: String,
+    /// The assigned bot, when one is.
+    assignee_bot_id: Option<String>,
+    /// Who made it.
+    created_by: UserId,
+    /// The number of comments.
+    comment_count: i32,
+    /// When it was created.
+    created_at: String,
+    /// When it last changed.
+    updated_at: String,
+}
+
+/// One stored ticket comment (REQ-038). The fake keeps the record; the ticket's counter is
+/// what the API exposes.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct TicketCommentRow {
+    /// The comment's id.
+    id: String,
+    /// The ticket it belongs to.
+    ticket_id: String,
+    /// `member` or `bot`.
+    author_kind: String,
+    /// Who wrote it.
+    author_id: String,
+    /// The body.
+    body: String,
+    /// When it was written.
+    created_at: String,
+}
+
+fn ticket_summary(row: &TicketRow) -> boma_app::ports::TicketSummary {
+    boma_app::ports::TicketSummary {
+        id: row.id.clone(),
+        key: row.key.clone(),
+        title: row.title.clone(),
+        description: row.description.clone(),
+        state: row.state.clone(),
+        assignee_bot_id: row.assignee_bot_id.clone(),
+        created_by: row.created_by.as_str().to_owned(),
+        comment_count: row.comment_count,
+        created_at: row.created_at.clone(),
+        updated_at: row.updated_at.clone(),
+    }
+}
+
+/// The store of tickets (REQ-038).
+#[derive(Debug, Clone)]
+pub struct MemoryTicketStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryTicketStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The tickets a test seeded (REQ-038).
+    #[must_use]
+    pub fn recorded(&self) -> Vec<boma_app::ports::TicketSummary> {
+        let state = read(&self.state);
+        state.tickets.iter().map(ticket_summary).collect()
+    }
+}
+
+impl Default for MemoryTicketStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::TicketStore for MemoryTicketStore {
+    async fn list(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::TicketSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        let mut rows: Vec<&TicketRow> = state
+            .tickets
+            .iter()
+            .filter(|row| row.space_id == space_id)
+            .collect();
+        rows.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(rows.into_iter().map(ticket_summary).collect())
+    }
+
+    async fn create(
+        &self,
+        context: &TenantContext,
+        ticket: boma_app::ports::NewTicket,
+    ) -> Result<boma_app::ports::TicketSummary, AppError> {
+        let (space_id, created_by) = match context {
+            TenantContext::Member { space_id, user_id } => (space_id.clone(), user_id.clone()),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        let seq = state
+            .board_seq
+            .entry(space_id.clone())
+            .and_modify(|value| *value += 1)
+            .or_insert(2);
+        let key = format!("BOT-{}", *seq - 1);
+        let row = TicketRow {
+            id: ticket.id,
+            space_id,
+            key,
+            title: ticket.title,
+            description: ticket.description,
+            state: ticket.state,
+            assignee_bot_id: ticket.assignee_bot_id,
+            created_by,
+            comment_count: 0,
+            created_at: ticket.created_at.clone(),
+            updated_at: ticket.created_at,
+        };
+        state.tickets.push(row.clone());
+        Ok(ticket_summary(&row))
+    }
+
+    async fn move_to(
+        &self,
+        context: &TenantContext,
+        ticket_id: &str,
+        state: &str,
+    ) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state_ = write(&self.state);
+        let Some(row) = state_
+            .tickets
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.id == ticket_id)
+        else {
+            return Ok(false);
+        };
+        state.clone_into(&mut row.state);
+        Ok(true)
+    }
+
+    async fn comment(
+        &self,
+        context: &TenantContext,
+        comment: boma_app::ports::NewTicketComment,
+    ) -> Result<Option<boma_app::ports::TicketComment>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let ticket_id = comment.ticket_id.clone();
+        let mut state = write(&self.state);
+        let Some(row) = state
+            .tickets
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.id == ticket_id)
+        else {
+            return Ok(None);
+        };
+        row.comment_count += 1;
+        state.ticket_comments.push(TicketCommentRow {
+            id: comment.id.clone(),
+            ticket_id: ticket_id.clone(),
+            author_kind: comment.author_kind.clone(),
+            author_id: comment.author_id.clone(),
+            body: comment.body.clone(),
+            created_at: comment.created_at.clone(),
+        });
+        Ok(Some(boma_app::ports::TicketComment {
+            id: comment.id,
+            ticket_id,
+            author_kind: comment.author_kind,
+            author_id: comment.author_id,
+            body: comment.body,
+            created_at: comment.created_at,
+        }))
+    }
+
+    async fn get(
+        &self,
+        context: &TenantContext,
+        ticket_id: &str,
+    ) -> Result<Option<boma_app::ports::TicketSummary>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .tickets
+            .iter()
+            .find(|row| row.space_id == space_id && row.id == ticket_id)
+            .map(ticket_summary))
     }
 }

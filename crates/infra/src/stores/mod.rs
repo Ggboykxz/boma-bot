@@ -33,5 +33,6 @@ pub mod sessions;
 pub mod skills;
 pub mod spaces;
 pub mod threads;
+pub mod tickets;
 pub mod tools;
 pub mod users;

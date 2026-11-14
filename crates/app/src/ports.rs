@@ -2751,6 +2751,138 @@ pub trait PageStore: Send + Sync {
     ) -> Result<Option<PageVersion>, AppError>;
 }
 
+/// One ticket of the board (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TicketSummary {
+    /// The ticket's id.
+    pub id: String,
+    /// The human-facing key: `BOT-<n>`, per space, monotonic.
+    pub key: String,
+    /// What to do.
+    pub title: String,
+    /// Longer context.
+    pub description: String,
+    /// The board column.
+    pub state: String,
+    /// The bot assigned to work it, when one is.
+    pub assignee_bot_id: Option<String>,
+    /// Who made it.
+    pub created_by: String,
+    /// The number of comments on it.
+    pub comment_count: i32,
+    /// When it was created.
+    pub created_at: String,
+    /// When it last changed.
+    pub updated_at: String,
+}
+
+/// One comment on a ticket (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TicketComment {
+    /// The comment's id.
+    pub id: String,
+    /// The ticket it belongs to.
+    pub ticket_id: String,
+    /// `member` or `bot`.
+    pub author_kind: String,
+    /// Who wrote it.
+    pub author_id: String,
+    /// The body.
+    pub body: String,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// The write payload for one ticket (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTicket {
+    /// The ticket's id.
+    pub id: String,
+    /// The board column; absent means `backlog`.
+    pub state: String,
+    /// The bot assigned to work it, when one is.
+    pub assignee_bot_id: Option<String>,
+    /// What to do.
+    pub title: String,
+    /// Longer context.
+    pub description: String,
+    /// When it was created.
+    pub created_at: String,
+}
+
+/// The write payload for one comment (REQ-038).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTicketComment {
+    /// The comment's id.
+    pub id: String,
+    /// The ticket it belongs to.
+    pub ticket_id: String,
+    /// `member` or `bot`.
+    pub author_kind: String,
+    /// Who wrote it.
+    pub author_id: String,
+    /// The body.
+    pub body: String,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// The ticket board, when the deployment enables it (REQ-038).
+#[async_trait]
+pub trait TicketStore: Send + Sync {
+    /// Every ticket of the space, key order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(&self, context: &TenantContext) -> Result<Vec<TicketSummary>, AppError>;
+
+    /// Creates a ticket, allocating the next key for the space atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn create(
+        &self,
+        context: &TenantContext,
+        ticket: NewTicket,
+    ) -> Result<TicketSummary, AppError>;
+
+    /// Moves a ticket to another column. `false` when the ticket does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn move_to(
+        &self,
+        context: &TenantContext,
+        ticket_id: &str,
+        state: &str,
+    ) -> Result<bool, AppError>;
+
+    /// Appends a comment, bumping the ticket's counter. `None` when the ticket does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn comment(
+        &self,
+        context: &TenantContext,
+        comment: NewTicketComment,
+    ) -> Result<Option<TicketComment>, AppError>;
+
+    /// One ticket by id, for the assignment checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn get(
+        &self,
+        context: &TenantContext,
+        ticket_id: &str,
+    ) -> Result<Option<TicketSummary>, AppError>;
+}
+
 /// A memory document carried into a provider turn (REQ-022).
 ///
 /// The scope grammar is the one the memory store enforces; carried, not interpreted here, so the

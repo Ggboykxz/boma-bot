@@ -78,6 +78,7 @@ pub use stores::sessions::PostgresSessionStore;
 pub use stores::skills::PostgresSkillStore;
 pub use stores::spaces::PostgresSpaceStore;
 pub use stores::threads::PostgresThreadStore;
+pub use stores::tickets::PostgresTicketStore;
 pub use stores::tools::PostgresToolStore;
 pub use stores::users::PostgresUserStore;
 pub use tenant::{TenantFuture, with_tenant};

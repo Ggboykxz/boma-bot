@@ -30,6 +30,7 @@ pub mod run;
 pub mod skill;
 pub mod tenancy;
 pub mod thread;
+pub mod ticket;
 
 pub use account::{Email, Session, Space, SpaceRole, User, validate_password};
 pub use artifact::{
@@ -80,6 +81,10 @@ pub use skill::{
 };
 pub use tenancy::{SystemReason, TenantContext};
 pub use thread::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Thread, validate_page_size};
+pub use ticket::{
+    TICKET_COMMENT_MAX, TICKET_DESCRIPTION_MAX, TicketState, validate_ticket_text,
+    validate_ticket_title,
+};
 
 /// Percent-encodes one part of a query or form (RFC 3986 unreserved survives).
 ///

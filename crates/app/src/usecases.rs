@@ -1708,6 +1708,133 @@ pub async fn artifact_remove(
     Ok(removed)
 }
 
+/// The board for this space (REQ-038), when the deployment enables it.
+///
+/// Tickets grouped by column are the client's concern; the list is flat, in key order.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn boards_get(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::TicketSummary>, AppError> {
+    app.stores.tickets.list(context).await
+}
+
+/// Creates a ticket (REQ-038). The key is `BOT-<n>`, allocated atomically in the store.
+///
+/// A `assigneeBotId` outside the space is refused; a bot of this space may be assigned freely.
+/// Assignment records intent — no background run is queued yet (see docs/STATE.md).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the title, the description or the assignee is refused, and
+/// an error when a store cannot answer.
+pub async fn tickets_create(
+    app: &App,
+    context: &TenantContext,
+    title: &str,
+    description: &str,
+    assignee_bot_id: Option<&str>,
+) -> Result<crate::ports::TicketSummary, AppError> {
+    boma_domain::validate_ticket_title(title)?;
+    boma_domain::validate_ticket_text(
+        description,
+        boma_domain::TICKET_DESCRIPTION_MAX,
+        "description",
+    )?;
+    if let Some(bot_id) = assignee_bot_id {
+        let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| {
+            AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the ticket assignee must be a bot of this space".to_owned(),
+            ))
+        })?;
+        let found = app.stores.bots.find(context, &bot_id).await?;
+        if found.is_none() {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the ticket assignee must be a bot of this space".to_owned(),
+            )));
+        }
+    }
+    let created = crate::ports::NewTicket {
+        id: app.services.ids.new_id("tkt"),
+        state: "backlog".to_owned(),
+        assignee_bot_id: assignee_bot_id.map(str::to_owned),
+        title: title.trim().to_owned(),
+        description: description.trim().to_owned(),
+        created_at: app.services.clock.now(),
+    };
+    app.stores.tickets.create(context, created).await
+}
+
+/// Moves a ticket to another column (REQ-038).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] for a value outside the state vocabulary,
+/// [`AppError::NotFound`] when the ticket does not exist, and an error when a store cannot
+/// answer.
+pub async fn tickets_move(
+    app: &App,
+    context: &TenantContext,
+    ticket_id: &str,
+    state: &str,
+) -> Result<crate::ports::TicketSummary, AppError> {
+    let state = boma_domain::TicketState::parse(state)?;
+    let moved = app
+        .stores
+        .tickets
+        .move_to(context, ticket_id, state.as_str())
+        .await?;
+    if !moved {
+        return Err(AppError::NotFound);
+    }
+    app.stores
+        .tickets
+        .get(context, ticket_id)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// Comments on a ticket (REQ-038). The author is the member making the call.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the body is refused,
+/// [`AppError::NotFound`] when the ticket does not exist, and an error when a store cannot
+/// answer.
+pub async fn tickets_comment(
+    app: &App,
+    context: &TenantContext,
+    ticket_id: &str,
+    body: &str,
+) -> Result<crate::ports::TicketComment, AppError> {
+    boma_domain::validate_ticket_text(body, boma_domain::TICKET_COMMENT_MAX, "comment")?;
+    if body.trim().is_empty() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the comment must not be empty".to_owned(),
+        )));
+    }
+    let created_by = match context {
+        TenantContext::Member { user_id, .. } => user_id.as_str().to_owned(),
+        TenantContext::System { .. } => return Err(AppError::NotFound),
+    };
+    let comment = crate::ports::NewTicketComment {
+        id: app.services.ids.new_id("tcm"),
+        ticket_id: ticket_id.to_owned(),
+        author_kind: "member".to_owned(),
+        author_id: created_by,
+        body: body.trim().to_owned(),
+        created_at: app.services.clock.now(),
+    };
+    app.stores
+        .tickets
+        .comment(context, comment)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
 /// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors

@@ -283,6 +283,8 @@ pub struct TestAppBuilder {
     oauth_client: Option<Arc<dyn boma_app::ports::OAuthClient>>,
     /// The content store to use instead of the shared in-RAM one.
     artifact_content: Option<Arc<dyn boma_app::ports::ArtifactContentStore>>,
+    /// Whether the ticket board is enabled (`BOMA_BOARD`).
+    board: bool,
 }
 
 impl Default for TestAppBuilder {
@@ -300,6 +302,7 @@ impl Default for TestAppBuilder {
             plugin_fetcher: None,
             oauth_client: None,
             artifact_content: None,
+            board: false,
         }
     }
 }
@@ -380,6 +383,13 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with the ticket board enabled (REQ-038).
+    #[must_use]
+    pub fn board(mut self, enabled: bool) -> Self {
+        self.board = enabled;
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -432,6 +442,7 @@ impl TestAppBuilder {
             Arc::new(database.plugin_installs()),
             Arc::new(database.artifacts()),
             Arc::new(database.pages()),
+            Arc::new(database.tickets()),
             Arc::new(database.reactions()),
             Arc::new(database.read_states()),
             Arc::new(database.roster()),
@@ -470,7 +481,8 @@ impl TestAppBuilder {
             self.connector_runner
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::ScriptedConnectorRunner::new())),
-        );
+        )
+        .with_board(self.board);
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
         } else if self.computers {
