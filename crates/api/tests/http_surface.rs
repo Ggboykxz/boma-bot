@@ -122,6 +122,7 @@ fn state(healthy: bool) -> AppState {
                 },
                 std::sync::Arc::new(boma_testkit::ScriptedMcpTransport::new()),
                 std::sync::Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
+                std::sync::Arc::new(boma_testkit::ScriptedOAuthClient::new()),
             ),
         ),
     )

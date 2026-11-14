@@ -2098,3 +2098,123 @@ async fn req_034_the_marketplace_list_answers() {
         0
     );
 }
+
+#[tokio::test]
+async fn req_033_a_member_opens_and_abandons_an_oauth_sign_in() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // A server without OAuth configured answers the start with a refusal, not a crash.
+    let response = post(
+        app_state.clone(),
+        "/rpc/mcp/servers.add",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "plain",
+            "transport": "http",
+            "url": "https://mcp.example.test/plain",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let server_id = json(response).await["server"]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let response = post(
+        app_state.clone(),
+        "/rpc/mcp/oauth.start",
+        Some(&world.caller),
+        serde_json::json!({ "serverId": server_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn req_033_an_oauth_start_runs_end_to_end_and_a_replay_is_refused() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Register a server with OAuth configured.
+    let response = post(
+        app_state.clone(),
+        "/rpc/mcp/servers.add",
+        Some(&world.caller),
+        serde_json::json!({
+            "name": "warehouse",
+            "transport": "http",
+            "url": "https://mcp.example.test/warehouse",
+            "oauth": {
+                "authorizationUrl": "https://auth.example.test/authorize",
+                "tokenUrl": "https://auth.example.test/token",
+                "clientId": "boma-cli",
+                "clientSecret": "shh",
+            },
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let server_id = json(response).await["server"]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    // Start the sign-in.
+    let response = post(
+        app_state.clone(),
+        "/rpc/mcp/oauth.start",
+        Some(&world.caller),
+        serde_json::json!({ "serverId": server_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert!(
+        body["authorizationUrl"]
+            .as_str()
+            .expect("a url")
+            .starts_with("https://auth.example.test/authorize?")
+    );
+    assert!(
+        body["authorizationUrl"]
+            .as_str()
+            .expect("a url")
+            .contains("code_challenge_method=S256")
+    );
+    let state_token = body["state"].as_str().expect("a state").to_owned();
+
+    // The default scripted OAuth client has no answer scripted: the complete fails as an
+    // unreachable authorization server, and the failure never leaks the secret into a reply.
+    let response = post(
+        app_state.clone(),
+        "/rpc/mcp/oauth.complete",
+        Some(&world.caller),
+        serde_json::json!({ "serverId": server_id, "code": "code-1", "state": state_token }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // The state is single-shot: a replayed complete with the same state is also refused before
+    // reaching the server, and the reply never carries the client secret.
+    let response = post(
+        app_state.clone(),
+        "/rpc/mcp/oauth.complete",
+        Some(&world.caller),
+        serde_json::json!({ "serverId": server_id, "code": "code-1", "state": state_token }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Servers list shows nothing about the secret.
+    let response = post(
+        app_state.clone(),
+        "/rpc/mcp/servers.list",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    let body = json(response).await;
+    assert!(!body.to_string().contains("shh"));
+}

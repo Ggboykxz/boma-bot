@@ -544,6 +544,8 @@ struct State {
     connector_installs: Vec<ConnectorRow>,
     /// The plugin installs a space installed (REQ-034).
     plugin_installs: Vec<PluginInstallRow>,
+    /// The pending OAuth attempts, one per server (REQ-033).
+    oauth_sessions: Vec<OAuthSessionRow>,
     /// The probed tools of those servers (REQ-033).
     mcp_server_tools: Vec<McpToolRow>,
     /// The audit events the escape hatches wrote (defect D-05).
@@ -4610,6 +4612,19 @@ impl boma_app::ports::SkillStore for MemorySkillStore {
     }
 }
 
+/// One pending OAuth attempt for an MCP server (REQ-033). Keyed one per server.
+#[derive(Debug, Clone)]
+struct OAuthSessionRow {
+    /// The server the session belongs to.
+    server_id: String,
+    /// The CSRF token handed out in the authorization URL.
+    state: String,
+    /// The verifier, held in RAM like the real store's sealed form.
+    verifier: secrecy::SecretString,
+    /// When the session expires.
+    expires_at: String,
+}
+
 /// One stored MCP server (REQ-033). Credentials never appear here in clear.
 #[derive(Debug, Clone)]
 struct McpServerRow {
@@ -4935,6 +4950,105 @@ impl boma_app::ports::McpServerStore for MemoryMcpServerStore {
             .collect();
         tools.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.name.cmp(&b.1.name)));
         Ok(tools)
+    }
+
+    async fn store_oauth_session(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        state: &str,
+        verifier: secrecy::SecretString,
+        expires_at: &str,
+    ) -> Result<(), AppError> {
+        match context {
+            TenantContext::Member { .. } => {}
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        }
+        let mut st = write(&self.state);
+        if let Some(row) = st
+            .oauth_sessions
+            .iter_mut()
+            .find(|row| row.server_id == server_id)
+        {
+            state.clone_into(&mut row.state);
+            row.verifier = verifier;
+            expires_at.clone_into(&mut row.expires_at);
+            return Ok(());
+        }
+        st.oauth_sessions.push(OAuthSessionRow {
+            server_id: server_id.to_owned(),
+            state: state.to_owned(),
+            verifier,
+            expires_at: expires_at.to_owned(),
+        });
+        Ok(())
+    }
+
+    async fn take_oauth_session(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        state: &str,
+        now: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        match context {
+            TenantContext::Member { .. } => {}
+            TenantContext::System { .. } => return Ok(None),
+        }
+        let mut st = write(&self.state);
+        let Some(index) = st
+            .oauth_sessions
+            .iter()
+            .position(|row| row.server_id == server_id && row.state == state)
+        else {
+            return Ok(None);
+        };
+        let row = st.oauth_sessions.remove(index);
+        if row.expires_at.as_str() <= now {
+            return Ok(None);
+        }
+        Ok(Some(row.verifier))
+    }
+
+    async fn reveal_client_secret(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        match context {
+            TenantContext::Member { space_id, .. } => {
+                let state = read(&self.state);
+                Ok(state
+                    .mcp_servers
+                    .iter()
+                    .find(|row| row.space_id == *space_id && row.id == server_id)
+                    .and_then(|row| row.client_secret.clone()))
+            }
+            TenantContext::System { .. } => Ok(None),
+        }
+    }
+
+    async fn store_bearer(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        bearer: secrecy::SecretString,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut st = write(&self.state);
+        let Some(row) = st
+            .mcp_servers
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.id == server_id)
+        else {
+            return Err(AppError::NotFound);
+        };
+        row.bearer_token = Some(bearer);
+        "connected".clone_into(&mut row.auth_state);
+        Ok(())
     }
 }
 

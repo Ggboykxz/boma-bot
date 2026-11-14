@@ -50,7 +50,11 @@ async fn cleanup(database: &Postgres, organization_id: &boma_domain::Organizatio
         .expect("the person is removed");
 }
 
-fn app(database: &Postgres) -> App {
+fn app_with_scripts(
+    database: &Postgres,
+    mcp_transport: Arc<dyn boma_app::ports::McpTransport>,
+    oauth_client: Arc<dyn boma_app::ports::OAuthClient>,
+) -> App {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
     App::new(
@@ -107,9 +111,18 @@ fn app(database: &Postgres) -> App {
                 ],
                 default: "anthropic/claude-sonnet".to_owned(),
             },
-            Arc::new(boma_testkit::ScriptedMcpTransport::new()),
+            mcp_transport,
             Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
+            oauth_client,
         ),
+    )
+}
+
+fn app(database: &Postgres) -> App {
+    app_with_scripts(
+        database,
+        Arc::new(boma_testkit::ScriptedMcpTransport::new()),
+        Arc::new(boma_testkit::ScriptedOAuthClient::new()),
     )
 }
 
@@ -2087,4 +2100,136 @@ async fn req_034_a_plugin_install_round_trips_through_postgres() {
         .await
         .expect("the row is removed");
     common::cleanup(&pool, "plg").await;
+}
+
+/// REQ-033: the OAuth dance against the real Postgres: the verifier is sealed at rest, the
+/// session is consumed exactly once, and the tools discovered land in `mcp_server_tools`.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the round trip is eleven ordered steps; it reads top to bottom
+async fn req_033_the_oauth_round_trip_survives_postgres() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "oauth").await;
+    let context = fixture.context.clone();
+
+    let mcp_transport = Arc::new(boma_testkit::ScriptedMcpTransport::with_tools(vec![
+        boma_app::ports::McpTool {
+            name: "query".to_owned(),
+            description: "Query the warehouse.".to_owned(),
+            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+        },
+    ]));
+    let oauth_client: Arc<dyn boma_app::ports::OAuthClient> = Arc::new(
+        boma_testkit::ScriptedOAuthClient::new().with_exchanges(vec![Ok(
+            serde_json::json!({ "access_token": "pg-token-1", "token_type": "bearer" }),
+        )]),
+    );
+    let app = app_with_scripts(&fresh.database, mcp_transport, oauth_client);
+
+    let server = boma_app::usecases::mcp_server_add(
+        &app,
+        &context,
+        "warehouse",
+        boma_domain::McpTransport::Http,
+        Some("https://mcp.example.test/warehouse".to_owned()),
+        None,
+        None,
+        false,
+        Some(boma_app::ports::McpOAuthConfig {
+            authorization_url: "https://auth.example.test/authorize".to_owned(),
+            token_url: "https://auth.example.test/token".to_owned(),
+            client_id: "boma-cli".to_owned(),
+            client_secret: None,
+        }),
+    )
+    .await
+    .expect("the server is added");
+
+    let started = boma_app::usecases::mcp_oauth_start(&app, &context, &server.id)
+        .await
+        .expect("the sign-in begins");
+
+    // The verifier is sealed at rest: the row carries no plaintext.
+    let sealed: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT sealed_verifier FROM mcp_oauth_sessions WHERE server_id = $1")
+            .bind(&server.id)
+            .fetch_one(&pool)
+            .await
+            .expect("the row exists");
+    assert!(
+        sealed
+            .expect("a sealed verifier")
+            .windows(b"verifier-1".len())
+            .all(|window| window != b"verifier-1"),
+        "the sealed verifier does not contain the plaintext"
+    );
+
+    let summary = boma_app::usecases::mcp_oauth_complete(
+        &app,
+        &context,
+        &server.id,
+        "code-1",
+        &started.state,
+    )
+    .await
+    .expect("the exchange succeeds");
+    assert_eq!(summary.auth_state, "connected");
+    assert_eq!(summary.tool_count, Some(1));
+
+    // The session row is gone: replay is refused at the database level too.
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mcp_oauth_sessions WHERE server_id = $1")
+            .bind(&server.id)
+            .fetch_one(&pool)
+            .await
+            .expect("the count answers");
+    assert_eq!(remaining, 0);
+
+    // A replay is refused before reaching the server.
+    let replay = boma_app::usecases::mcp_oauth_complete(
+        &app,
+        &context,
+        &server.id,
+        "code-2",
+        &started.state,
+    )
+    .await;
+    assert!(replay.is_err());
+
+    // The bearer is sealed: the row carries no plaintext token.
+    let sealed_bearer: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT bearer_token FROM mcp_servers WHERE id = $1")
+            .bind(&server.id)
+            .fetch_one(&pool)
+            .await
+            .expect("the row exists");
+    let bytes = sealed_bearer.expect("a sealed bearer");
+    assert!(
+        bytes
+            .windows(b"pg-token-1".len())
+            .all(|window| window != b"pg-token-1"),
+        "the stored bearer does not contain the plaintext"
+    );
+
+    // The tool was discovered and persisted.
+    let tool_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mcp_server_tools WHERE server_id = $1")
+            .bind(&server.id)
+            .fetch_one(&pool)
+            .await
+            .expect("the count answers");
+    assert_eq!(tool_count, 1);
+
+    // Clean up.
+    sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = $1")
+        .bind(&server.id)
+        .execute(&pool)
+        .await
+        .expect("rows removed");
+    sqlx::query("DELETE FROM mcp_servers WHERE id = $1")
+        .bind(&server.id)
+        .execute(&pool)
+        .await
+        .expect("rows removed");
+    common::cleanup(&pool, "oauth").await;
 }

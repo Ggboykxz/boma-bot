@@ -756,6 +756,16 @@ pub struct McpServersRemoveReply {
     pub removed: bool,
 }
 
+/// The reply of `mcp.oauth.start` (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOAuthStartReply {
+    /// Where the member's browser opens.
+    pub authorization_url: String,
+    /// The state token to present to `mcp.oauth.complete`.
+    pub state: String,
+}
+
 /// One catalogue connector with this space's install state (REQ-032).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

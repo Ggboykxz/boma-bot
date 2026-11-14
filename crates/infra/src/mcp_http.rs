@@ -70,7 +70,10 @@ impl HttpMcpTransport {
             .http
             .post(url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::ACCEPT,
+                "application/json, text/event-stream",
+            )
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -88,6 +91,12 @@ impl HttpMcpTransport {
             AppError::Unavailable
         })?;
         let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/json")
+            .to_owned();
         let bytes = response.bytes().await.map_err(|_| AppError::Unavailable)?;
         if bytes.len() > MAX_RESPONSE_BYTES {
             return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
@@ -99,8 +108,11 @@ impl HttpMcpTransport {
                 format!("the server answered with status {status}"),
             )));
         }
-        let body: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| AppError::Unavailable)?;
+        let body: serde_json::Value = if content_type.contains("text/event-stream") {
+            first_sse_message(&bytes).ok_or(AppError::Unavailable)?
+        } else {
+            serde_json::from_slice(&bytes).map_err(|_| AppError::Unavailable)?
+        };
         if let Some(error) = body.get("error") {
             let message = error
                 .get("message")
@@ -115,6 +127,62 @@ impl HttpMcpTransport {
             .cloned()
             .unwrap_or(serde_json::Value::Null))
     }
+}
+
+/// The first JSON-RPC message carried by the `data:` events of one MCP SSE response.
+///
+/// MCP streamable-HTTP answers either plain JSON or `text/event-stream` with one JSON-RPC
+/// message per `data:` event. A client reading one RPC does not need the rest of the stream:
+/// the first complete message settles the call. Multi-line `data:` payloads, comments (`:`),
+/// `event:` headers and `data: [DONE]` are skipped.
+fn first_sse_message(body: &[u8]) -> Option<serde_json::Value> {
+    let text = String::from_utf8_lossy(body);
+    for line in text.lines() {
+        let line = line.trim_end_matches('\r');
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str(data) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Decodes the `tools` array of a `tools/list` result: unsafe names are skipped, not fatal.
+pub(crate) fn decode_tools(result: &serde_json::Value) -> Vec<McpTool> {
+    let tools = result
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut discovered = Vec::with_capacity(tools.len());
+    for tool in tools {
+        let name = tool.get("name").and_then(serde_json::Value::as_str);
+        let description = tool
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let schema = tool
+            .get("inputSchema")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
+        if let Some(Ok(name)) = name.map(boma_domain::sanitize_mcp_tool_name) {
+            discovered.push(McpTool {
+                name,
+                description: description.to_owned(),
+                input_schema: schema,
+            });
+        } else {
+            // A server that names tools unsafely loses those tools, not the install.
+            tracing::warn!("an MCP server named a tool unsafely; it was skipped");
+        }
+    }
+    discovered
 }
 
 #[async_trait::async_trait]
@@ -141,35 +209,7 @@ impl McpTransport for HttpMcpTransport {
         let result = self
             .rpc(server, bearer, "tools/list", serde_json::json!({}))
             .await?;
-        let tools = result
-            .get("tools")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut discovered = Vec::with_capacity(tools.len());
-        for tool in tools {
-            let name = tool.get("name").and_then(serde_json::Value::as_str);
-            let description = tool
-                .get("description")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let schema = tool
-                .get("inputSchema")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
-            match name.map(boma_domain::sanitize_mcp_tool_name) {
-                Some(Ok(name)) => discovered.push(McpTool {
-                    name,
-                    description: description.to_owned(),
-                    input_schema: schema,
-                }),
-                // A server that names tools unsafely loses those tools, not the install.
-                _ => {
-                    tracing::warn!(server = %server.name, "an MCP server named a tool unsafely; it was skipped");
-                }
-            }
-        }
-        Ok(discovered)
+        Ok(decode_tools(&result))
     }
 
     async fn call_tool(
@@ -190,5 +230,29 @@ impl McpTransport for HttpMcpTransport {
             }),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::first_sse_message;
+
+    #[test]
+    fn req_033_the_first_data_event_is_the_answer() {
+        let body = b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\n\ndata: [DONE]\n";
+        let value = first_sse_message(body).expect("the first message parses");
+        assert_eq!(value["result"]["tools"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn req_033_comments_and_blank_data_lines_are_skipped() {
+        let body = b": keep-alive\n\ndata: \ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
+        let value = first_sse_message(body).expect("the message parses");
+        assert_eq!(value["result"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn req_033_a_stream_without_a_message_answers_nothing() {
+        assert_eq!(first_sse_message(b"event: message\ndata: [DONE]\n"), None);
     }
 }

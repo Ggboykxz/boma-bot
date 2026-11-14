@@ -85,6 +85,11 @@ pub struct Config {
     /// `None` means the scripted provider answers: the deployment is exercised end to end
     /// without a model, exactly the state an operator wants before wiring one.
     pub provider: Option<ProviderConfig>,
+    /// The stdio allow-list for local MCP servers (`MCP_STDIO_ALLOWED_COMMANDS`).
+    ///
+    /// Empty by default: stdio MCP servers are refused everywhere in this build until the
+    /// operator names their programs here.
+    pub stdio_allowed: Vec<String>,
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -225,6 +230,7 @@ impl Config {
             computer,
             auth_capabilities,
             provider,
+            stdio_allowed: parse_string_list(&env, "MCP_STDIO_ALLOWED_COMMANDS"),
         })
     }
 }

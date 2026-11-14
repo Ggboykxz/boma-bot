@@ -172,8 +172,11 @@ pub struct Services {
     /// The computer backend, when this deployment is configured with one (REQ-027).
     pub computer: Option<Arc<dyn crate::ports::ComputerRuntime>>,
     /// The transport that calls MCP servers (REQ-033); a test doubles it, a deployment wires
-    /// the HTTP JSON-RPC client.
+    /// the dispatching transport (HTTP, plus stdio behind the allow-list).
     pub mcp_transport: Arc<dyn crate::ports::McpTransport>,
+    /// The deployment's stdio allow-list (`MCP_STDIO_ALLOWED_COMMANDS`): the bare program
+    /// names this deployment permits for local MCP servers. Empty by default.
+    pub stdio_allowed: Vec<String>,
     /// The runner for connector tools (REQ-032), when this deployment is configured to
     /// execute them. `None` means connector tools are never dispatched, and a call answers with
     /// a clear refusal rather than a fake success.
@@ -181,6 +184,9 @@ pub struct Services {
     /// The fetcher that resolves plugin sources (REQ-034). A test doubles it; a deployment
     /// wires the GitHub fetcher.
     pub plugin_fetcher: Arc<dyn crate::ports::PluginFetcher>,
+    /// The OAuth client for MCP servers (REQ-033); a test doubles it, a deployment wires the
+    /// form-encoded token-endpoint client.
+    pub oauth_client: Arc<dyn crate::ports::OAuthClient>,
 }
 
 impl Services {
@@ -196,6 +202,7 @@ impl Services {
         models: boma_domain::model::DeploymentModels,
         mcp_transport: Arc<dyn crate::ports::McpTransport>,
         plugin_fetcher: Arc<dyn crate::ports::PluginFetcher>,
+        oauth_client: Arc<dyn crate::ports::OAuthClient>,
     ) -> Self {
         Self {
             publisher,
@@ -206,8 +213,10 @@ impl Services {
             models,
             computer: None,
             mcp_transport,
+            stdio_allowed: Vec::new(),
             connector_runner: None,
             plugin_fetcher,
+            oauth_client,
         }
     }
 
@@ -227,6 +236,16 @@ impl Services {
     #[must_use]
     pub fn with_connectors(mut self, runner: Arc<dyn crate::ports::ConnectorRunner>) -> Self {
         self.connector_runner = Some(runner);
+        self
+    }
+
+    /// Builds the services with the stdio allow-list attached (REQ-033).
+    ///
+    /// The list is the deployment's answer to "may a local MCP command run here"; it is empty
+    /// by default, and the default is the safe one.
+    #[must_use]
+    pub fn with_stdio_commands(mut self, commands: Vec<String>) -> Self {
+        self.stdio_allowed = commands;
         self
     }
 }

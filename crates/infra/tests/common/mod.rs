@@ -519,6 +519,7 @@ pub async fn computer_app(
         },
         Arc::new(boma_testkit::ScriptedMcpTransport::new()),
         Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
+        Arc::new(boma_testkit::ScriptedOAuthClient::new()),
     )
     .with_computers(runtime);
     let app = boma_app::App::new(

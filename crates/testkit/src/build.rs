@@ -279,6 +279,8 @@ pub struct TestAppBuilder {
     connector_runner: Option<Arc<dyn boma_app::ports::ConnectorRunner>>,
     /// The plugin fetcher to use instead of a fresh scripted one.
     plugin_fetcher: Option<Arc<dyn boma_app::ports::PluginFetcher>>,
+    /// The OAuth client to use instead of a fresh scripted one.
+    oauth_client: Option<Arc<dyn boma_app::ports::OAuthClient>>,
 }
 
 impl Default for TestAppBuilder {
@@ -294,6 +296,7 @@ impl Default for TestAppBuilder {
             mcp_transport: None,
             connector_runner: None,
             plugin_fetcher: None,
+            oauth_client: None,
         }
     }
 }
@@ -354,6 +357,13 @@ impl TestAppBuilder {
     #[must_use]
     pub fn plugin_fetcher(mut self, fetcher: Arc<dyn boma_app::ports::PluginFetcher>) -> Self {
         self.plugin_fetcher = Some(fetcher);
+        self
+    }
+
+    /// Builds the application with this OAuth client instead of a fresh scripted one.
+    #[must_use]
+    pub fn oauth_client(mut self, client: Arc<dyn boma_app::ports::OAuthClient>) -> Self {
+        self.oauth_client = Some(client);
         self
     }
 
@@ -434,6 +444,9 @@ impl TestAppBuilder {
             self.plugin_fetcher
                 .clone()
                 .unwrap_or_else(|| Arc::new(ScriptedPluginFetcher::new())),
+            self.oauth_client
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::ScriptedOAuthClient::new())),
         )
         .with_connectors(
             self.connector_runner
@@ -4697,5 +4710,295 @@ mod marketplace_tests {
             .filter(|skill| skill.name == "alpha" && skill.origin == "plugin")
             .count();
         assert_eq!(alpha, 1, "the reinstall replaces the plugin's own skills");
+    }
+}
+
+#[cfg(test)]
+mod oauth_tests {
+    // REQ-033 — MCP OAuth: start, complete, state consumed exactly once, bearer sealed.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+    use crate::{ScriptedMcpTransport, ScriptedOAuthClient};
+
+    async fn seeded(
+        transport: ScriptedMcpTransport,
+        oauth: Arc<ScriptedOAuthClient>,
+    ) -> (TestApp, boma_domain::TenantContext, String) {
+        let test = TestApp::builder()
+            .mcp_transport(Arc::new(transport))
+            .oauth_client(oauth)
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let summary = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "analytics",
+            boma_domain::McpTransport::Http,
+            Some("https://mcp.example.test/rpc".to_owned()),
+            None,
+            None,
+            false,
+            Some(boma_app::ports::McpOAuthConfig {
+                authorization_url: "https://auth.example.test/authorize".to_owned(),
+                token_url: "https://auth.example.test/token".to_owned(),
+                client_id: "boma-cli".to_owned(),
+                client_secret: Some(secrecy::SecretString::from("shh".to_owned())),
+            }),
+        )
+        .await
+        .expect("the server is added");
+        (test, context, summary.id)
+    }
+
+    #[tokio::test]
+    async fn req_033_start_returns_a_complete_authorization_url() {
+        let oauth = Arc::new(ScriptedOAuthClient::new());
+        let (test, context, server_id) =
+            seeded(ScriptedMcpTransport::new(), Arc::clone(&oauth)).await;
+
+        let started = boma_app::usecases::mcp_oauth_start(test.app(), &context, &server_id)
+            .await
+            .expect("the sign-in begins");
+        assert!(
+            started
+                .authorization_url
+                .starts_with("https://auth.example.test/authorize?"),
+            "{}",
+            started.authorization_url
+        );
+        for expected in [
+            "response_type=code",
+            "client_id=boma-cli",
+            "redirect_uri=http%3A%2F%2F127.0.0.1%2Fboma-mcp%2Fcallback",
+            "code_challenge=challenge-1",
+            "code_challenge_method=S256",
+        ] {
+            assert!(
+                started.authorization_url.contains(expected),
+                "{expected} in {}",
+                started.authorization_url
+            );
+        }
+        assert!(
+            started
+                .authorization_url
+                .contains(&format!("state={}", started.state))
+        );
+    }
+
+    #[tokio::test]
+    async fn req_033_complete_exchanges_seals_and_discovers_the_tools() {
+        let tools = vec![boma_app::ports::McpTool {
+            name: "query".to_owned(),
+            description: "Query the warehouse.".to_owned(),
+            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+        }];
+        let oauth = Arc::new(ScriptedOAuthClient::new().with_exchanges(vec![Ok(
+            serde_json::json!({ "access_token": "token-1", "token_type": "bearer" }),
+        )]));
+        let (test, context, server_id) =
+            seeded(ScriptedMcpTransport::with_tools(tools), Arc::clone(&oauth)).await;
+
+        let started = boma_app::usecases::mcp_oauth_start(test.app(), &context, &server_id)
+            .await
+            .expect("the sign-in begins");
+        let summary = boma_app::usecases::mcp_oauth_complete(
+            test.app(),
+            &context,
+            &server_id,
+            "code-1",
+            &started.state,
+        )
+        .await
+        .expect("the exchange succeeds");
+
+        assert_eq!(summary.auth_state, "connected");
+        assert_eq!(summary.tool_count, Some(1));
+
+        // The bearer is sealed and readable through the reveal path.
+        let bearer = test
+            .app()
+            .stores
+            .mcp_servers
+            .reveal_bearer(&context, &server_id)
+            .await
+            .expect("the reveal answers")
+            .expect("a bearer is stored");
+        assert_eq!(secrecy::ExposeSecret::expose_secret(&bearer), "token-1");
+
+        // The tools the probe discovered are persisted for the catalogue.
+        let catalogue = test
+            .app()
+            .stores
+            .mcp_servers
+            .catalogue_tools(&context)
+            .await
+            .expect("the catalogue answers");
+        assert_eq!(catalogue.len(), 1);
+        assert_eq!(catalogue[0].1.name, "query");
+
+        // The exchange called the token endpoint with the right form.
+        let calls = oauth.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "https://auth.example.test/token");
+        let form: std::collections::HashMap<&str, &str> = calls[0]
+            .1
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(form["grant_type"], "authorization_code");
+        assert_eq!(form["code"], "code-1");
+        assert_eq!(form["code_verifier"], "verifier-1");
+        assert_eq!(form["client_secret"], "shh");
+        assert_eq!(form["client_id"], "boma-cli");
+        assert_eq!(form["redirect_uri"], "http://127.0.0.1/boma-mcp/callback");
+    }
+
+    #[tokio::test]
+    async fn req_033_a_replayed_state_is_refused_and_never_reaches_the_server() {
+        let oauth = Arc::new(
+            ScriptedOAuthClient::new()
+                .with_exchanges(vec![Ok(serde_json::json!({ "access_token": "token-1" }))]),
+        );
+        let (test, context, server_id) =
+            seeded(ScriptedMcpTransport::new(), Arc::clone(&oauth)).await;
+
+        let started = boma_app::usecases::mcp_oauth_start(test.app(), &context, &server_id)
+            .await
+            .expect("the sign-in begins");
+        boma_app::usecases::mcp_oauth_complete(
+            test.app(),
+            &context,
+            &server_id,
+            "code-1",
+            &started.state,
+        )
+        .await
+        .expect("the first exchange succeeds");
+        let replayed = boma_app::usecases::mcp_oauth_complete(
+            test.app(),
+            &context,
+            &server_id,
+            "code-2",
+            &started.state,
+        )
+        .await;
+        assert!(replayed.is_err(), "a replayed state is refused");
+        assert_eq!(oauth.calls().len(), 1, "the second exchange never happens");
+    }
+
+    #[tokio::test]
+    async fn req_033_an_expired_session_is_refused() {
+        let oauth = Arc::new(ScriptedOAuthClient::new());
+        let (test, context, server_id) =
+            seeded(ScriptedMcpTransport::new(), Arc::clone(&oauth)).await;
+
+        test.app()
+            .stores
+            .mcp_servers
+            .store_oauth_session(
+                &context,
+                &server_id,
+                "state-x",
+                secrecy::SecretString::from("verifier-x".to_owned()),
+                "2020-01-01T00:00:00Z",
+            )
+            .await
+            .expect("the session is stored");
+        let expired = boma_app::usecases::mcp_oauth_complete(
+            test.app(),
+            &context,
+            &server_id,
+            "code-1",
+            "state-x",
+        )
+        .await;
+        assert!(expired.is_err(), "an expired session is refused");
+        assert!(oauth.calls().is_empty(), "the exchange never happens");
+    }
+
+    #[tokio::test]
+    async fn req_033_start_refuses_a_stdio_server_and_a_server_without_oauth() {
+        let oauth = Arc::new(ScriptedOAuthClient::new());
+        let (test, context, _server_id) =
+            seeded(ScriptedMcpTransport::new(), Arc::clone(&oauth)).await;
+
+        // An HTTP server without OAuth config answers the start with a refusal, not a panic.
+        let plain = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "plain",
+            boma_domain::McpTransport::Http,
+            Some("https://mcp.example.test/plain".to_owned()),
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect("the server is added");
+        let refused = boma_app::usecases::mcp_oauth_start(test.app(), &context, &plain.id).await;
+        assert!(refused.is_err(), "a server without OAuth config is refused");
+
+        // A stdio server never signs in with OAuth either.
+        let stdio = boma_app::usecases::mcp_server_add(
+            test.app(),
+            &context,
+            "local-things",
+            boma_domain::McpTransport::Stdio,
+            None,
+            Some("python3 /opt/server.py".to_owned()),
+            None,
+            false,
+            None,
+        )
+        .await;
+        assert!(stdio.is_err(), "an empty stdio allow-list refuses the add");
+    }
+
+    #[tokio::test]
+    async fn req_033_an_exchange_refusal_marks_the_server_error() {
+        let oauth = Arc::new(ScriptedOAuthClient::new().with_exchanges(vec![Err(
+            boma_app::AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the authorization server refused the code".to_owned(),
+            )),
+        )]));
+        let (test, context, server_id) =
+            seeded(ScriptedMcpTransport::new(), Arc::clone(&oauth)).await;
+
+        let started = boma_app::usecases::mcp_oauth_start(test.app(), &context, &server_id)
+            .await
+            .expect("the sign-in begins");
+        let refused = boma_app::usecases::mcp_oauth_complete(
+            test.app(),
+            &context,
+            &server_id,
+            "bad-code",
+            &started.state,
+        )
+        .await;
+        assert!(refused.is_err());
+        let servers = boma_app::usecases::mcp_servers_list(test.app(), &context)
+            .await
+            .expect("the list answers");
+        let server = servers
+            .iter()
+            .find(|server| server.id == server_id)
+            .expect("the server is listed");
+        assert_eq!(server.auth_state, "error");
     }
 }

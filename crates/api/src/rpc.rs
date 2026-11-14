@@ -27,13 +27,14 @@ use crate::{
         ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
         ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
         ConnectionsRemoveReply, ConnectorView, InvitationReply, MarketplaceInstallReply,
-        MarketplaceListReply, MarketplaceSubmitReply, McpServerReply, McpServerView,
-        McpServersListReply, McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply,
-        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply, PluginInstallView,
-        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
-        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
-        SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply,
-        SnoozeReply, SpaceReply, TeachSkillReply, ThreadHeadReply,
+        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
+        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
+        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
+        MessagesReply, PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply,
+        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
+        RunsReply, SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply,
+        SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply, TeachSkillReply,
+        ThreadHeadReply,
     },
 };
 
@@ -116,6 +117,8 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::MCP, "servers.add"),
         (namespaces::MCP, "servers.remove"),
         (namespaces::MCP, "servers.probe"),
+        (namespaces::MCP, "oauth.start"),
+        (namespaces::MCP, "oauth.complete"),
         (namespaces::CONNECTIONS, "list"),
         (namespaces::CONNECTIONS, "install"),
         (namespaces::CONNECTIONS, "remove"),
@@ -279,6 +282,12 @@ async fn dispatch(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::MCP, "servers.probe") => mcp_servers_probe(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MCP, "oauth.start") => mcp_oauth_start(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MCP, "oauth.complete") => mcp_oauth_complete(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::CONNECTIONS, "list") => connections_list(state, auth, body)
@@ -1860,5 +1869,60 @@ async fn marketplace_install(
         usecases::marketplace_install(state.app(), &auth.actor.context, &request.source).await?;
     Ok(MarketplaceInstallReply {
         install: plugin_install_view(outcome),
+    })
+}
+
+/// The body of `mcp.oauth.start` (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpOAuthStartRequest {
+    /// The server to sign in to.
+    server_id: String,
+}
+
+/// `mcp.oauth.start` — open the sign-in URL for a remote server with OAuth.
+async fn mcp_oauth_start(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<McpOAuthStartReply, ApiError> {
+    let request: McpOAuthStartRequest = parse(&body)?;
+    let started =
+        usecases::mcp_oauth_start(state.app(), &auth.actor.context, &request.server_id).await?;
+    Ok(McpOAuthStartReply {
+        authorization_url: started.authorization_url,
+        state: started.state,
+    })
+}
+
+/// The body of `mcp.oauth.complete` (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpOAuthCompleteRequest {
+    /// The server to sign in to.
+    server_id: String,
+    /// The `code` from the pasted callback URL.
+    code: String,
+    /// The `state` from the pasted callback URL.
+    state: String,
+}
+
+/// `mcp.oauth.complete` — exchange the code for a token, seal it, discover the tools.
+async fn mcp_oauth_complete(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<McpServerReply, ApiError> {
+    let request: McpOAuthCompleteRequest = parse(&body)?;
+    let summary = usecases::mcp_oauth_complete(
+        state.app(),
+        &auth.actor.context,
+        &request.server_id,
+        &request.code,
+        &request.state,
+    )
+    .await?;
+    Ok(McpServerReply {
+        server: mcp_view(summary),
     })
 }

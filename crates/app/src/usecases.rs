@@ -491,14 +491,34 @@ pub async fn mcp_server_add(
     name: &str,
     transport: boma_domain::McpTransport,
     url: Option<String>,
-    _command: Option<String>,
+    command: Option<String>,
     bearer: Option<secrecy::SecretString>,
     allow_private: bool,
     oauth: Option<crate::ports::McpOAuthConfig>,
 ) -> Result<crate::ports::McpServerSummary, AppError> {
     boma_domain::validate_mcp_server_name(name)?;
     if transport == boma_domain::McpTransport::Stdio {
-        Err(AppError::StdioDisabled)
+        let Some(command) = command else {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "a stdio MCP server needs a `command`".to_owned(),
+            )));
+        };
+        let (program, _) = boma_domain::split_command(&command)?;
+        if !boma_domain::program_allowed(&program, &app.services.stdio_allowed) {
+            return Err(AppError::StdioDisabled);
+        }
+        let server = crate::ports::NewMcpServer {
+            id: app.services.ids.new_id("mcp"),
+            name: name.to_owned(),
+            transport,
+            url: None,
+            command: Some(command),
+            bearer: None,
+            allow_private: false,
+            oauth: None,
+            created_at: app.services.clock.now(),
+        };
+        Ok(app.stores.mcp_servers.create(context, server).await?)
     } else {
         let Some(url) = url else {
             return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
@@ -506,6 +526,11 @@ pub async fn mcp_server_add(
             )));
         };
         boma_domain::validate_mcp_server_url(&url, allow_private)?;
+        // The token endpoint is the one URL the deployment itself POSTs to: it answers to the
+        // same guard as the server URL (defect D-05), with the same per-space exception.
+        if let Some(oauth) = &oauth {
+            boma_domain::validate_mcp_server_url(&oauth.token_url, allow_private)?;
+        }
         let server = crate::ports::NewMcpServer {
             id: app.services.ids.new_id("mcp"),
             name: name.to_owned(),
@@ -529,6 +554,183 @@ pub async fn mcp_server_add(
             .await?;
         }
         Ok(summary)
+    }
+}
+
+/// The redirect URI the member's browser lands on after the server approves the sign-in.
+///
+/// The member copies this URL out of the browser's address bar into `mcp.oauth.complete`: this
+/// build runs no local HTTP listener for the callback, so the flow is member-driven by design.
+pub const MCP_OAUTH_REDIRECT_URI: &str = "http://127.0.0.1/boma-mcp/callback";
+
+/// Begins the OAuth sign-in for a remote MCP server (REQ-033).
+///
+/// Returns the URL the member's browser opens and the state token to present to
+/// `mcp_oauth_complete`. The PKCE verifier never leaves the vault in clear: the store seals it
+/// under the space's data key, one attempt per server, ten minutes to use it.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the server does not exist, [`AppError::Rule`] when the
+/// server is stdio or is not configured for OAuth, and an error when the seal or the vault
+/// cannot answer.
+pub async fn mcp_oauth_start(
+    app: &App,
+    context: &TenantContext,
+    server_id: &str,
+) -> Result<crate::ports::McpOAuthStart, AppError> {
+    let record = app
+        .stores
+        .mcp_servers
+        .get(context, server_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if record.transport != "http" {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "only a remote server signs in with OAuth".to_owned(),
+        )));
+    }
+    let (Some(authorization_url), Some(_token_url), Some(client_id)) = (
+        record.authorization_url.clone(),
+        record.token_url.clone(),
+        record.client_id.clone(),
+    ) else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the server is not configured for OAuth".to_owned(),
+        )));
+    };
+    let state = app.services.tokens.generate()?;
+    let (verifier, challenge) = app.services.oauth_client.pkce_pair().await?;
+    let expires_at = app.services.clock.now_plus_seconds(600);
+    app.stores
+        .mcp_servers
+        .store_oauth_session(context, server_id, &state, verifier, &expires_at)
+        .await?;
+    let separator = if authorization_url.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    let authorization_url = format!(
+        "{authorization_url}{separator}response_type=code&client_id={}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method=S256",
+        boma_domain::percent_encode(&client_id),
+        boma_domain::percent_encode(MCP_OAUTH_REDIRECT_URI),
+        boma_domain::percent_encode(&state),
+        boma_domain::percent_encode(&challenge),
+    );
+    Ok(crate::ports::McpOAuthStart {
+        authorization_url,
+        state,
+    })
+}
+
+/// Completes the OAuth sign-in for a remote MCP server (REQ-033).
+///
+/// The `state` from the sign-in request is consumed exactly once: an unknown, already-used or
+/// expired state refuses before anything is exchanged. On success the bearer is sealed under
+/// the space's data key, the server is marked connected, and the tools are discovered — the
+/// acceptance the spec names is "tools are discovered and usable", not merely a stored token.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the server does not exist, [`AppError::Rule`] when the
+/// sign-in attempt is unrecognised or the authorization server refused the code, and an error
+/// when the seal or the stores cannot answer.
+pub async fn mcp_oauth_complete(
+    app: &App,
+    context: &TenantContext,
+    server_id: &str,
+    code: &str,
+    state: &str,
+) -> Result<crate::ports::McpServerSummary, AppError> {
+    let record = app
+        .stores
+        .mcp_servers
+        .get(context, server_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let Some(token_url) = record.token_url.clone() else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the server is not configured for OAuth".to_owned(),
+        )));
+    };
+    let Some(client_id) = record.client_id.clone() else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the server is not configured for OAuth".to_owned(),
+        )));
+    };
+    let now = app.services.clock.now();
+    let Some(verifier) = app
+        .stores
+        .mcp_servers
+        .take_oauth_session(context, server_id, state, &now)
+        .await?
+    else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the sign-in attempt expired or was not recognized; start a new one".to_owned(),
+        )));
+    };
+    let secret = app
+        .stores
+        .mcp_servers
+        .reveal_client_secret(context, server_id)
+        .await?;
+    let mut form = vec![
+        ("grant_type".to_owned(), "authorization_code".to_owned()),
+        ("code".to_owned(), code.to_owned()),
+        ("redirect_uri".to_owned(), MCP_OAUTH_REDIRECT_URI.to_owned()),
+        ("client_id".to_owned(), client_id),
+        (
+            "code_verifier".to_owned(),
+            secrecy::ExposeSecret::expose_secret(&verifier).to_owned(),
+        ),
+    ];
+    if let Some(secret) = &secret {
+        form.push((
+            "client_secret".to_owned(),
+            secrecy::ExposeSecret::expose_secret(secret).to_owned(),
+        ));
+    }
+    match app
+        .services
+        .oauth_client
+        .exchange_grant(&token_url, &form)
+        .await
+    {
+        Ok(token) => {
+            let Some(access_token) = token
+                .get("access_token")
+                .and_then(serde_json::Value::as_str)
+                .filter(|token| !token.is_empty())
+            else {
+                let _ = app
+                    .stores
+                    .mcp_servers
+                    .set_auth_state(context, server_id, "error", None)
+                    .await;
+                return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                    "the authorization server did not return an access token".to_owned(),
+                )));
+            };
+            app.stores
+                .mcp_servers
+                .store_bearer(
+                    context,
+                    server_id,
+                    secrecy::SecretString::from(access_token.to_owned()),
+                )
+                .await?;
+            // The spec's acceptance for this flow: tools are discovered and usable.
+            mcp_server_probe(app, context, server_id).await
+        }
+        Err(error) => {
+            let _ = app
+                .stores
+                .mcp_servers
+                .set_auth_state(context, server_id, "error", None)
+                .await;
+            Err(error)
+        }
     }
 }
 

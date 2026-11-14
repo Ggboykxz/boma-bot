@@ -59,11 +59,9 @@ revision).**
    (`mcp.private_call`); the SSRF guard is one function with five refusal reasons
    (`crates/infra/src/net_safety.rs`), and the metadata endpoints are never reachable. stdio
    servers are **refused by default** with the explanation (HTTP 400, static message), which is
-   the spec's acceptance criterion for default-disabled stdio; enabling the spawn is a config
-   change landing with the first allow-listed deployment. **NOT done, named as the gap:** the
-   OAuth leg (`mcp.oauth.start|complete`) — the bearer-token path works, but a registered-client
-   OAuth flow, SSE response framing and the stdio spawn are not implemented; REQ-033's
-   "with OAuth where needed" criterion is unmet until they are. ADR-021 records the posture.
+   the spec's acceptance criterion for default-disabled stdio. ADR-021 records the posture; the
+   three gaps named here at this revision (OAuth leg, SSE framing, the allow-listed spawn) are
+   closed in the entry below — the spec's "with OAuth where needed" criterion is met.
    **308 tests green** (docker-gated suites excluded — this box's rootless daemon exhausted its
    kernel session-keyring quota; CI is the evidence path for those).
 
@@ -86,9 +84,41 @@ with every other `.env` parser in the binary and with `.env.example`), with a un
 owner: **CI must be green on every push, verified, not assumed** — every push from here watches the
 run to conclusion and reports it.
 
-**M5 — in flight. Six slices committed: REQ-046 (`835d8e7`), REQ-034 slice 1
-(`bc03d1e`), REQ-035 (`d56f248`), REQ-033 (`494d194` + fmt fix `d427ee7`), REQ-032 (`fc8de75`),
-REQ-034 slice 2 (marketplace install/submit/list, in this revision).**
+**M5 — complete (pending CI). Seven slices committed: REQ-046 (`835d8e7`), REQ-034 slice 1
+(`bc03d1e`), REQ-035 (`d56f248`), REQ-033 (`494d194` + `d427ee7`), REQ-032 (`fc8de75`),
+REQ-034 slice 2 (`e9cb7ff`), REQ-033 remaining gaps — SSE, opt-in stdio, OAuth (this revision).**
+
+7. **REQ-033 — remaining gaps closed (SSE, opt-in stdio, OAuth, this revision).**
+   - **SSE**: the HTTP transport asks for `application/json, text/event-stream` and parses the
+     first `data:` JSON-RPC message out of an event-stream answer (`first_sse_message`, skipped
+     comments/blank events/`[DONE]`); unit tests pin it.
+   - **Opt-in stdio**: `MCP_STDIO_ALLOWED_COMMANDS` (comma-separated bare programs, empty by
+     default — the spec's default). A stdio server may only be registered when its program is
+     listed (refused with `StdioDisabled` naming why); the transport doubles the check at spawn
+     time. `StdioMcpTransport` spawns per call (no persistent process), speaks newline-delimited
+     JSON-RPC (`initialize` → `notifications/initialized` → call), refuses shell syntax by shape
+     (`split_command`/`program_allowed` in the domain), and is proven against a real spawned
+     Python fixture (`crates/infra/tests/mcp_stdio.rs`). The binary routes by transport through
+     `McpTransportDispatch` (HTTP everywhere; stdio only for allow-listed programs). `tokio`
+     gained the `process` feature — no new crate.
+   - **OAuth (PKCE, RFC 7636)**: `mcp.oauth.start` returns the authorization URL
+     (`response_type=code`, S256 challenge from the PKCE pair, `state` for CSRF, ten-minute
+     session, redirect `http://127.0.0.1/boma-mcp/callback` — the member pastes the callback
+     URL's `code` and `state` into `mcp.oauth.complete`; this build runs no local HTTP listener
+     for the callback). The verifier is sealed under the space's DEK in `mcp_oauth_sessions`;
+     the row is single-shot — deleted at exchange time whether the exchange succeeds or fails,
+     so a replayed `state` never reaches the authorization server (proven against Postgres).
+     The exchange is form-encoded at the token endpoint (`client_secret` included when the
+     member registered one); the bearer is sealed under the space's DEK; the server is marked
+     `connected`; the tools are discovered — the spec's acceptance. An exchange refusal marks
+     the server `error`. The token URL answers to the same outbound guard and the same
+     per-space allow-list exception as the server URL itself (defect D-05); the authorization
+     time is validated at registration.
+   - Ports are scriptable end to end (`OAuthClient`); production wires `OAuthTokenClient`
+     (`getrandom`+`sha2` for S256, HTTPS only, no redirects, 30 s timeout, 64 KiB answer cap).
+     Docker-gated suites remain unverified locally (rootless keyring quota exhausted); CI is
+     the evidence path — also for `req_027_a_docker_selection_provisions_against_the_daemon`,
+     which joined the local skip list for the same reason.
 
 6. **REQ-034 (plugin marketplace, MUST) — slice 2.** `marketplace.list|install|submit` RPC.
    The install is a real one: `GitHubPluginFetcher` (api.github.com → SHA pin verified against a

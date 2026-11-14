@@ -397,6 +397,186 @@ impl McpServerStore for PostgresMcpServerStore {
         })
         .await
     }
+
+    async fn store_oauth_session(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        state: &str,
+        verifier: secrecy::SecretString,
+        expires_at: &str,
+    ) -> Result<(), AppError> {
+        let server_id = server_id.to_owned();
+        let state = state.to_owned();
+        let expires_at = expires_at.to_owned();
+        let secrets = self.secrets.clone();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                let row: Option<(String,)> = sqlx::query_as(
+                    "SELECT space_id FROM mcp_servers WHERE id = $1",
+                )
+                .bind(&server_id)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                let Some((space_id,)) = row else {
+                    return Err(AppError::NotFound);
+                };
+                let sealed = crate::space_keys::seal_for_space(conn, &secrets, &space_id, &verifier).await?;
+                sqlx::query(
+                    "INSERT INTO mcp_oauth_sessions (server_id, state, sealed_verifier, sealed_verifier_nonce, expires_at)
+                     VALUES ($1, $2, $3, $4, $5::timestamptz)
+                     ON CONFLICT (server_id) DO UPDATE
+                       SET state = EXCLUDED.state,
+                           sealed_verifier = EXCLUDED.sealed_verifier,
+                           sealed_verifier_nonce = EXCLUDED.sealed_verifier_nonce,
+                           expires_at = EXCLUDED.expires_at",
+                )
+                .bind(&server_id)
+                .bind(&state)
+                .bind(&sealed.ciphertext)
+                .bind(&sealed.nonce)
+                .bind(&expires_at)
+                .execute(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn take_oauth_session(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        state: &str,
+        now: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        let server_id = server_id.to_owned();
+        let state = state.to_owned();
+        let now = now.to_owned();
+        let secrets = self.secrets.clone();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                // The space id comes from the server, for the DEK.
+                let row: Option<(String,)> =
+                    sqlx::query_as("SELECT space_id FROM mcp_servers WHERE id = $1")
+                        .bind(&server_id)
+                        .fetch_optional(&mut *conn)
+                        .await
+                        .map_err(tenant::unavailable)?;
+                let Some((space_id,)) = row else {
+                    return Err(AppError::NotFound);
+                };
+                let row = sqlx::query_as::<_, (Vec<u8>, Vec<u8>)>(
+                    "DELETE FROM mcp_oauth_sessions
+                      WHERE server_id = $1 AND state = $2 AND expires_at > $3::timestamptz
+                  RETURNING sealed_verifier, sealed_verifier_nonce",
+                )
+                .bind(&server_id)
+                .bind(&state)
+                .bind(&now)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                let Some((ciphertext, nonce)) = row else {
+                    // Litter: expired sessions are removed now; an absent one answers None.
+                    sqlx::query(
+                        "DELETE FROM mcp_oauth_sessions WHERE server_id = $1 AND state = $2",
+                    )
+                    .bind(&server_id)
+                    .bind(&state)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(tenant::unavailable)?;
+                    return Ok(None);
+                };
+                let opened = crate::space_keys::open_for_space(
+                    conn,
+                    &secrets,
+                    &space_id,
+                    &SealedSecret { ciphertext, nonce },
+                )
+                .await?;
+                Ok(Some(opened))
+            })
+        })
+        .await
+    }
+
+    async fn reveal_client_secret(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError> {
+        let server_id = server_id.to_owned();
+        let secrets = self.secrets.clone();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                let row = sqlx::query_as::<_, (String, Option<Vec<u8>>, Option<Vec<u8>>)>(
+                    "SELECT space_id, sealed_client_secret, sealed_client_secret_nonce
+                       FROM mcp_servers
+                      WHERE id = $1",
+                )
+                .bind(&server_id)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                let Some((space_id, Some(ciphertext), Some(nonce))) = row else {
+                    return Ok(None);
+                };
+                let value = crate::space_keys::open_for_space(
+                    conn,
+                    &secrets,
+                    &space_id,
+                    &SealedSecret { ciphertext, nonce },
+                )
+                .await?;
+                Ok(Some(value))
+            })
+        })
+        .await
+    }
+
+    async fn store_bearer(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        bearer: secrecy::SecretString,
+    ) -> Result<(), AppError> {
+        let server_id = server_id.to_owned();
+        let secrets = self.secrets.clone();
+        tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                let row: Option<(String,)> =
+                    sqlx::query_as("SELECT space_id FROM mcp_servers WHERE id = $1")
+                        .bind(&server_id)
+                        .fetch_optional(&mut *conn)
+                        .await
+                        .map_err(tenant::unavailable)?;
+                let Some((space_id,)) = row else {
+                    return Err(AppError::NotFound);
+                };
+                let sealed =
+                    crate::space_keys::seal_for_space(conn, &secrets, &space_id, &bearer).await?;
+                sqlx::query(
+                    "UPDATE mcp_servers
+                        SET bearer_token = $2, bearer_token_nonce = $3,
+                            auth_state = 'connected', updated_at = now()
+                      WHERE id = $1",
+                )
+                .bind(&server_id)
+                .bind(&sealed.ciphertext)
+                .bind(&sealed.nonce)
+                .execute(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                Ok(())
+            })
+        })
+        .await
+    }
 }
 
 /// The tuple a summary query returns: id, name, transport, url, command, auth_state,

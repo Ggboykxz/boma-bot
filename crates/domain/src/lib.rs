@@ -51,7 +51,8 @@ pub use ids::{
     ThreadId, UserId,
 };
 pub use mcp::{
-    McpTransport, sanitize_mcp_tool_name, validate_mcp_server_name, validate_mcp_server_url,
+    McpTransport, program_allowed, sanitize_mcp_tool_name, split_command, validate_mcp_server_name,
+    validate_mcp_server_url,
 };
 pub use memory::{MemoryDocument, MemoryScope, validate_memory_path};
 pub use message::{
@@ -72,3 +73,35 @@ pub use skill::{
 };
 pub use tenancy::{SystemReason, TenantContext};
 pub use thread::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Thread, validate_page_size};
+
+/// Percent-encodes one part of a query or form (RFC 3986 unreserved survives).
+///
+/// One encoder for every caller in the deployment: the authorization URL the member's browser
+/// opens, and the form the token endpoint receives.
+#[must_use]
+pub fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod percent_encode_tests {
+    use super::percent_encode;
+
+    #[test]
+    fn req_033_percent_encoding_keeps_unreserved_and_escapes_the_rest() {
+        assert_eq!(percent_encode("abcXYZ019-_.~"), "abcXYZ019-_.~");
+        assert_eq!(percent_encode("a b&c=d+e"), "a%20b%26c%3Dd%2Be");
+        assert_eq!(
+            percent_encode("https://a.example/x?y=1"),
+            "https%3A%2F%2Fa.example%2Fx%3Fy%3D1"
+        );
+    }
+}

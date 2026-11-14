@@ -49,7 +49,8 @@ pub use memory::{
 };
 pub use scripts::{
     ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedConnectorRunner,
-    ScriptedIds, ScriptedMcpTransport, ScriptedPluginFetcher, ScriptedProvider, ScriptedTokens,
+    ScriptedIds, ScriptedMcpTransport, ScriptedOAuthClient, ScriptedPluginFetcher,
+    ScriptedProvider, ScriptedTokens,
 };
 
 /// The application crate, re-exported so that a test needs only one dependency.

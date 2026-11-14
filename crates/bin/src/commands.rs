@@ -45,7 +45,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
             config.computer,
         )
     })?);
-    let app = build_app(&database, computer)?;
+    let app = build_app(&database, computer, config.stdio_allowed.clone())?;
     let state = AppState::new(
         readiness,
         config.capabilities.clone(),
@@ -81,11 +81,13 @@ fn secrets_vault() -> anyhow::Result<boma_infra::SecretBox> {
 fn build_app(
     database: &Postgres,
     computer: Option<Arc<dyn ComputerRuntime>>,
+    stdio_allowed: Vec<String>,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
     let mcp_transport = Arc::new(
-        boma_infra::HttpMcpTransport::new().context("the MCP transport could not be built")?,
+        boma_infra::McpTransportDispatch::new(stdio_allowed.clone())
+            .context("the MCP transport could not be built")?,
     );
     let connector_runner = Arc::new(
         boma_infra::HttpConnectorRunner::new()
@@ -93,6 +95,9 @@ fn build_app(
     );
     let plugin_fetcher = Arc::new(
         boma_infra::GitHubPluginFetcher::new().context("the plugin fetcher could not be built")?,
+    );
+    let oauth_client = Arc::new(
+        boma_infra::OAuthTokenClient::new().context("the OAuth client could not be built")?,
     );
     Ok(App::new(
         Stores::new(
@@ -142,8 +147,10 @@ fn build_app(
                 },
                 mcp_transport,
                 plugin_fetcher,
+                oauth_client,
             )
-            .with_connectors(connector_runner);
+            .with_connectors(connector_runner)
+            .with_stdio_commands(stdio_allowed);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -170,7 +177,11 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
             config.computer,
         )
     })?);
-    let app = Arc::new(build_app(&database, computer)?);
+    let app = Arc::new(build_app(
+        &database,
+        computer,
+        config.stdio_allowed.clone(),
+    )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);
     // otherwise the scripted provider keeps the deployment exercisable end to end.

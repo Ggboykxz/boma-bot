@@ -962,3 +962,72 @@ impl boma_app::ports::PluginFetcher for ScriptedPluginFetcher {
         })
     }
 }
+
+/// One token-endpoint call the scripted OAuth client saw: the URL and the form body.
+pub type ScriptedOAuthCall = (String, Vec<(String, String)>);
+
+/// The scripted OAuth client (REQ-033).
+///
+/// Scripted answers only — the deployment never sees a network call in tests. Unscripted
+/// PKCE pairs default to `(verifier-1, challenge-1)`; unscripted exchanges refuse, exactly like
+/// an unreachable authorization server.
+#[derive(Debug, Default)]
+pub struct ScriptedOAuthClient {
+    exchanges:
+        std::sync::Mutex<std::collections::VecDeque<Result<serde_json::Value, boma_app::AppError>>>,
+    calls: std::sync::Mutex<Vec<ScriptedOAuthCall>>,
+}
+
+impl ScriptedOAuthClient {
+    /// A client with the default `verifier-1` / `challenge-1` pair and no scripted exchanges.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Programs the token-endpoint answers, consumed in call order.
+    #[must_use]
+    pub fn with_exchanges(
+        mut self,
+        exchanges: Vec<Result<serde_json::Value, boma_app::AppError>>,
+    ) -> Self {
+        self.exchanges = std::sync::Mutex::new(exchanges.into());
+        self
+    }
+
+    /// The exchanges the client was asked to perform: token URL and form body, in order.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn calls(&self) -> Vec<ScriptedOAuthCall> {
+        lock(&self.calls).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::OAuthClient for ScriptedOAuthClient {
+    async fn pkce_pair(&self) -> Result<(secrecy::SecretString, String), boma_app::AppError> {
+        Ok((
+            secrecy::SecretString::from("verifier-1".to_owned()),
+            "challenge-1".to_owned(),
+        ))
+    }
+
+    async fn exchange_grant(
+        &self,
+        token_url: &str,
+        form: &[(String, String)],
+    ) -> Result<serde_json::Value, boma_app::AppError> {
+        lock(&self.calls).push((token_url.to_owned(), form.to_vec()));
+        let mut exchanges = lock(&self.exchanges);
+        exchanges.pop_front().unwrap_or_else(|| {
+            Err(boma_app::AppError::Rule(
+                boma_domain::DomainError::InvalidName(
+                    "the scripted OAuth client has no answer for this exchange".to_owned(),
+                ),
+            ))
+        })
+    }
+}

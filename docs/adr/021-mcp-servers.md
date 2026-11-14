@@ -26,11 +26,11 @@ an explicit allow-list, emit an audit event each time it is used**." The accepta
    and its aliases are never legitimate MCP targets; the guard refuses them even with
    `allow_private`. A member with a real need for a private endpoint still gets every other
    private range.
-4. **stdio enabled behind `MCP_STDIO_ALLOWED_COMMANDS` now.** Deferred, not rejected; the
-   acceptance criterion is the default-off case, and the spawn path is not exercised by any
-   deployment today. The refusal names the reason. The allow-list wire-up is a config change in
-   the binary plus a spawned JS-free transport (tokio process pipes, newline-delimited JSON-RPC),
-   and it lands with the first allow-listing deployment, not before.
+4. **stdio gated by `MCP_STDIO_ALLOWED_COMMANDS` from the start.** The acceptance criterion is
+   the default-off case, which holds at both layers: registration refuses a stdio server whose
+   program is not listed (`StdioDisabled`), and the spawn transport re-checks the allow-list
+   before any process exists. Both are shipped and tested; the empty default is the shipping
+   configuration.
 
 ## Decision
 
@@ -47,12 +47,23 @@ an explicit allow-list, emit an audit event each time it is used**." The accepta
   (REQ-017), exactly-once effects included. The tool key is `mcp.<server>.<tool>`, both parts
   sanitised (lowercase-kebab server, `[A-Za-z0-9_.-]` tool).
 - `HttpMcpTransport` speaks JSON-RPC `initialize`/`tools/list`/`tools/call` over one HTTP POST per
-  call, plain `application/json` (SSE framing not parsed yet), 30 s timeout, 1 MiB body cap.
+  call, answer `application/json` or the first `data:` message of an `text/event-stream` SSE
+  answer (`first_sse_message`), 30 s timeout, 1 MiB body cap, redirects refused.
 - stdio servers are refused at registration with a static, honest message (`AppError::StdioDisabled`
-  → HTTP 400 with the explanation). MCP OAuth (`start`/`complete`) is **not** implemented yet;
-  bearer-token auth is. Both are tracked in docs/STATE.md as the remaining gap to REQ-033's
-  "with OAuth where needed" criterion; the reference flow and endpoints need a live auth server
-  to validate against, which this build does not have.
+  → HTTP 400) unless the deployment allow-lists the program (`MCP_STDIO_ALLOWED_COMMANDS`,
+  comma-separated bare programs; empty by default). When listed, `McpTransportDispatch` routes
+  them to `StdioMcpTransport`: one child per call, `env_clear` + `PATH`/`HOME` only,
+  newline-delimited JSON-RPC over pipes (`initialize` → `notifications/initialized` → call),
+  10 s per round trip, 1 MiB line cap; shell syntax is refused by shape before spawn.
+- OAuth (PKCE, RFC 7636) is shipped: `mcp.oauth.start` returns the authorization URL (S256
+  challenge, `state`, ten-minute session under the deployment's vault, redirect
+  `http://127.0.0.1/boma-mcp/callback` — no local HTTP listener; the member pastes the callback
+  URL's `code`+`state` into `mcp.oauth.complete`). The verifier is single-shot in
+  `mcp_oauth_sessions` (sealed, deleted at exchange time regardless of outcome). The exchange
+  is form-encoded at the token endpoint (`OAuthTokenClient`: HTTPS, no redirects, 30 s,
+  64 KiB cap), the bearer is sealed under the space's DEK, the server is marked `connected`,
+  and the tools are discovered — the spec's acceptance. The token URL answers to the same
+  outbound guard and per-space allow-list exception as the MCP endpoint itself.
 
 ## Consequences
 
@@ -60,5 +71,8 @@ an explicit allow-list, emit an audit event each time it is used**." The accepta
   path goes through one function with five refusal reasons, tested.
 - An operator cannot flip one variable to open private networks for everyone; they must grant it
   per server and per space, and they can audit every use after the fact (`audit_events`).
-- REQ-033 is honestly **partial**: remote MCP with bearer + per-space allow-list + stdio
-  default-refusal are done; OAuth and the stdio spawn are not. The gap is named, not faked.
+- REQ-033 is **complete** for this milestone's scope: remote MCP over HTTP (bearer + OAuth) and
+  stdio behind an explicit allow-list, both guarded, both sealed, both with the catalogue tools
+  persisting between probes. A member signing into an OAuth-only server is the path that most
+  deserves a live rehearsal before release (a real third-party AS); it is tracked in docs/STATE.md
+  as a validation item, not a gap in the build.

@@ -43,6 +43,7 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
         },
         Arc::new(boma_testkit::ScriptedMcpTransport::new()),
         Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
+        Arc::new(boma_testkit::ScriptedOAuthClient::new()),
     )
     .with_computers(runtime);
     App::new(

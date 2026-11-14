@@ -2057,6 +2057,62 @@ pub trait McpServerStore: Send + Sync {
         &self,
         context: &TenantContext,
     ) -> Result<Vec<(String, McpTool)>, AppError>;
+    /// Seals and stores one pending OAuth attempt for a server (REQ-033).
+    ///
+    /// The verifier never persists in clear: the store seals it under the deployment's vault.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer or the seal fails.
+    async fn store_oauth_session(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        state: &str,
+        verifier: secrecy::SecretString,
+        expires_at: &str,
+    ) -> Result<(), AppError>;
+
+    /// Atomically takes one pending OAuth session for a server.
+    ///
+    /// `now` is the caller's clock (RFC 3339, same instant the session was stamped against).
+    /// Returns `Some(verifier)` when the session exists and is unexpired; `None` otherwise —
+    /// an unknown, already-consumed or expired state. The row is deleted either way, so a
+    /// replayed `code` exchanges at most once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer or the seal does not authenticate.
+    async fn take_oauth_session(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        state: &str,
+        now: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError>;
+
+    /// The client secret, revealed for the token exchange only. Never logged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the secret does not unwrap under this deployment's vault.
+    async fn reveal_client_secret(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+    ) -> Result<Option<secrecy::SecretString>, AppError>;
+
+    /// Seals and stores the server's bearer (from an OAuth exchange) and marks it connected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the seal fails or the database cannot answer.
+    async fn store_bearer(
+        &self,
+        context: &TenantContext,
+        server_id: &str,
+        bearer: secrecy::SecretString,
+    ) -> Result<(), AppError>;
 }
 
 /// Calls an MCP server (REQ-033).
@@ -2315,6 +2371,45 @@ pub trait PluginInstallStore: Send + Sync {
         context: &TenantContext,
         source: &str,
     ) -> Result<u32, AppError>;
+}
+
+/// Exchanges an OAuth authorization code for a token, and produces the PKCE pair (REQ-033).
+///
+/// The deployment decides how the exchange happens: the members' browsers drive the
+/// `authorization_endpoint` on the server itself; this port only speaks to the token endpoint
+/// and mints the verifier/challenge pair. Tests script the whole thing against a loopback
+/// wire server; production wires a plain HTTP client with form encoding.
+#[async_trait]
+pub trait OAuthClient: Send + Sync {
+    /// Mints a fresh `(verifier, challenge)` pair (S256).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the random source cannot answer.
+    async fn pkce_pair(&self) -> Result<(secrecy::SecretString, String), AppError>;
+
+    /// Exchanges `code` at `token_url` for the token JSON.
+    ///
+    /// The form carries `grant_type=authorization_code`, `code`, `redirect_uri`, `client_id`,
+    /// `code_verifier`, and `client_secret` when the member registered a confidential client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the endpoint cannot be reached or answers with an error.
+    async fn exchange_grant(
+        &self,
+        token_url: &str,
+        form: &[(String, String)],
+    ) -> Result<serde_json::Value, AppError>;
+}
+
+/// The result of beginning an OAuth sign-in for an MCP server (REQ-033).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpOAuthStart {
+    /// Where the member's browser opens.
+    pub authorization_url: String,
+    /// The state token to present back to `mcp.oauth.complete`.
+    pub state: String,
 }
 
 /// A memory document carried into a provider turn (REQ-022).
