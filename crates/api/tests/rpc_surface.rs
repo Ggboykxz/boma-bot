@@ -2476,3 +2476,184 @@ async fn req_037_an_invalid_source_is_refused_over_rpc() {
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the sandbox contract is eleven assertions in order
+async fn req_039_the_shared_page_html_runs_only_inside_the_sandbox() {
+    let world = world().await;
+    let app_state = state(&world.app);
+
+    // Seed a shared page with the exact source we will assert against.
+    let context = TestApp::member_context(
+        &boma_domain::SpaceId::new(world.caller.space_id.clone()).expect("the space id is valid"),
+        &test_app_seed_user_id(&world.app, "person@example.com").await,
+    );
+    let seeded = boma_app::usecases::pages_save(
+        world.app.app(),
+        &context,
+        boma_app::usecases::PageSaveInput {
+            page_id: None,
+            name: Some("Weekly report".to_owned()),
+            bot_id: None,
+            run_id: None,
+            source: serde_json::json!({
+                "title": "Weekly report",
+                "blocks": [
+                    { "type": "text", "text": "All green." },
+                    { "type": "link", "label": "Docs", "href": "https://example.com/docs" },
+                ],
+            }),
+            client_nonce: None,
+        },
+    )
+    .await
+    .expect("the page saves");
+    let token = boma_app::usecases::pages_share(world.app.app(), &context, &seeded.id)
+        .await
+        .expect("the page shares");
+
+    // The HTML rendering: strict CSP, inert island, pinned runtime, no inline script.
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/pages/shared/{token}"))
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(app_state.clone())
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-security-policy"],
+        "default-src 'none'; sandbox allow-scripts; script-src 'self'; style-src 'unsafe-inline'; img-src data: https:; connect-src 'none'; form-action 'none'; base-uri 'none'"
+    );
+    assert_eq!(response.headers()["x-robots-tag"], "noindex, nofollow");
+    assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is in memory")
+        .to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).expect("the page is utf-8");
+    assert!(body.contains("<script id=\"page-data\" type=\"application/json\">"));
+    assert!(body.contains("\"title\":\"Weekly report\""));
+    assert!(body.contains("\"type\":\"link\""));
+    assert!(body.contains("<script src=\"/api/v1/assets/page-runtime.js\" defer></script>"));
+    assert_eq!(
+        body.matches("</script>").count(),
+        2,
+        "exactly the island and the runtime close"
+    );
+    assert!(
+        !body.contains("alert("),
+        "nothing executable rides the document"
+    );
+
+    // A title with markup is escaped in the element.
+    let injected = boma_app::usecases::pages_save(
+        world.app.app(),
+        &context,
+        boma_app::usecases::PageSaveInput {
+            page_id: None,
+            name: Some("Evil".to_owned()),
+            bot_id: None,
+            run_id: None,
+            source: serde_json::json!({
+                "title": "x</title><script>alert(1)</script>",
+                "blocks": [{ "type": "text", "text": "break: </script><script>alert(1)</script>" }],
+            }),
+            client_nonce: None,
+        },
+    )
+    .await
+    .expect("the poisoned page saves");
+    let token2 = boma_app::usecases::pages_share(world.app.app(), &context, &injected.id)
+        .await
+        .expect("the poisoned page shares");
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/pages/shared/{token2}"))
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(app_state.clone())
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is in memory")
+        .to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).expect("the page is utf-8");
+    assert!(
+        !body.contains("</title><script>"),
+        "the title cannot break out"
+    );
+    assert!(
+        !body.contains("<script>alert(1)</script>"),
+        "the island neutralises </script>"
+    );
+    assert_eq!(
+        body.matches("</script>").count(),
+        2,
+        "exactly the island and the runtime close"
+    );
+
+    // The pinned runtime asset: served once, pinned ETag, immutable caching, 304 on match.
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/assets/page-runtime.js")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(app_state.clone())
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/javascript; charset=utf-8"
+    );
+    assert_eq!(
+        response.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    let etag = response.headers()["etag"]
+        .to_str()
+        .expect("an etag")
+        .to_owned();
+    assert!(etag.starts_with('"'));
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is in memory")
+        .to_bytes();
+    let runtime = String::from_utf8(bytes.to_vec()).expect("the asset is utf-8");
+    assert!(runtime.contains("page-data"));
+    assert!(
+        !runtime.contains(".innerHTML"),
+        "the renderer builds elements, never markup"
+    );
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/assets/page-runtime.js")
+        .header("if-none-match", &etag)
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(app_state)
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        response.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+}

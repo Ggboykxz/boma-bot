@@ -185,19 +185,63 @@ pub async fn shared_page(
 
     match usecases::pages_shared(state.app(), &token).await {
         Ok(Some((updated_at, source))) => {
-            let body = serde_json::json!({
-                "title": source.get("title").cloned().unwrap_or(serde_json::Value::Null),
-                "blocks": source.get("blocks").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "updatedAt": updated_at,
-            });
-            shared_page_response(StatusCode::OK, &body)
+            if accept_prefers_html(&headers) {
+                let title = source
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Page");
+                let body = crate::pages::render_shared_page_html(title, &source);
+                shared_page_html_response(StatusCode::OK, body)
+            } else {
+                let body = serde_json::json!({
+                    "title": source.get("title").cloned().unwrap_or(serde_json::Value::Null),
+                    "blocks": source.get("blocks").cloned().unwrap_or_else(|| serde_json::json!([])),
+                    "updatedAt": updated_at,
+                });
+                shared_page_response(StatusCode::OK, &body)
+            }
         }
         Ok(None) => {
-            let body = serde_json::json!({ "error": "Not found." });
-            shared_page_response(StatusCode::NOT_FOUND, &body)
+            if accept_prefers_html(&headers) {
+                let body = crate::pages::render_shared_page_html(
+                    "Not found.",
+                    &serde_json::json!({ "title": "Not found.", "blocks": [] }),
+                );
+                shared_page_html_response(StatusCode::NOT_FOUND, body)
+            } else {
+                let body = serde_json::json!({ "error": "Not found." });
+                shared_page_response(StatusCode::NOT_FOUND, &body)
+            }
         }
         Err(error) => ApiError::from(error).into_response(),
     }
+}
+
+/// Whether the caller asked for HTML (`Accept: text/html`).
+fn accept_prefers_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"))
+}
+
+/// The shared-page HTML answer: the golden headers plus the sandbox policy.
+fn shared_page_html_response(status: StatusCode, body: String) -> Response {
+    (
+        status,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+            (HeaderName::from_static("x-robots-tag"), "noindex, nofollow"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                crate::pages::SHARED_PAGE_CSP,
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// The shared-page answer with the golden headers.

@@ -14,6 +14,7 @@ pub mod config;
 pub mod error;
 pub mod health;
 pub mod openapi;
+pub mod pages;
 pub mod public;
 pub mod realtime;
 pub mod router;

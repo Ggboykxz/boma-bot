@@ -86,7 +86,21 @@ run to conclusion and reports it.
 
 **M5 — complete. Seven slices committed and pushed (`6c7577d`, CI green: rust + compose + web).**
 
-**M6 — in flight. Slices 1 and 2 committed: REQ-036 (`c369833`, CI green) and REQ-037 (in this revision).**
+**M6 — in flight. Slices 1–3 committed (`c369833`, `33cf6eb`, in this revision): REQ-036, REQ-037, REQ-039.**
+
+3. **REQ-039 (bot-built pages and dashboards, SHOULD) — slice 3.** The public shared-page
+   route content-negotiates: JSON keeps the golden path; `Accept: text/html` serves a document
+   under a strict policy: `Content-Security-Policy: default-src 'none'; sandbox allow-scripts;
+   script-src 'self'; style-src 'unsafe-inline'; img-src data: https:; connect-src 'none';
+   form-action 'none'; base-uri 'none'` — `sandbox allow-scripts` without `allow-same-origin`
+   makes the page an opaque origin (no cookies, no storage, no reach into this deployment). The
+   document has exactly two `<script>` tags: the inert `application/json` island of the block
+   document (`</` neutralised inside it, titles escaped for the `<title>` element) and the
+   pinned same-origin runtime at `/api/v1/assets/page-runtime.js` (ETag sha256, `max-age=
+   31536000, immutable`, 304 on `If-None-Match`). The runtime is vanilla JS, no dependency,
+   `textContent` only (no `innerHTML`) — a block can never become markup; block schema validated
+   on write (`boma_domain::page`). The app's own CSP is untouched. Mermaid is **not** vendored
+   (named gap); charts are drawn as bars from block data.
 
 2. **REQ-037 (share a page by link, MUST) — slice 2.** `pages.save|get|share|revokeShare` RPC.
    A page is a document of validated blocks (`text`, `table`, `chart` bar-kind only, `link`,

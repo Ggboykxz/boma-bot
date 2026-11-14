@@ -13,7 +13,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{authroutes, error::ApiError, health, public, rpc, screen, state::AppState};
+use crate::{authroutes, error::ApiError, health, pages, public, rpc, screen, state::AppState};
 
 /// Builds the HTTP surface.
 ///
@@ -57,6 +57,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/pages/shared/{token}",
             get(public::shared_page),
+        )
+        .route(
+            "/api/v1/assets/page-runtime.js",
+            get(pages::page_runtime_js),
         )
         .merge(rpc::router())
         .fallback(not_found)
