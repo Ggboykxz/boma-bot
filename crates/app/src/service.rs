@@ -85,6 +85,8 @@ pub struct Stores {
     pub groups: Arc<dyn crate::ports::GroupStore>,
     /// The external agents of the improvement program (REQ-059).
     pub external_agents: Arc<dyn crate::ports::ExternalAgentStore>,
+    /// The sign-in requests of the improvement program (REQ-060).
+    pub signin_requests: Arc<dyn crate::ports::SignInStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -156,6 +158,7 @@ impl Stores {
         password_resets: Arc<dyn crate::ports::PasswordResetStore>,
         groups: Arc<dyn crate::ports::GroupStore>,
         external_agents: Arc<dyn crate::ports::ExternalAgentStore>,
+        signin_requests: Arc<dyn crate::ports::SignInStore>,
     ) -> Self {
         Self {
             accounts,
@@ -189,6 +192,7 @@ impl Stores {
             password_resets,
             groups,
             external_agents,
+            signin_requests,
             tickets,
             effects,
             tools,

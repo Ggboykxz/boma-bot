@@ -66,6 +66,8 @@ pub use stores::computer::PostgresComputerStore;
 pub use stores::connectors::PostgresConnectorStore;
 pub use stores::events::PostgresEventStore;
 pub use stores::external_agents::PostgresExternalAgentStore;
+pub use stores::signin::PostgresSignInStore;
+
 pub use stores::groups::PostgresGroupStore;
 pub use stores::invitations::PostgresInvitationStore;
 pub use stores::mail::PostgresMailStore;

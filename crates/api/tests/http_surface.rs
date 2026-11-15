@@ -131,6 +131,7 @@ fn state_with_database(
                 std::sync::Arc::new(boma_testkit::MemoryPasswordResetStore::new(database)),
                 std::sync::Arc::new(boma_testkit::MemoryGroupStore::new(database)),
                 std::sync::Arc::new(boma_testkit::MemoryExternalAgentStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemorySignInStore::new(database)),
             ),
             boma_app::Services::new(
                 std::sync::Arc::new(boma_testkit::MemoryEventPublisher::default()),
@@ -949,6 +950,9 @@ fn state_with_web_root(healthy: bool) -> (AppState, std::path::PathBuf) {
                     &boma_testkit::MemoryDatabase::new(),
                 )),
                 std::sync::Arc::new(boma_testkit::MemoryExternalAgentStore::new(
+                    &boma_testkit::MemoryDatabase::new(),
+                )),
+                std::sync::Arc::new(boma_testkit::MemorySignInStore::new(
                     &boma_testkit::MemoryDatabase::new(),
                 )),
             ),

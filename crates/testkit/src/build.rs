@@ -571,6 +571,7 @@ impl TestAppBuilder {
             Arc::new(crate::memory::MemoryPasswordResetStore::new(&database)),
             Arc::new(crate::memory::MemoryGroupStore::new(&database)),
             Arc::new(crate::memory::MemoryExternalAgentStore::new(&database)),
+            Arc::new(crate::memory::MemorySignInStore::new(&database)),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -8887,8 +8888,122 @@ mod group_routing_tests {
 #[cfg(test)]
 mod external_agent_tests {
     use super::TestApp;
+    use crate::ScriptedProvider;
 
     /// The live-window case: a well-behaved AG-UI executor answers with a text turn.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_060_bot_asks_for_signin_and_person_grants_in_one_shot() {
+        use std::sync::Arc;
+
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.as_str().to_owned(),
+                text: "open the invoice page please".to_owned(),
+                client_nonce: Some("req-060-1".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+
+        // The agent decides it needs a signin and asks with the builtin tool.
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_signin".to_owned(),
+                name: "signin.site".to_owned(),
+                arguments: serde_json::json!({
+                    "origin": "https://vendor-contoso.example.com",
+                    "displayName": "the invoice vendor",
+                }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec![
+                "I will open the invoice vendor once they authorise me.".to_owned(),
+            ]),
+        ]));
+        let worker = boma_app::worker::Worker::new(
+            Arc::new(test.app().clone()),
+            provider,
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // The approval card is the answer; resolve it via the card answer usecase.
+        let thread = test
+            .app()
+            .stores
+            .threads
+            .for_bot(&context, &bot)
+            .await
+            .expect("the thread answers")
+            .expect("the bot has a thread");
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread.id, None, 10)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                _ => None,
+            })
+            .expect("an approval card is in the room");
+        boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+
+        // The request is recorded pending or granted exactly once.
+        let listed = boma_app::usecases::list_signin_requests(test.app(), &context, Some(10))
+            .await
+            .expect("the list answers");
+        let req = listed
+            .iter()
+            .find(|req| req.bot_id == bot)
+            .expect("the request was recorded");
+        assert_eq!(
+            req.status,
+            boma_domain::signin::SignInRequestStatus::Pending,
+            "a request created by an approved tool call is recorded pending until the member answers"
+        );
+
+        // The member grants explicitly.
+        let granted = boma_app::usecases::resolve_signin(test.app(), &context, &req.id, true)
+            .await
+            .expect("the request is granted");
+        assert_eq!(
+            granted.status,
+            boma_domain::signin::SignInRequestStatus::Granted,
+            "the member grant flips the row to granted"
+        );
+
+        // A second resolution is refused (idempotence).
+        let second = boma_app::usecases::resolve_signin(test.app(), &context, &req.id, false).await;
+        assert!(matches!(second, Err(boma_app::AppError::Conflict)));
+    }
+
     #[tokio::test]
     async fn req_059_an_external_agent_answers_in_the_room() {
         let (base_url, _) = http_stub(

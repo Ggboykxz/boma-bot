@@ -17,6 +17,8 @@ pub mod connectors;
 pub mod events;
 pub mod external_agents;
 pub mod groups;
+pub mod signin;
+
 pub mod invitations;
 pub mod mail;
 pub mod mcp;

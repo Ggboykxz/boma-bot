@@ -32,7 +32,7 @@ use crate::{
         AdminPluginsReply, AnswerReply, ArtifactCreateReply, ArtifactGetReply,
         ArtifactListSpaceReply, ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply,
         ArtifactView, AuditEventView, AuditExportReply, BillingCheckoutReply, BillingStatusReply,
-        BoardsGetReply, BotReply, BotsListReply, CancelReply, CatalogModelView,
+        BoardsGetReply, BotReply, BotsListReply, BotsSignInsReply, CancelReply, CatalogModelView,
         CatalogProviderView, ComputerOpenScreenReply, ComputerProviderInfo, ComputerProviderReply,
         ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
         ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
@@ -51,9 +51,10 @@ use crate::{
         PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
         ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
         RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
-        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply, SkillReply,
-        SkillView, SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply,
-        ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply, TicketView,
+        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply,
+        SignInRequestView, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
+        SpendingLimitReply, TeachSkillReply, ThreadHeadReply, TicketCommentReply,
+        TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -138,6 +139,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BOTS, "list"),
         (namespaces::BOTS, "connectExternal"),
         (namespaces::BOTS, "disconnectExternal"),
+        (namespaces::BOTS, "signIns"),
         (namespaces::SPACES, "create"),
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
@@ -350,6 +352,9 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "disconnectExternal") => bots_disconnect_external(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "signIns") => bots_sign_ins(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::SPACES, "create") => spaces_create(state, auth, body)
@@ -3800,5 +3805,35 @@ async fn bots_disconnect_external(
     Ok(ExternalAgentDisconnectedReply {
         bot_id: request.bot_id,
         disconnected: true,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M13.1 — sign-in requests (REQ-060)
+// ---------------------------------------------------------------------------
+
+async fn bots_sign_ins(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<BotsSignInsReply, ApiError> {
+    let _: serde_json::Value = parse(&body)?;
+    let requests = usecases::list_signin_requests(state.app(), &auth.actor.context, None).await?;
+    Ok(BotsSignInsReply {
+        requests: requests
+            .into_iter()
+            .map(|request| SignInRequestView {
+                id: request.id,
+                bot_id: request.bot_id.as_str().to_owned(),
+                origin: request.origin,
+                display_name: request.display_name,
+                status: match request.status {
+                    boma_domain::signin::SignInRequestStatus::Pending => "pending".to_string(),
+                    boma_domain::signin::SignInRequestStatus::Granted => "granted".to_string(),
+                    boma_domain::signin::SignInRequestStatus::Refused => "refused".to_string(),
+                },
+                created_at: request.created_at,
+            })
+            .collect(),
     })
 }

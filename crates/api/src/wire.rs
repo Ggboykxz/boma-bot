@@ -2033,3 +2033,41 @@ pub struct ExternalAgentDisconnectedReply {
     /// Always true when the handler returns.
     pub disconnected: bool,
 }
+
+/// One sign-in request, as returned over RPC (never plaintext secrets).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInRequestView {
+    /// The id to refer to this request later.
+    pub id: String,
+    /// The bot asking.
+    pub bot_id: String,
+    /// The site a URL origin.
+    pub origin: String,
+    /// How a person should read it.
+    pub display_name: String,
+    /// What state the request is in.
+    pub status: String,
+    /// When the request was filed.
+    pub created_at: String,
+}
+
+/// The reply of `bots.signIns`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotsSignInsReply {
+    /// Newest first.
+    pub requests: Vec<SignInRequestView>,
+}
+
+/// The reply of `bots.requestSignIn`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignInRequestedReply {
+    /// The id of the new request.
+    pub id: String,
+    /// The display name of the site.
+    pub display_name: String,
+    /// The site origin.
+    pub origin: String,
+}

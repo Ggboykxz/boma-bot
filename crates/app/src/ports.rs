@@ -4357,3 +4357,42 @@ pub trait ExternalAgentStore: Send + Sync {
         bot_id: &BotId,
     ) -> Result<Option<boma_domain::external::ExternalAgent>, AppError>;
 }
+
+/// Sign-in request lifecycle (REQ-060, improvement program).
+#[async_trait]
+pub trait SignInStore: Send + Sync {
+    /// Record or update a sign-in request (upsert-by-id).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn record(
+        &self,
+        request: boma_domain::signin::NewSignInRequest,
+    ) -> Result<boma_domain::signin::SignInRequest, AppError>;
+
+    /// The sign-in requests outstanding or resolved for one space, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn list(
+        &self,
+        context: &TenantContext,
+        limit: Option<usize>,
+    ) -> Result<Vec<boma_domain::signin::SignInRequest>, AppError>;
+
+    /// Resolve one request — exactly once. Second resolution is refused as Conflict.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer, or when the request is already answered
+    /// (AppError::Conflict).
+    async fn resolve(
+        &self,
+        context: &TenantContext,
+        id: &str,
+        granted: bool,
+        resolved_by: &UserId,
+    ) -> Result<boma_domain::signin::SignInRequest, AppError>;
+}

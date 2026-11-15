@@ -3764,6 +3764,65 @@ pub async fn spending_limit_set(
     spending_limit_get(app, context).await
 }
 
+/// Records a sign-in request after its approval exists (REQ-060).
+///
+/// No new auth material is gathered here; the person signs in themselves through a recording
+/// browser they own. The tool result names the grant so the caller can proceed once the
+/// member approves.
+async fn approved_signin_request(
+    app: &App,
+    context: &TenantContext,
+    bot: &boma_domain::Bot,
+    call: &crate::ports::PendingToolCall,
+) -> (serde_json::Value, bool) {
+    let string = |key: &str| -> Option<String> {
+        call.arguments
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let Some(origin) = string("origin") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs an `origin` argument (the site URL the person signs into)" } }),
+            false,
+        );
+    };
+    let Some(display_name) = string("displayName") else {
+        return (
+            serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `displayName` argument (how a person will see it)" } }),
+            false,
+        );
+    };
+    let thread_id = Some(call.thread_id.as_str().to_owned());
+    match request_signin(
+        app,
+        context,
+        bot.id.as_str(),
+        thread_id.as_deref(),
+        &origin,
+        &display_name,
+    )
+    .await
+    {
+        Ok(out) => (
+            serde_json::json!({
+                "ok": true,
+                "body": {
+                    "requestId": out.id,
+                    "origin": origin,
+                    "displayName": display_name,
+                    "status": "pending",
+                },
+            }),
+            false,
+        ),
+        Err(error) => (
+            serde_json::json!({ "ok": false, "body": { "error": format!("the request could not be recorded: {error}") } }),
+            false,
+        ),
+    }
+}
+
 /// Records the purchase after its approval exists (REQ-018).
 async fn approved_purchase_request(
     app: &App,
@@ -7165,6 +7224,7 @@ async fn execute_approved_tool(
         "artifact.create" => approved_artifact_create(app, context, bot, call).await,
         "page.save" => approved_page_save(app, context, bot, call).await,
         "purchase.request" => approved_purchase_request(app, context, call).await,
+        "signin.site" => approved_signin_request(app, context, bot, call).await,
         key if key.starts_with("mcp.") => approved_mcp_call(app, context, call).await,
         "delegate.bot" => {
             let Some(bot_ref) = string("bot") else {
@@ -7467,6 +7527,14 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
                     .to_owned(),
             kind: boma_domain::ToolKind::Builtin,
             effect: boma_domain::ToolEffect::Spend,
+        },
+        ToolSpec {
+            key: "signin.site".to_owned(),
+            description:
+                "Ask a member to sign in to a site on this bot's behalf. The person approves the sign-in once and the credentials never leave their browser — they are sealed into the vault only when the member approves."
+                    .to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Write,
         },
     ]
 }
@@ -9138,5 +9206,119 @@ pub async fn disconnect_external_agent(
         .external_agents
         .disconnect(context, &bot_id)
         .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// M13.1 — sign-in requests (REQ-060)
+// ---------------------------------------------------------------------------
+
+/// The outcome of asking for a sign-in grant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInRequested {
+    /// The request id to present at approval or screening time.
+    pub id: String,
+}
+
+/// Ask the member to sign in to a site on the bot's behalf.
+///
+/// The record is `pending` until a member answers the card; nothing is sealed, and no network
+/// happens when this process is called — the actual credentials stay in the person's browser
+/// through the recording browser path.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the origin is not an absolute https URL the member can
+/// actually visit, or when the text is empty.
+pub async fn request_signin(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    thread_id: Option<&str>,
+    origin: &str,
+    display_name: &str,
+) -> Result<SignInRequested, AppError> {
+    req_signin_url_must_parse(origin)?;
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let user_id = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    let now = app.services.clock.now();
+    let id = app.services.ids.new_id("sin");
+    let req = app
+        .stores
+        .signin_requests
+        .record(boma_domain::signin::NewSignInRequest {
+            id: id.clone(),
+            space_id,
+            bot_id,
+            requested_by: user_id,
+            thread_id: thread_id.map(str::to_owned),
+            origin: origin.trim_end_matches('/').to_owned(),
+            display_name: display_name.trim().to_owned(),
+            created_at: now,
+        })
+        .await?;
+    tracing::info!(request = %req.id, origin = %req.origin, "bot asked for a sign-in grant");
+    Ok(SignInRequested { id: req.id })
+}
+
+/// Approve or refuse a sign-in request.
+///
+/// Exactly-once semantics: answering an already-resolved request is refused as `Conflict`.
+///
+/// # Errors
+///
+/// Returns [`AppError::Conflict`] when the request was already resolved, or on store trouble.
+pub async fn resolve_signin(
+    app: &App,
+    context: &TenantContext,
+    id: &str,
+    granted: bool,
+) -> Result<boma_domain::signin::SignInRequest, AppError> {
+    let user_id = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    app.stores
+        .signin_requests
+        .resolve(context, id, granted, &user_id)
+        .await
+}
+
+/// List the sign-in requests of the space, newest first.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn list_signin_requests(
+    app: &App,
+    context: &TenantContext,
+    limit: Option<usize>,
+) -> Result<Vec<boma_domain::signin::SignInRequest>, AppError> {
+    app.stores.signin_requests.list(context, limit).await
+}
+
+fn req_signin_url_must_parse(origin: &str) -> Result<(), AppError> {
+    let parsed = reqwest::Url::parse(origin).map_err(|_| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a sign-in request needs a parseable origin".to_owned(),
+        ))
+    })?;
+    let host = parsed.host_str().ok_or_else(|| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a sign-in request needs a host".to_owned(),
+        ))
+    })?;
+    if host.trim().is_empty() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a sign-in request needs a host".to_owned(),
+        )));
+    }
     Ok(())
 }

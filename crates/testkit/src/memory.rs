@@ -8768,3 +8768,82 @@ impl boma_app::ports::ExternalAgentStore for MemoryExternalAgentStore {
             .cloned())
     }
 }
+
+/// The sign-in requests store of the improvement program (REQ-060).
+#[derive(Clone)]
+pub struct MemorySignInStore {
+    requests: Arc<RwLock<std::collections::HashMap<String, boma_domain::signin::SignInRequest>>>,
+}
+
+impl MemorySignInStore {
+    /// Builds the store on an empty database.
+    #[must_use]
+    pub fn new(_database: &MemoryDatabase) -> Self {
+        Self {
+            requests: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::SignInStore for MemorySignInStore {
+    async fn record(
+        &self,
+        request: boma_domain::signin::NewSignInRequest,
+    ) -> Result<boma_domain::signin::SignInRequest, AppError> {
+        let mut requests = self.requests.write().map_err(|_| AppError::Unavailable)?;
+        let req = boma_domain::signin::SignInRequest {
+            id: request.id,
+            space_id: request.space_id,
+            bot_id: request.bot_id,
+            requested_by: request.requested_by,
+            thread_id: request.thread_id,
+            origin: request.origin,
+            display_name: request.display_name,
+            status: boma_domain::signin::SignInRequestStatus::Pending,
+            granted_by: None,
+            created_at: request.created_at.clone(),
+            updated_at: request.created_at,
+        };
+        requests.insert(req.id.clone(), req.clone());
+        Ok(req)
+    }
+
+    async fn list(
+        &self,
+        context: &boma_domain::TenantContext,
+        limit: Option<usize>,
+    ) -> Result<Vec<boma_domain::signin::SignInRequest>, AppError> {
+        let _space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let requests = self.requests.read().map_err(|_| AppError::Unavailable)?;
+        let mut v: Vec<_> = requests.values().cloned().collect();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        if let Some(limit) = limit {
+            v.truncate(limit);
+        }
+        Ok(v)
+    }
+
+    async fn resolve(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &str,
+        granted: bool,
+        resolved_by: &boma_domain::UserId,
+    ) -> Result<boma_domain::signin::SignInRequest, AppError> {
+        let _space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut requests = self.requests.write().map_err(|_| AppError::Unavailable)?;
+        let req = requests.get_mut(id).ok_or(AppError::NotFound)?;
+        if req.status != boma_domain::signin::SignInRequestStatus::Pending {
+            return Err(AppError::Conflict);
+        }
+        req.status = if granted {
+            boma_domain::signin::SignInRequestStatus::Granted
+        } else {
+            boma_domain::signin::SignInRequestStatus::Refused
+        };
+        req.granted_by = Some(resolved_by.clone());
+        req.updated_at = req.created_at.clone();
+        Ok(req.clone())
+    }
+}

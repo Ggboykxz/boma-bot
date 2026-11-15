@@ -4806,3 +4806,46 @@ async fn req_059_bots_connect_external_over_rpc_round_trips() {
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// ---------------------------------------------------------------------------
+// M13.1 — sign-in requests (REQ-060)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_060_bots_request_signin_and_list_round_trips() {
+    let test_app = TestApp::builder().build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+    let (_bot, _) = test_app
+        .seed_bot(&space_id, &owner, "Analyst")
+        .await
+        .expect("the bot exists");
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // A member can ask the bot to sign in on their behalf via the new RPC.
+    let response = post(
+        state(&test_app),
+        "/rpc/bots/signIns",
+        Some(&caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body["requests"].as_array().map(Vec::len),
+        Some(0),
+        "no sign-in requests before anyone asks"
+    );
+}
