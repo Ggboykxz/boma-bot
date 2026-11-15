@@ -16,7 +16,8 @@
     },
     {
       "role": "button",
-      "state": "enabled"
+      "state": "enabled",
+      "name": "Approve"
     },
     {
       "role": "textbox",

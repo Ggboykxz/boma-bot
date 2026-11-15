@@ -1768,6 +1768,45 @@ mod tests {
     }
 
     #[test]
+    fn req_010_a_bot_message_serialises_its_attribution_and_a_user_message_does_not() {
+        use boma_domain::BotId;
+
+        let base = boma_domain::Message {
+            id: MessageId::new("msg_1").expect("an id is accepted"),
+            thread_id: ThreadId::new("thr_1").expect("an id is accepted"),
+            seq: 1,
+            role: MessageRole::Bot,
+            blocks: vec![Block::Text {
+                text: "Three PRs, one revert.".to_owned(),
+            }],
+            bot_id: Some(BotId::new("bot_a").expect("an id is accepted")),
+            author_user_id: None,
+            run_id: Some(RunId::new("run_1").expect("an id is accepted")),
+            reply_to_message_id: None,
+            reply_quote: None,
+            client_nonce: None,
+            created_at: "2026-01-01T00:00:01Z".to_owned(),
+            reactions: Vec::new(),
+        };
+        let bot = super::GroupMessageView::from(&base);
+        let json = serde_json::to_value(bot).expect("the view serialises");
+        assert_eq!(json["botId"], serde_json::json!("bot_a"));
+        assert_eq!(json["runId"], serde_json::json!("run_1"));
+        assert_eq!(json["role"], serde_json::json!("bot"));
+
+        let user = boma_domain::Message {
+            role: MessageRole::User,
+            bot_id: None,
+            run_id: None,
+            ..base
+        };
+        let json = serde_json::to_value(super::GroupMessageView::from(&user))
+            .expect("the view serialises");
+        assert!(json.get("botId").is_none());
+        assert_eq!(json["role"], serde_json::json!("user"));
+    }
+
+    #[test]
     fn req_001_the_send_reply_names_the_message_and_the_run() {
         let reply = SendReply {
             message_id: "msg_1".to_owned(),
@@ -1875,4 +1914,94 @@ pub struct GroupsCreateReply {
     pub thread_id: String,
     /// The member bots, in creation order.
     pub member_bot_ids: Vec<String>,
+}
+
+/// The body of `groups.get` — one group as its members see it (REQ-010).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupBotView {
+    /// The bot's id.
+    pub id: String,
+    /// The bot's display name.
+    pub name: String,
+}
+
+/// The reply of `groups.get`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupGetReply {
+    /// The group's id.
+    pub id: String,
+    /// The name people see.
+    pub name: String,
+    /// The thread every participant shares.
+    pub thread_id: String,
+    /// The member bots, in join order.
+    pub member_bot_ids: Vec<String>,
+    /// The member bots with the names they answer to.
+    pub member_bots: Vec<GroupBotView>,
+    /// When the group was created.
+    pub created_at: String,
+}
+
+/// One message as the group room renders it, including the bot that authored it.
+///
+/// The same body shape as [`MessageView`] with attribution on top: a bot message carries
+/// `botId`; a user message carries none (the member is author by the auth context, not by a
+/// payload field).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMessageView {
+    /// Everything a regular message view carries.
+    #[serde(flatten)]
+    pub base: MessageView,
+    /// The bot that wrote this message, when a bot did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+}
+
+impl From<&Message> for GroupMessageView {
+    fn from(message: &Message) -> Self {
+        Self {
+            base: MessageView::from(message),
+            bot_id: message.bot_id.as_ref().map(|bot| bot.as_str().to_owned()),
+        }
+    }
+}
+
+/// The reply of `groups.messages`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMessagesReply {
+    /// The messages, newest first.
+    pub messages: Vec<GroupMessageView>,
+    /// The cursor of the older page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// The reply of `groups.list` — the caller's groups with the shared thread handle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupsListReply {
+    /// The groups the caller belongs to, oldest first.
+    pub groups: Vec<GroupListView>,
+}
+
+/// One group in a list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupListView {
+    /// The group's id.
+    pub id: String,
+    /// The name people see.
+    pub name: String,
+    /// The thread everyone shares.
+    pub thread_id: String,
+    /// The id of the bot every message is attributed to until someone mentions another.
+    pub owner_bot_id: String,
+    /// The number of bots in this group.
+    pub member_count: u32,
+    /// When it was created.
+    pub created_at: String,
 }

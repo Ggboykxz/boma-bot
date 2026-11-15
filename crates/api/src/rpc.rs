@@ -37,7 +37,8 @@ use crate::{
         ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
         ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
         ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
-        ExportStartReply, ExportStatusReply, GroupsCreateReply, GroupsCreateRequest, HeldDropReply,
+        ExportStartReply, ExportStatusReply, GroupBotView, GroupGetReply, GroupListView,
+        GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply, HeldDropReply,
         HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply, InstallTelegramReply,
         InstallUrlReply, InstallationsReply, InvitationAcceptReply, InvitationAcceptRequest,
         InvitationReply, MailPolicyReply, MailPolicyView, MarketplaceInstallReply,
@@ -225,6 +226,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::ADMIN, "plugins.decide"),
         (namespaces::INVITATIONS, "accept"),
         (namespaces::GROUPS, "create"),
+        (namespaces::GROUPS, "get"),
+        (namespaces::GROUPS, "list"),
+        (namespaces::GROUPS, "messages"),
     ]
 }
 
@@ -611,6 +615,15 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::GROUPS, "create") => groups_create(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::GROUPS, "get") => groups_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::GROUPS, "list") => groups_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::GROUPS, "messages") => groups_messages(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -3605,6 +3618,111 @@ async fn groups_create(
             .member_bot_ids
             .into_iter()
             .map(|bot| bot.as_str().to_owned())
+            .collect(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M11.3 — groups, read (REQ-010)
+// ---------------------------------------------------------------------------
+
+/// `groups.messages` — a page of the shared thread, attribution included.
+///
+/// The wire carries the same shape as `threads/messages` with `botId` on bot messages. The
+/// member is never attributed; the auth context owns their rows.
+async fn groups_messages(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<GroupMessagesReply, ApiError> {
+    let request: MessagesRequest = parse(&body)?;
+    let page = usecases::group_messages(
+        state.app(),
+        &auth.actor.context,
+        &request.thread_id,
+        request.cursor.as_deref(),
+        request.limit,
+    )
+    .await?;
+
+    Ok(GroupMessagesReply {
+        messages: page
+            .messages
+            .iter()
+            .map(crate::wire::GroupMessageView::from)
+            .collect(),
+        next_cursor: page.next_cursor,
+    })
+}
+
+/// The body of `groups.get` (REQ-010).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupsGetRequest {
+    /// The group to read.
+    id: String,
+}
+
+/// `groups.get` — one group as its members see it.
+///
+/// The wire returns the shared thread id and the member bots with their names — enough for the
+/// screen to render the shared room without ever touching another tenant's group (REQ-010,
+/// REQ-043).
+async fn groups_get(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<GroupGetReply, ApiError> {
+    let request: GroupsGetRequest = parse(&body)?;
+    let outcome = usecases::get_group(state.app(), &auth.actor.context, &request.id).await?;
+    let group = outcome.group;
+    Ok(GroupGetReply {
+        id: group.id.as_str().to_owned(),
+        name: group.name,
+        thread_id: group.thread_id.as_str().to_owned(),
+        member_bot_ids: group
+            .bot_ids
+            .iter()
+            .map(|bot| bot.as_str().to_owned())
+            .collect(),
+        member_bots: outcome
+            .member_bot_names
+            .into_iter()
+            .map(|(id, name)| GroupBotView {
+                id: id.as_str().to_owned(),
+                name,
+            })
+            .collect(),
+        created_at: group.created_at,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M11.3 — groups, list (REQ-010)
+// ---------------------------------------------------------------------------
+
+/// `groups.list` — every group the caller belongs to, oldest first.
+///
+/// The wire carries the shared thread handle and the bot-count so the rail can render a row
+/// per group without a second round-trip.
+async fn groups_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<GroupsListReply, ApiError> {
+    let _: serde_json::Value = parse(&body)?;
+    let groups = usecases::list_groups(state.app(), &auth.actor.context).await?;
+    Ok(GroupsListReply {
+        groups: groups
+            .into_iter()
+            .map(|group| GroupListView {
+                id: group.id.as_str().to_owned(),
+                name: group.name,
+                thread_id: group.thread_id.as_str().to_owned(),
+                owner_bot_id: group.bot_ids[0].as_str().to_owned(),
+                member_count: group.bot_ids.len().try_into().unwrap_or(u32::MAX),
+                created_at: group.created_at,
+            })
             .collect(),
     })
 }

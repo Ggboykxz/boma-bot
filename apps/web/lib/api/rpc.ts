@@ -1310,3 +1310,100 @@ export async function computerOpenScreenFrame(
     return null;
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// M11.3 — groups client (REQ-010)
+// ---------------------------------------------------------------------------
+
+export interface GroupBotView {
+  id: string;
+  name: string;
+}
+
+/** The reply of `groups.get`. */
+export interface GroupGetReply {
+  id: string;
+  name: string;
+  threadId: string;
+  memberBotIds: string[];
+  memberBots: GroupBotView[];
+  createdAt: string;
+}
+
+/** The reply of `groups.list`. */
+export interface GroupListView {
+  id: string;
+  name: string;
+  threadId: string;
+  ownerBotId: string;
+  memberCount: number;
+  createdAt: string;
+}
+
+/** The reply of `groups.list`. */
+export interface GroupsListReply {
+  groups: GroupListView[];
+}
+
+/** One message as the room renders it: base shape + bot attribution. */
+export interface GroupMessageView extends MessageView {
+  botId?: string;
+}
+
+/** The reply of `groups.messages`. */
+export interface GroupMessagesReply {
+  messages: GroupMessageView[];
+  nextCursor?: string;
+}
+
+/** The reply of `groups.create` — the room is born with its shared thread. */
+export interface GroupsCreateReply {
+  id: string;
+  name: string;
+  threadId: string;
+  memberBotIds: string[];
+}
+
+export function groupsCreate(
+  request: { name: string; botIds: string[] },
+  signal?: AbortSignal,
+): Promise<GroupsCreateReply> {
+  return call<GroupsCreateReply>("groups", "create", request, signal);
+}
+
+export async function groupsList(
+  signal?: AbortSignal,
+): Promise<GroupsListReply> {
+  return call<GroupsListReply>("groups", "list", {}, signal);
+}
+
+export async function groupsGet(
+  request: { id: string },
+  signal?: AbortSignal,
+): Promise<GroupGetReply> {
+  return call<GroupGetReply>("groups", "get", request, signal);
+}
+
+export async function groupsMessages(
+  request: { threadId: string; cursor?: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<GroupMessagesReply> {
+  const reply = await call<GroupMessagesReply>("groups", "messages", request, signal);
+  const messages = Array.isArray(reply.messages)
+    ? reply.messages
+        .map((raw): GroupMessageView | null => {
+          const view = normalizeMessage(raw);
+          if (!view) {
+            return null;
+          }
+          const botId = (raw as unknown as Record<string, unknown>).botId;
+          return typeof botId === "string" ? { ...view, botId } : view;
+        })
+        .filter((message): message is GroupMessageView => message !== null)
+    : [];
+  return {
+    messages,
+    ...(typeof reply.nextCursor === "string" ? { nextCursor: reply.nextCursor } : {}),
+  };
+}

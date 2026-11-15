@@ -51,6 +51,12 @@ export interface UiExpectation {
   role: string;
   state?: string;
   count?: number;
+  /**
+   * Optional accessible-name filter (exact). Goldens that say "the first button is disabled"
+   * are meaningless once any enabled button earlier in the DOM order would satisfy them; the
+   * name pin keeps the expectation about the control it means.
+   */
+  name?: string;
 }
 
 export interface UiFixture {
@@ -597,6 +603,84 @@ const SEEDS: Record<string, (page: Page) => Promise<void>> = {
     });
   },
 
+  /** A group whose room carries one user message and one attributed bot reply (REQ-010). */
+  "group-golden-room": async (page) => {
+    const group = {
+      id: "group_golden",
+      name: "Triage",
+      threadId: "thr_group_golden",
+      memberBotIds: ["bot_analyst", "bot_writer"],
+      memberBots: [
+        { id: "bot_analyst", name: "analyst" },
+        { id: "bot_writer", name: "writer" },
+      ],
+      createdAt: "2026-01-01T00:00:00Z",
+    };
+    await seedRpc(page, {
+      answers: {
+        "groups/get": group,
+        "groups/list": {
+          groups: [
+            {
+              id: "group_golden",
+              name: "Triage",
+              threadId: "thr_group_golden",
+              ownerBotId: "bot_analyst",
+              memberCount: 2,
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          ],
+        },
+        "groups/messages": {
+          messages: [
+            {
+              id: "msg_group_1",
+              seq: 1,
+              role: "user",
+              blocks: [{ type: "text", text: "@analyst please summarise the thread" }],
+              createdAt: "2026-01-01T00:00:01Z",
+            },
+            {
+              id: "msg_group_2",
+              seq: 2,
+              role: "bot",
+              botId: "bot_analyst",
+              blocks: [{ type: "text", text: "The thread is calm: three PRs merged." }],
+              runId: "run_group_1",
+              createdAt: "2026-01-01T00:00:02Z",
+            },
+          ],
+        },
+        "bots/list": {
+          bots: [
+            {
+              id: "bot_analyst",
+              name: "analyst",
+              threadId: "thr_a",
+              archivedAt: null,
+              snoozedUntil: null,
+              unreadCount: 0,
+            },
+            {
+              id: "bot_writer",
+              name: "writer",
+              threadId: "thr_b",
+              archivedAt: null,
+              snoozedUntil: null,
+              unreadCount: 0,
+            },
+          ],
+        },
+        "threads/send": {
+          messageId: "msg_sent",
+          runId: "run_sent",
+          status: "queued",
+          runIds: ["run_sent"],
+        },
+      },
+    });
+  },
+
   /** A pending question card keeps the composer usable and the composer stays usable (REQ-007). */
   "pending-question-card": async (page) => {
     await seedRpc(page, {
@@ -643,8 +727,12 @@ export async function assertExpectations(
   expectations: UiExpectation[],
 ): Promise<void> {
   for (const assertion of expectations) {
-    const locator = page.getByRole(assertion.role as Role);
-    const label = `role=${assertion.role}`;
+    const locator = assertion.name
+      ? page.getByRole(assertion.role as Role, { name: assertion.name })
+      : page.getByRole(assertion.role as Role);
+    const label = assertion.name
+      ? `role=${assertion.role} name=${assertion.name}`
+      : `role=${assertion.role}`;
 
     if (assertion.count !== undefined) {
       await expect(locator, `${label} count`).toHaveCount(assertion.count);

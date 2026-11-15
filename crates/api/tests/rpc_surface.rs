@@ -4591,3 +4591,133 @@ async fn req_010_creating_a_group_without_a_session_is_refused() {
     .await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+// ---------------------------------------------------------------------------
+// M11.3 — groups.get and groups.messages (REQ-010)
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_lines)] // the round trip is the test
+#[tokio::test]
+async fn req_010_the_group_read_surface_returns_the_room_and_its_messages() {
+    let test_app = TestApp::builder()
+        .ids(vec![
+            "usr_golden".to_owned(),
+            "org_golden".to_owned(),
+            "spc_seed".to_owned(),
+            "spc_golden".to_owned(),
+            "bot_a".to_owned(),
+            "thr_a".to_owned(),
+            "bot_b".to_owned(),
+            "thr_b".to_owned(),
+            "ses_golden".to_owned(),
+            "thr_group_golden".to_owned(),
+            "grp_golden".to_owned(),
+        ])
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+    let (analyst, _) = test_app
+        .seed_bot(&space_id, &owner, "analyst")
+        .await
+        .expect("the analyst exists");
+    let (writer, _) = test_app
+        .seed_bot(&space_id, &owner, "writer")
+        .await
+        .expect("the writer exists");
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // Create the group.
+    let response = post(
+        state(&test_app),
+        "/rpc/groups/create",
+        Some(&caller),
+        serde_json::json!({
+            "name": "Triage",
+            "botIds": [analyst.as_str(), writer.as_str()],
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Read the group back.
+    let response = post(
+        state(&test_app),
+        "/rpc/groups/get",
+        Some(&caller),
+        serde_json::json!({"id": "grp_golden"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["id"], serde_json::json!("grp_golden"));
+    assert_eq!(body["name"], serde_json::json!("Triage"));
+    assert_eq!(body["threadId"], serde_json::json!("thr_group_golden"),);
+    assert_eq!(
+        body["memberBotIds"],
+        serde_json::json!([analyst.as_str(), writer.as_str()])
+    );
+    assert_eq!(body["memberBots"].as_array().map(Vec::len), Some(2));
+
+    // Send a message that mentions both bots — both runs will queue.
+    let response = post(
+        state(&test_app),
+        "/rpc/threads/send",
+        Some(&caller),
+        serde_json::json!({
+            "botId": analyst.as_str(),
+            "text": "@analyst @writer please summarise this thread.",
+            "clientNonce": "req-010-replay",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(
+        body["runIds"].as_array().map(Vec::len),
+        Some(2),
+        "both mentioned bots queue a run",
+    );
+
+    // groups.messages shows both bot attributions.
+    let response = post(
+        state(&test_app),
+        "/rpc/groups/messages",
+        Some(&caller),
+        serde_json::json!({"threadId": "thr_group_golden"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == serde_json::json!("user")),
+        "the member message appears in the shared thread",
+    );
+    // Every message in the room carries attribution: member messages used to land without a
+    // role/vendor, bot replies get their botId — this pin keeps the wire stable.
+    for message in &messages {
+        assert!(
+            message.get("role").is_some(),
+            "every message carries a role"
+        );
+        if message["role"] == serde_json::json!("bot") {
+            assert!(
+                message.get("botId").is_some(),
+                "bot messages are attributed"
+            );
+        }
+    }
+}

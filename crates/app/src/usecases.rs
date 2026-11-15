@@ -8702,3 +8702,94 @@ pub async fn create_group(
         member_bot_ids: group.bot_ids,
     })
 }
+
+/// Groups the caller belongs to, oldest first.
+///
+/// Each row carries the shared thread handle so the UI can navigate straight into the room.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn list_groups(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<boma_domain::Group>, AppError> {
+    let user_id = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    app.stores.groups.list_for_member(context, &user_id).await
+}
+
+/// The page of messages as the group room renders it, attribution included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupMessagesPage {
+    /// The messages, newest first.
+    pub messages: Vec<boma_domain::Message>,
+    /// The cursor of the older page, when more exists.
+    pub next_cursor: Option<String>,
+}
+
+/// Pages through a group's shared thread; the shape matches `page_messages` — attribution
+/// is just part of the hydrated rows.
+///
+/// # Errors
+///
+/// See [`page_messages`]: same rule for cursor and size.
+pub async fn group_messages(
+    app: &App,
+    context: &TenantContext,
+    thread_id: &str,
+    cursor: Option<&str>,
+    limit: Option<usize>,
+) -> Result<GroupMessagesPage, AppError> {
+    let page = page_messages(app, context, thread_id, cursor, limit).await?;
+    Ok(GroupMessagesPage {
+        messages: page.messages,
+        next_cursor: page.next_cursor,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M11.3 — groups, read (REQ-010)
+// ---------------------------------------------------------------------------
+
+/// The `groups.get` outcome: identifiers, names and bot references.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupOutcome {
+    /// The group.
+    pub group: boma_domain::Group,
+    /// The member bots with display names, in creation order.
+    pub member_bot_names: Vec<(BotId, String)>,
+}
+
+/// Reads one group as the caller sees it; another tenant's group is not found.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the group does not exist in the caller's space, and an
+/// error when a store cannot answer.
+pub async fn get_group(
+    app: &App,
+    context: &TenantContext,
+    group_id: &str,
+) -> Result<GroupOutcome, AppError> {
+    let group_id = boma_domain::GroupId::new(group_id.to_owned())?;
+    let group = app
+        .stores
+        .groups
+        .find(context, &group_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let mut member_bot_names = Vec::with_capacity(group.bot_ids.len());
+    for bot_id in &group.bot_ids {
+        let bot = app
+            .stores
+            .bots
+            .find(context, bot_id)
+            .await?
+            .ok_or(AppError::Unavailable)?;
+        member_bot_names.push((bot_id.clone(), bot.name));
+    }
+    Ok(GroupOutcome {
+        group,
+        member_bot_names,
+    })
+}

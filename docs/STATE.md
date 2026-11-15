@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-**M9 — in flight.** Pushed to `dev`:
+**M11 — in flight** (this section also carries the M9 slice log; M10 is complete and logged below). Pushed to `dev`:
 
 - slice 1 — REQ-054 (structured logs + metrics + CSP reports, `909dd52`, CI run 43663121560
   green): JSON logs with `traceparent`/`x-request-id`, route templates never raw paths, W3C
@@ -62,12 +62,38 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   `/app/board` flag-gated, `/p/<token>`, admin access/plugins, activity, shared not-found screen,
   computer panel), all 7 UI goldens are implemented with zero pending, axe zero critical/serious
   everywhere incl. RTL, Electron shell packs in CI and serves the static export at the origin.
-- M11 — Harden and release: REQ-010 (group chats, split into M11.1 politeness —
-  `groups.create`, the shared thread + membership, the `group-create` API golden replayed
-  byte for byte — then M11.2 mention routing and the `/app/g/:groupId` screen), regression
-  across the workspace, all defects closed, budgets measured, ADRs complete, upgrade guide,
-  signed release notes. M10 is not closed until M11 releases, so the REQ-010 row in
-  TRACEABILITY is `M11.1` for now and the rest lands with M11.2+.
+- M11 — Harden and release: REQ-010 (group chats). **In flight.**
+  - M11.1 (`1a661cf`, CI green `43724891455`) — groups foundation: `Group`/`GroupId`/
+    `MemberKind`, migration 0053 (groups + `group_memberships`, RLS), `GroupStore` port +
+    Postgres + in-memory doubles, `groups.create`, the shared thread, the `group-create`
+    API golden replayed byte for byte.
+  - M11.2 (`5919841`, CI green `43744074897`) — mention routing: `@Name` (case-insensitive)
+    fans out to exactly the mentioned member bots of the shared room; no mention runs the
+    room's owner; one run per mentioned bot per message, in creation order; per-bot nonce
+    scoping (`RunStore::create` + `find_by_nonce(context, thread, nonce, bot_id)`) so a
+    fan-out replay never collapses; wire `SendReply.runIds` (single-bot reply byte-exact).
+  - M11.3 (this slice) — groups read surface + the `/app/g/:groupId` screen + the rail
+    action: `groups.get|list|messages` (bot attribution via `GroupMessageView.botId`; member
+    messages carry none), `GroupGetReply`/`GroupsListReply`/`GroupMessagesReply` (m…), with
+    the round-trip integration test `req_010_the_group_read_surface_returns_the_room_and_its_messages`
+    and the wire unit pin `req_010_a_bot_message_serialises_its_attribution_and_a_user_message_does_not`.
+    `apps/web/app/g/[groupId]/page.tsx` + `apps/web/components/group/group-thread-screen.tsx`
+    (member chips, attributed transcript, composer via `threads/send` fan-out, client nonce).
+    Rail Groups section with inline New group form (name + bot checkboxes → `groups/create` →
+    `router.push` to the room), typed web client (`groupsCreate|List|Get|Messages`), Playwright
+    `group.spec.ts` ×2, `/app/g/group_golden` on the axe gate. REQ-007/REQ-026 goldens now pin
+    their control by accessible name (DEV-04).
+  - **Gap carried explicitly: bot-to-bot handoffs are NOT built.** The second REQ-010 clause —
+    a member bot's message mentioning another member bot queues a run for the mentioned bot,
+    attributed in the shared thread, and the requesting run resumes with the result — needs
+    the delegation contract chosen by the owner (synchronous continuation vs async mention
+    fan-out without resume, hop cap, whose tool approvals govern the handoff, loop prevention).
+    REQ-010 is therefore not complete; TRACEABILITY says so in the row.
+  - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
+  - M11.4 (regression + signed release) and the release signing identity are the owner's.
+
+M10 is not closed until M11 releases; REQ-010 ships honestly as M11.1–M11.3 with the gap
+recorded, not as "done".
 
 REQ-010 (group chats) and REQ-011 (activity view) arrive with M11 alongside their regression set,
 as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay out, recorded.
@@ -1046,6 +1072,7 @@ Recorded going into the owner report; per-slice DEC-18/DEC-19 follow.
 | DEV-01 | `/healthz` and `/readyz` exist as aliases of `/health` and `/ready` | AGENTS.md mandates those names; the spec's contract is `/health` and `/ready` | `crates/api/src/router.rs`; aliases are absent from the OpenAPI document and `tests/contract.rs` asserts that |
 | DEV-02 | `/invite/:token` is `/invite?token=<token>` | a static export cannot pre-render one page per invitation token; the query form works identically in dev and production | `spec/08-ui-ux.md`, `apps/web/app/invite/page.tsx` |
 | DEV-03 | The route row `/app/x/:linkId` ("A saved navigation link") is removed from `spec/08-ui-ux.md` | It is defined nowhere in the spec, in no requirement, and in no code: a leftover row from before the share/open-link design settled at `/p/:slugToken`. Keeping a screen you cannot see is how undocumented screens ship. Its replacement is the in-shell page viewer (REQ-039) reachable from any artifact/page | `spec/08-ui-ux.md` §8.1 |
+| DEV-04 | UI goldens REQ-007 (pending-card) and REQ-026 (computer-panel) name the control they pin: `UiExpectation` gained an optional `name` (accessible-name match) | the rail now carries a "New group" button earlier in DOM order than the in-panel controls; a bare `role=button` + `.first()` silently matched the wrong (enabled) button, flipping REQ-026 red and REQ-007 green for the wrong reason — the goldens mean the in-panel controls ("Approve", "Take over the screen") | `apps/web/tests/fixtures.ts` (`UiExpectation.name`), `spec/golden/ui/REQ-007-pending-card.json`, `spec/golden/ui/REQ-026-computer-panel.json` |
 
 Any other externally visible difference would be a DEVIATION needing owner approval; none is known.
 
