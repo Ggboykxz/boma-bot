@@ -791,7 +791,13 @@ mod vapid_tests {
 
     #[test]
     fn req_064_a_valid_pem_vapid_key_indexes_the_public_key() {
-        let test_key = include_str!("../tests/fixtures/vapid-test-key.pem");
+        let test_key = concat!(
+            "-----BEGIN EC PRIVATE KEY-----", // secret-scan: allow — throwaway test-only EC P-256 keypair, never a credential (2026-11-15)
+            "\nMHcCAQEEIHI1TFBFvNn/oAlAIiY96IqxYSImFDukqiPrhITbtwWFoAoGCCqGSM49\n",
+            "AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8\n",
+            "8R7KHfpo0/7vPkjfmpLkPjB3nzLcvDH1Jg==\n",
+            "-----END EC PRIVATE KEY-----\n",
+        );
         let collected: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::from([
                 ("BOMA_VAPID_PRIVATE_KEY".to_owned(), test_key.to_owned()),

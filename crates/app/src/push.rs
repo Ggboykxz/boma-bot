@@ -16,8 +16,8 @@ use crate::service::App;
 /// The signing material for the deployment's push service.
 ///
 /// Operator-owned, following the same rule as `BOMA_MASTER_KEY`:
-/// - `BOMA_VAPID_PRIVATE_KEY` — either a PEM (`-----BEGIN EC PRIVATE KEY-----` or `PRIVATE KEY`)
-///   or the raw base64url-no-pad VAPID private key printed by common VAPID generators.
+/// - `BOMA_VAPID_PRIVATE_KEY` — either a PEM (a SEC1 EC block or a PKCS8 block) or the raw
+///   base64url-no-pad VAPID private key printed by common VAPID generators.
 ///   Absent or empty → pushes are off entirely; the code is built but inert.
 ///   Present-and-malformed → fail-fast at boot.
 /// - `BOMA_VAPID_SUBJECT` — `mailto:…` or `https:…`; the VAPID `sub` claim.

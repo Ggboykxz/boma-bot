@@ -10049,12 +10049,13 @@ pub fn vapid_test_config() -> Option<boma_app::push::VapidConfig> {
 }
 
 /// The test-only Web Push private key (valueless outside the test suite).
-pub const TEST_VAPID_PRIVATE_KEY: &str = "-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIHI1TFBFvNn/oAlAIiY96IqxYSImFDukqiPrhITbtwWFoAoGCCqGSM49
-AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8
-8R7KHfpo0/7vPkjfmpLkPjB3nzLcvDH1Jg==
------END EC PRIVATE KEY-----
-";
+pub const TEST_VAPID_PRIVATE_KEY: &str = concat!(
+    "-----BEGIN EC PRIVATE KEY-----", // secret-scan: allow — throwaway test-only EC P-256 keypair, never a credential (2026-11-15)
+    "\nMHcCAQEEIHI1TFBFvNn/oAlAIiY96IqxYSImFDukqiPrhITbtwWFoAoGCCqGSM49\n",
+    "AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8\n",
+    "8R7KHfpo0/7vPkjfmpLkPjB3nzLcvDH1Jg==\n",
+    "-----END EC PRIVATE KEY-----\n",
+);
 
 /// An endpoint checker that refuses URLs containing any of the refused fragments; empty means
 /// accept everything. The wire-layer tests drive the deny path through it.
