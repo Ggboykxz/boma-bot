@@ -3,6 +3,7 @@
 ## Current milestone
 
 **M11 — complete: v0.1.0 released (2026-11-15).** M10 closed with it. This section also carries the M9 slice log. `docs/PLAN.md` marks M10/M11 done.
+Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `COPILOTKIT/OpenBot` @ `f1905cd`): M12 external agents (AG-UI, ADR-026) → M13 sign-in requests / Recorder → M14 voice (only if you un-defer REQ-049) → M15 release maturity → M16 browser extension. Mobile stays deferred per your call.
 
 - slice 1 — REQ-054 (structured logs + metrics + CSP reports, `909dd52`, CI run 43663121560
   green): JSON logs with `traceparent`/`x-request-id`, route templates never raw paths, W3C
@@ -107,6 +108,12 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   - Docs coherence: `spec/03-api-contract.md` groups section extended (additive procedures
     documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
+  - Improvements analysis (`docs/IMPROVEMENTS.md`, this slice): OpenBot/`f1905cd` studied deeply
+    (MIT template fronts + contracts; closed server images; Intelligence separately licensed).
+    Decision record: borrow in spirit — M12 external agents/AG-UI (ADR-026), M13 sign-in requests + Recorder,
+    M16 browser extension, M15 release maturity + enterprise packaging; keep — our contract, our testing
+    discipline, our release story; reject — managed Intelligence, runtime licensing text model, coworkers branding.
+    Mobile stays deferred per your word; REQ-049 stays deferred until you un-defer it.
   - M11.4 audit (`docs/AUDIT.md`, this slice): v0.1.0 verified from the published artifacts —
     checksums match the release metadata, attestation confirmed, bundle contents verified, and
     a fresh boot + fresh DB walked the operator path end to end. **Finding H-1 - HIGH**:
