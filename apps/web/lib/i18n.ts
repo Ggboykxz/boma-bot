@@ -52,7 +52,7 @@ const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
     "thread.unsnooze": "End the snooze",
     "landing.title": "Persistent AI teammates, on hardware you own.",
     "landing.body":
-      "This build carries the shell only. The thread, the run timeline and the computer panel arrive milestone by milestone; the API they talk to is already specified.",
+      "Threads, a run timeline, group rooms and a computer per bot — persistent AI teammates, on hardware you own.",
     "landing.cta": "Open the app shell",
     "notfound.title": "Page not found",
     "notfound.body":
@@ -341,7 +341,7 @@ const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
     "thread.unsnooze": "Fin de la mise en veille",
     "landing.title": "Des colocataires IA persistants, sur ta propre machine.",
     "landing.body":
-      "Cette version ne contient que la coque. Le fil, la chronologie des exécutions et le panneau computer arrivent jalon par jalon ; l'API qu'ils interrogent est déjà spécifiée.",
+      "Des fils, une chronologie d'exécutions, des groupes et un ordinateur par bot — des colocataires IA persistants, sur ta propre machine.",
     "landing.cta": "Ouvrir la coque de l'application",
     "notfound.title": "Page introuvable",
     "notfound.body":
@@ -630,7 +630,7 @@ const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
     "thread.unsnooze": "בטל את ההשעיה",
     "landing.title": "שותפי AI קבועים, על חומרה שבבעלותך.",
     "landing.body":
-      "גרסה זו כוללת את מעטפת היישום בלבד. השיחה, ציר ההרצה ולוח המחשב יגיעו אבן דרך אחר אבן דרך; ה-API שאליו הם מתחברים כבר מוגדר.",
+      "שיחות, ציר הרצה, קבוצות ומחשב לכל בוט — שותפי AI קבועים, על חומרה שבבעלותך.",
     "landing.cta": "פתיחת מעטפת היישום",
     "notfound.title": "הדף לא נמצא",
     "notfound.body": "הכתובת הזאת אינה מתאימה לשום מסך. אולי הוא עבר, אולי הוא מעולם לא היה.",

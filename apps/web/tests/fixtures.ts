@@ -634,13 +634,6 @@ const SEEDS: Record<string, (page: Page) => Promise<void>> = {
         "groups/messages": {
           messages: [
             {
-              id: "msg_group_1",
-              seq: 1,
-              role: "user",
-              blocks: [{ type: "text", text: "@analyst please summarise the thread" }],
-              createdAt: "2026-01-01T00:00:01Z",
-            },
-            {
               id: "msg_group_2",
               seq: 2,
               role: "bot",
@@ -648,6 +641,13 @@ const SEEDS: Record<string, (page: Page) => Promise<void>> = {
               blocks: [{ type: "text", text: "The thread is calm: three PRs merged." }],
               runId: "run_group_1",
               createdAt: "2026-01-01T00:00:02Z",
+            },
+            {
+              id: "msg_group_1",
+              seq: 1,
+              role: "user",
+              blocks: [{ type: "text", text: "@analyst please summarise the thread" }],
+              createdAt: "2026-01-01T00:00:01Z",
             },
           ],
         },

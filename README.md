@@ -4,6 +4,26 @@ Uniquement pour un logiciel que tu possèdes ou que tu es autorisé à reproduir
 ## Le produit
 Le logiciel reconstruit s'appelle **Boma Bot**. C'est la cible de `re-workspace` (Rakazo) réécrite : même comportement attendu, nom, marque, scope de paquets (`@boma/*`), variables d'environnement (`BOMA_*`) et identifiants d'applis (`com.boma.app`) à toi. Aucun asset, logo, domaine ou texte de la marque d'origine n'est repris sans vérification de licence.
 
+## Aperçu de l'interface
+
+Captures prises depuis l'export statique du build, dans le thème sombre. Les données sont semées (aucun backend n'est requis) et le script `apps/web/scripts/screenshots.cjs` régénère le tout d'un seul coup. Jalon courant : M11 (jalons M1 à M11.3b livrés ; voir docs/STATE.md).
+
+**La page d'accueil** — point d'entrée public ; il redirige vers le shell quand la session est signée, ou vers l'écran de connexion sinon.
+
+![La page d'accueil de Boma Bot](./docs/screenshots/apercu-landing.png)
+
+**Le fil d'un bot** — conversation persistante avec un bot : à gauche, le rail (bots, étagère « Snoozé », section « Groupes », Activité) ; à droite, le transcript, l'appel d'outil et le compositeur.
+
+![Le fil d'un bot](./docs/screenshots/apercu-fil.png)
+
+**Une room de groupe** — plusieurs bots dans un même fil partagé. Le membre écrit avec `@name` pour cibler les bots concernés ; les réponses sont attribuées au bot qui les écrit.
+
+![La room de groupe Ticket/Triage](./docs/screenshots/apercu-groupe.png)
+
+**Activité** — tous les runs d'un coup d'œil, dans les huit statuts, avec relance depuis l'état `failed`.
+
+![La vue activité](./docs/screenshots/apercu-activite.png)
+
 ## Le principe
 `re-workspace` produit une spec de comportement (notes/spec/) et des captures de référence (notes/ui/). Tu relis, puis `rebuild-workspace` reconstruit à partir de cette spec. L'agent peut consulter l'original et l'exécuter à côté du nouveau pour comparer ; il note ce qu'il a consulté dans docs/STATE.md, et préfère réimplémenter plutôt que copier. Backend en Rust ; pour tout le reste (base de données, UI, mobile, CLI, déploiement...) l'agent choisit lui-même et justifie chaque choix dans un ADR (docs/adr/). Tu n'as qu'à poser ton veto.
 
