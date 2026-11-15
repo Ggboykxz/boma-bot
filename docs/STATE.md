@@ -57,7 +57,8 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
 - M9 — Operate: REQ-044 (export/import/delete), REQ-045 (audit JSONL, security events, SCIM),
   REQ-054 (structured logs + metrics + CSP reports), REQ-058 (admin surfaces).
 - M10 — UI complete + desktop: REQ-055 (all screens from `spec/08-ui-ux.md`, 7 UI goldens, axe,
-  RTL, Tauri shell, plus REQ-011's remaining pieces of the strict list).
+  RTL, Electron shell — owner veto 2026-11-15 on the proposed Tauri (ADR-016), plus REQ-011's
+  remaining pieces of the strict list).
 - M11 — Harden and release: regression across the workspace, all defects closed, budgets measured,
   ADRs complete, upgrade guide, signed release notes.
 
@@ -986,8 +987,9 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
   `docker compose up -d --build` then `/health`, `/ready`, `/healthz`, `/readyz`. This box cannot
   run it (the overlay has ~380 MB free; the Rust builder image alone is ~1.3 GB), so CI is the only
   place the criterion is observed.
-- **Tauri shell deferred to M10** (`apps/desktop/README.md`): REQ-055 is a SHOULD and a shell that
-  was never compiled would be a false claim. Mobile (REQ-056) stays deferred per ADR-016.
+- **Desktop shell deferred to M10** (`apps/desktop/README.md`): REQ-055 is a SHOULD and a shell
+  that was never compiled would be a false claim; the shell lands as Electron at M10 per the
+  owner's veto on Tauri (ADR-016). Mobile (REQ-056) stays deferred per ADR-016.
 - **opencode must be restarted** for the BoardUI skill and the always-on rules to load: MCP tools
   and skills are bound at session start.
 
@@ -1081,7 +1083,7 @@ Raised by the M0–M4 audit, no recommendation yet:
 | REQ | Why | Where recorded |
 |---|---|---|
 | REQ-049 (voice, COULD) | Not needed for a functional core; interfaces stay additive | PLAN §5 |
-| REQ-055 (desktop, SHOULD) | Tauri shell lands at M10, after screens and signed releases exist | ADR-016, `apps/desktop/README.md` |
+| REQ-055 (desktop, SHOULD) | Electron shell lands at M10 (owner veto on Tauri, 2026-11-15), after screens and signed releases exist | ADR-016, `apps/desktop/README.md` |
 | REQ-056 (mobile, SHOULD) | PWA ships in M1; the Expo shell waits until device pairing is exercised | ADR-016, PLAN §5 |
 
 ## Proposals outside the spec
