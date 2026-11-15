@@ -146,9 +146,10 @@ Server-side subscriptions, sent by the worker, RFC 8030 + VAPID, best-effort.
 - **Subscribe endpoint validation**: HTTPS-only; the endpoint host must not be private,
   loopback, link-local, or CGNAT (checked at subscribe time against the parsed host, reusing the
   existing net-safety host screening used by messaging installs). Any violation → rule error.
-- **VAPID keys**: operator provides `BOMA_VAPID_PUBLIC_KEY` + `BOMA_VAPID_PRIVATE_KEY` +
-  `BOMA_VAPID_SUBJECT` (e.g. `mailto:admin@example.com`). If unset → feature disabled, warning at
-  startup. The doc does not auto-generate keys; there is no hidden place where a key could end up.
+- **VAPID keys**: the operator provides `BOMA_VAPID_PRIVATE_KEY` (PEM or base64url) +
+  `BOMA_VAPID_SUBJECT` (e.g. `mailto:admin@example.com`); absent → inert, malformed → fail-fast.
+  The public `applicationServerKey` derives from the private key at boot — there is no public-key
+  env var, so a deployment cannot ship a mismatched pair. Nothing auto-generates keys.
 
 ### M15.2 — Slack/Teams destinations (REQ-065, new MUST)
 
