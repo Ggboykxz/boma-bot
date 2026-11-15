@@ -9,6 +9,7 @@ import { MessageBlocks } from "@/components/thread/message-blocks";
 import { ThreadComposer } from "@/components/thread/thread-composer";
 import { ComputerPanel } from "@/components/thread/computer-panel";
 import { ExternalAgentPanel } from "@/components/thread/external-agent-panel";
+import { NotificationsPanel } from "@/components/thread/notifications-panel";
 import {
   botsGet,
   botsList,
@@ -332,6 +333,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
             {snoozed ? t("thread.unsnooze") : t("thread.snooze")}
           </button>
           <ExternalAgentPanel botId={botId} />
+          <NotificationsPanel botId={botId} />
         </div>
       </header>
 
@@ -376,7 +378,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
               const row = (
               <li key={message.id} className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
-                  <p className="text-text-tertiary text-caption-1-semibold">
+                  <p className="text-text-secondary text-caption-1-semibold">
                     {t(`thread.role.${message.role}`)}
                   </p>
                   <button
@@ -523,7 +525,7 @@ function TranscriptSkeleton() {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-text-tertiary text-caption-1-regular">{t("thread.loading")}</p>
+      <p className="text-text-secondary text-caption-1-regular">{t("thread.loading")}</p>
       <div aria-hidden="true" className="flex flex-col gap-3">
         <div className="bg-background-secondary-default h-16 w-2/3 rounded-3xl" />
         <div className="bg-background-secondary-default h-16 w-1/2 self-end rounded-3xl" />

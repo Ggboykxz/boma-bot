@@ -1456,3 +1456,100 @@ export async function botsDisconnectExternal(
 ): Promise<{ botId: string; disconnected: boolean }> {
   return call<{ botId: string; disconnected: boolean }>("bots", "disconnectExternal", request, signal);
 }
+
+// ---------------------------------------------------------------------------
+// M15.1 — notifications (REQ-064)
+// ---------------------------------------------------------------------------
+
+export interface NotificationsStatus {
+  /** Whether the deployment is pushing. */
+  enabled: boolean;
+  /** The browser-facing public applicationServerKey; present iff enabled. */
+  vapidPublicKey?: string;
+}
+
+export async function notificationsStatus(signal?: AbortSignal): Promise<NotificationsStatus> {
+  return call<NotificationsStatus>("notifications", "status", {}, signal);
+}
+
+export interface NotificationsSubscribeRequest {
+  /** The push service endpoint the browser minted. */
+  endpoint: string;
+  /** The client public key (base64url). */
+  p256dh: string;
+  /** The client auth secret (base64url). */
+  auth: string;
+  /** The browser, for display only. */
+  userAgent?: string;
+}
+
+export interface NotificationsSubscribeReply {
+  id: string;
+}
+
+export async function notificationsSubscribe(
+  request: NotificationsSubscribeRequest,
+  signal?: AbortSignal,
+): Promise<NotificationsSubscribeReply> {
+  return call<NotificationsSubscribeReply>("notifications", "subscribe", request, signal);
+}
+
+export interface NotificationsUnsubscribeReply {
+  removed: boolean;
+}
+
+export async function notificationsUnsubscribe(
+  request: { endpoint: string },
+  signal?: AbortSignal,
+): Promise<NotificationsUnsubscribeReply> {
+  return call<NotificationsUnsubscribeReply>("notifications", "unsubscribe", request, signal);
+}
+
+export interface NotificationsPolicyView {
+  botId: string;
+  notifyWaiting: boolean;
+  notifyCompleted: boolean;
+  dailyCap: number;
+}
+
+export async function notificationsPolicyGet(
+  request: { botId: string },
+  signal?: AbortSignal,
+): Promise<NotificationsPolicyView> {
+  return call<NotificationsPolicyView>("notifications", "policyGet", request, signal);
+}
+
+export interface NotificationsPolicySetRequest {
+  botId: string;
+  notifyWaiting?: boolean;
+  notifyCompleted?: boolean;
+  dailyCap?: number;
+}
+
+export async function notificationsPolicySet(
+  request: NotificationsPolicySetRequest,
+  signal?: AbortSignal,
+): Promise<NotificationsPolicyView> {
+  return call<NotificationsPolicyView>("notifications", "policySet", request, signal);
+}
+
+/** Decodes the browser-facing base64url applicationServerKey back to bytes. */
+export function applicationServerKeyBytes(key: string): Uint8Array {
+  const padding = "=".repeat((4 - (key.length % 4)) % 4);
+  const base64 = `${key}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) {
+    bytes[index] = raw.charCodeAt(index);
+  }
+  return bytes;
+}
+
+/** Encodes raw bytes as the base64url the server and the browser both speak. */
+export function uint8ArrayToBase64Url(bytes: Uint8Array): string {
+  let raw = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    raw += String.fromCharCode(bytes[index]);
+  }
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}

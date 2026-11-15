@@ -87,6 +87,7 @@ export function ExternalAgentPanel({ botId }: { botId: string }) {
     return (
       <div
         className="bg-background-secondary-default h-8 w-36 rounded-full"
+        role="status"
         aria-label={t("thread.external-agent.label")}
         aria-busy="true"
       />
