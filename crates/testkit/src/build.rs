@@ -568,6 +568,7 @@ impl TestAppBuilder {
             Arc::new(database.billing()),
             Arc::new(crate::memory::MemoryAccountExportStore::new(&database)),
             Arc::new(crate::memory::MemoryAdminStore::new(&database)),
+            Arc::new(crate::memory::MemoryPasswordResetStore::new(&database)),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -7832,5 +7833,119 @@ mod admin_tests {
                 .await
                 .expect_err("an invalid email is refused");
         assert!(matches!(error, boma_app::AppError::Rule(_)));
+    }
+}
+
+#[cfg(test)]
+mod password_recovery_tests {
+    // REQ-040 — the password recovery flow, end to end in memory.
+
+    use super::TestApp;
+
+    #[tokio::test]
+    async fn req_040_a_issued_recovery_link_signs_the_person_in_and_dies() {
+        let test = TestApp::builder()
+            .tokens(vec!["recovery-token-golden".to_owned()])
+            .build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+
+        // An unknown address answers the same way and stores nothing.
+        boma_app::usecases::request_password_reset(test.app(), "nobody@example.com")
+            .await
+            .expect("the answer is uniform");
+        assert_eq!(test.database().password_reset_count(), 0);
+
+        // A known address stores one token; the raw stored value is a hash, never the token.
+        boma_app::usecases::request_password_reset(test.app(), "person@example.com")
+            .await
+            .expect("the request is accepted");
+        assert_eq!(test.database().password_reset_count(), 1);
+        let events = test.database().audit().events();
+        assert!(events
+            .iter()
+            .any(|event| event.kind == "security.password_recovery_issued"));
+
+        // A wrong token is the same refusal either way.
+        let refused = boma_app::usecases::reset_password(
+            test.app(),
+            "not-the-token",
+            "new password that passes",
+            0,
+        )
+        .await
+        .expect_err("a wrong link is refused");
+        assert!(matches!(refused, boma_app::AppError::Rule(_)));
+
+        // The right token consumes itself, changes the password and signs the person in.
+        let grant = boma_app::usecases::reset_password(
+            test.app(),
+            "recovery-token-golden",
+            "new password that passes",
+            0,
+        )
+        .await
+        .expect("the link is consumed");
+        assert_eq!(grant.user.id, user_id);
+
+        // The old sessions are gone; the new one works.
+        let old = boma_app::usecases::sign_in(
+            test.app(),
+            0,
+            &boma_app::usecases::SignIn {
+                email: "person@example.com".to_owned(),
+                password: "correct horse battery".to_owned(),
+            },
+        )
+        .await;
+        assert!(old.is_err(), "the old password is dead");
+        let new = boma_app::usecases::sign_in(
+            test.app(),
+            0,
+            &boma_app::usecases::SignIn {
+                email: "person@example.com".to_owned(),
+                password: "new password that passes".to_owned(),
+            },
+        )
+        .await;
+        assert!(new.is_ok(), "the new password works");
+
+        let events = test.database().audit().events();
+        assert!(events
+            .iter()
+            .any(|event| event.kind == "security.password_recovery_completed"));
+    }
+
+    #[tokio::test]
+    async fn req_040_a_consumed_recovery_link_is_gone_forever() {
+        let test = TestApp::builder()
+            .tokens(vec!["reset-token-golden".to_owned()])
+            .build();
+        test.seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        boma_app::usecases::request_password_reset(test.app(), "person@example.com")
+            .await
+            .expect("the request is accepted");
+        boma_app::usecases::reset_password(
+            test.app(),
+            "reset-token-golden",
+            "new password that passes",
+            0,
+        )
+        .await
+        .expect("the link is consumed");
+        // A replay of the same link is refused with the same wording as an absent one.
+        let replay = boma_app::usecases::reset_password(
+            test.app(),
+            "reset-token-golden",
+            "yet another password 123",
+            0,
+        )
+        .await
+        .expect_err("a replay is refused");
+        assert!(matches!(replay, boma_app::AppError::Rule(_)));
     }
 }

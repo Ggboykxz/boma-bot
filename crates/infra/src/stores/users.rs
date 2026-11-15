@@ -70,6 +70,37 @@ impl UserStore for PostgresUserStore {
         .transpose()
     }
 
+    async fn set_password(
+        &self,
+        user_id: &UserId,
+        password_hash: &str,
+        now: &str,
+    ) -> Result<(), AppError> {
+        let user_id = user_id.as_str().to_owned();
+        let password_hash = password_hash.to_owned();
+        let _now = now.to_owned();
+        let affected = tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::Authentication,
+            |conn| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE users SET password_hash = $2, email_verified = email_verified WHERE id = $1")
+                        .bind(&user_id)
+                        .bind(&password_hash)
+                        .execute(&mut *conn)
+                        .await
+                        .map(|result| result.rows_affected())
+                        .map_err(tenant::unavailable)
+                })
+            },
+        )
+        .await?;
+        if affected == 0 {
+            return Err(AppError::NotFound);
+        }
+        Ok(())
+    }
+
     async fn find(&self, id: &UserId) -> Result<Option<User>, AppError> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, email, name, email_verified, locale, password_hash,

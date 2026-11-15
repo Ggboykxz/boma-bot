@@ -107,6 +107,7 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresAdminStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresPasswordResetStore::new(pool.clone())),
         ),
         services,
     )

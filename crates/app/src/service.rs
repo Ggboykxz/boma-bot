@@ -79,6 +79,8 @@ pub struct Stores {
     pub account_export: Arc<dyn crate::ports::AccountExportStore>,
     /// The admin surfaces: members, invitations, grants, plugin review (REQ-058).
     pub admin: Arc<dyn crate::ports::AdminStore>,
+    /// The password recovery tokens (REQ-040).
+    pub password_resets: Arc<dyn crate::ports::PasswordResetStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -147,6 +149,7 @@ impl Stores {
         billing: Arc<dyn BillingStore>,
         account_export: Arc<dyn crate::ports::AccountExportStore>,
         admin: Arc<dyn crate::ports::AdminStore>,
+        password_resets: Arc<dyn crate::ports::PasswordResetStore>,
     ) -> Self {
         Self {
             accounts,
@@ -177,6 +180,7 @@ impl Stores {
             billing,
             account_export,
             admin,
+            password_resets,
             tickets,
             effects,
             tools,
@@ -251,6 +255,13 @@ pub struct Services {
     /// Whether `GET /metrics` answers (BOMA_METRICS). Off by default; the endpoint is absent,
     /// not degraded, when the flag is absent (REQ-054).
     pub metrics_enabled: bool,
+    /// Whether the one-time recovery link is written to the process output (BOMA_AUTH_PRINT_RESET_LINK).
+    ///
+    /// The default delivery channel of this deployment: it has no outbound mail, so the operator's
+    /// process output is the mailbox this deployment has. Off by default; only an operator who wants
+    /// the link on stdout turns it on, and the line carries the account id and the link, never the
+    /// address.
+    pub print_recovery_link: bool,
     /// The public base URL this deployment is reached at, for webhooks members must paste into
     /// a platform (REQ-048). A loopback default for development; set it in every deployment
     /// that installs a messaging platform.
@@ -313,6 +324,7 @@ impl Services {
             scim_token: None,
             metrics: Arc::new(crate::metrics::Metrics::new()),
             metrics_enabled: false,
+            print_recovery_link: false,
             slack: None,
             messaging_enabled: false,
             public_base_url: "http://127.0.0.1:3000".to_owned(),
@@ -376,6 +388,13 @@ impl Services {
     #[must_use]
     pub fn with_scim_option(mut self, token: Option<String>) -> Self {
         self.scim_token = token.map(secrecy::SecretString::from);
+        self
+    }
+
+    /// Builds the services with the recovery-link printing enabled (REQ-040).
+    #[must_use]
+    pub fn with_print_recovery_link(mut self, enabled: bool) -> Self {
+        self.print_recovery_link = enabled;
         self
     }
 

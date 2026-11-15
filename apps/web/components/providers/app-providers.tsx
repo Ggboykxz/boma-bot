@@ -1,6 +1,10 @@
 "use client";
 
-import { type ReactNode, useSyncExternalStore } from "react";
+import React, { type ReactNode, useSyncExternalStore } from "react";
+
+import { setUnauthorizedHandler } from "@/lib/api/rpc";
+
+import { useRouter } from "next/navigation";
 
 import { DirectionProvider } from "@/components/foundations/direction/direction";
 
@@ -45,5 +49,37 @@ const getServerSnapshot = () => DEFAULT_LOCALE;
 export function AppProviders({ children }: { children: ReactNode }) {
   const locale = useSyncExternalStore(subscribe, getClientSnapshot, getServerSnapshot);
 
-  return <DirectionProvider locale={locale}>{children}</DirectionProvider>;
+  return (
+    <DirectionProvider locale={locale}>
+      <UnauthorizedRedirect>{children}</UnauthorizedRedirect>
+    </DirectionProvider>
+  );
+}
+
+/**
+ * Wires the 401 handler a signed-out member's session expired under.
+ *
+ * One callback, set once at mount: any RPC that answers `401` lands the visitor on `/sign-in`
+ * with the previous path attached, so after signing in they rejoin where they were. It is inert
+ * on auth pages — a sign-in attempt that fails there must show its own inline error, not bounce
+ * the visitor in a loop.
+ */
+export function UnauthorizedRedirect({ children }: { children: ReactNode }) {
+  const router = useRouter();
+
+  React.useEffect(() => {
+    setUnauthorizedHandler(() => {
+      const path = window.location.pathname;
+      if (path.startsWith("/sign") || path.startsWith("/forgot") || path.startsWith("/reset")) {
+        return;
+      }
+      const next = `${path}${window.location.search}`;
+      router.replace(`/sign-in?next=${encodeURIComponent(next)}`);
+    });
+    return () => setUnauthorizedHandler(null);
+    // The handler closes over the router only: it is mounted once at the root and never sees
+    // a different one, so the path it reads is always fresh at call time.
+  }, [router]);
+
+  return children;
 }

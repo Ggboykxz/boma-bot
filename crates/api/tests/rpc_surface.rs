@@ -4247,3 +4247,85 @@ async fn req_044_the_download_route_serves_a_zip_to_the_session_that_owns_it() {
         .expect("the router answers");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+// ---------------------------------------------------------------------------
+// M10 — password recovery over the HTTP surface (REQ-040)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_040_the_recovery_link_round_trips_over_http_and_returns_a_session() {
+    let test_app = TestApp::builder()
+        .tokens(vec![
+            // The scripted sequence: one token sign-in will not mint, because forgot-password
+            // must not depend on order. The recovery flow mints exactly this token.
+            "recovery-rpc-token".to_owned(),
+        ])
+        .build();
+    let _user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/auth/forgot-password")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"email":"person@example.com"}"#))
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/auth/forgot-password")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"email":"nobody@example.com"}"#))
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK, "the response never says whether the address exists");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/auth/reset-password")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"token":"recovery-rpc-token","password":"new password that passes"}"#,
+        ))
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .expect("a session cookie is set")
+        .split(';')
+        .next()
+        .expect("the cookie has a value")
+        .to_owned();
+
+    // And the new password signs the person in through the ordinary route.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/auth/sign-in")
+        .header("content-type", "application/json")
+        .header(header::COOKIE, &cookie)
+        .body(Body::from(
+            r#"{"email":"person@example.com","password":"new password that passes"}"#,
+        ))
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+}

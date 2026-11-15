@@ -5,6 +5,8 @@
 
 use boma_domain::{Email, OrganizationId, SessionId, SpaceId, User, UserId, validate_password};
 
+use crate::ports::{NewAuditEvent, NewPasswordResetToken};
+
 use crate::{
     error::AppError,
     ports::{NewAccount, NewOrganization, NewSession, NewSpace, NewUser},
@@ -232,4 +234,132 @@ mod tests {
         };
         assert_eq!(request.email, "person@example.com");
     }
+}
+
+/// How long a recovery link stays usable (REQ-040).
+pub const RECOVERY_TTL_SECONDS: i64 = 30 * 60;
+
+/// Why a recovery link is refused; the same wording either way (spec: "identical response").
+const RECOVERY_REFUSED: &str = "the recovery link is invalid or it expired";
+
+/// Issues one recovery link; answers the same thing whether or not the address exists (REQ-040).
+///
+/// The caller sees nothing new either way: if the address is registered, a token is stored (never logged) and an
+/// audit row `security.password_recovery_issued` is written; when `BOMA_AUTH_PRINT_RESET_LINK=true`, the one line
+/// carrying the link and the target account's id is written to the process output — the operator's only mailbox.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer; the caller shows nothing either way.
+pub async fn request_password_reset(app: &App, email: &str) -> Result<(), AppError> {
+    let now = app.services.clock.now();
+    let Ok(email) = Email::new(email.trim().to_ascii_lowercase()) else {
+        // The malformed address gets the same answer the valid unknown address gets: nothing.
+        return Ok(());
+    };
+    let Some((user, _)) = app.stores.users.find_by_email(&email).await? else {
+        // The time taken is indistinguishable: the same hasher runs.
+        let _ = app.services.hasher.hash(email.as_str()).await;
+        return Ok(());
+    };
+    let token = app.services.tokens.generate()?;
+    let token_hash = app.services.tokens.hash(&token)?;
+    let expires_at = app.services.clock.now_plus_seconds(RECOVERY_TTL_SECONDS);
+    let id = app.services.ids.new_id("prt");
+    app.stores
+        .password_resets
+        .create(NewPasswordResetToken {
+            id,
+            user_id: user.id.clone(),
+            token_hash,
+            expires_at,
+            created_at: now.clone(),
+        })
+        .await?;
+    if app.services.print_recovery_link {
+        let link = format!(
+            "{}/reset-password?token={}",
+            app.services.public_base_url, token
+        );
+        tracing::warn!(
+            user_id = %user.id,
+            recovery_link = %link,
+            "BOMA_AUTH_PRINT_RESET_LINK=true: the one-time recovery link for one account"
+        );
+    }
+    let _ = app
+        .stores
+        .audit
+        .append(NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: None,
+            actor_user_id: Some(user.id),
+            kind: boma_domain::AuditKind::PasswordRecoveryIssued,
+            target: "password_reset".to_owned(),
+            metadata: serde_json::json!({}),
+            created_at: now,
+        })
+        .await;
+    Ok(())
+}
+
+/// Consumes one recovery link and signs the person in with the new password (REQ-040).
+///
+/// Same refusal wording either way: an absent token, a used token and an expired token are the same fact.
+/// The old sessions die on the spot — the spec says "signs the user in", and the new password is the only
+/// surviving credential.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the password or the link is refused, and an error when a store cannot answer.
+pub async fn reset_password(
+    app: &App,
+    token: &str,
+    password: &str,
+    session_ttl_seconds: i64,
+) -> Result<SessionGrant, AppError> {
+    validate_password(password)?;
+    let hash = app.services.tokens.hash(token)?;
+    let now = app.services.clock.now();
+    let Some(record) = app.stores.password_resets.find(&hash).await? else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            RECOVERY_REFUSED.to_owned(),
+        )));
+    };
+    if record.expires_at.as_str() <= now.as_str() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            RECOVERY_REFUSED.to_owned(),
+        )));
+    }
+    let password_hash = app.services.hasher.hash(password).await?;
+    app.stores
+        .users
+        .set_password(&record.user_id, &password_hash, &now)
+        .await?;
+    app.stores
+        .password_resets
+        .mark_used(&record.id, &now)
+        .await?;
+    let _ = app.stores.sessions.delete_for_user(&record.user_id).await;
+    let user = app
+        .stores
+        .users
+        .find(&record.user_id)
+        .await?
+        .ok_or(AppError::Unavailable)?;
+    let _ = app
+        .stores
+        .audit
+        .append(NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: None,
+            actor_user_id: Some(user.id.clone()),
+            kind: boma_domain::AuditKind::PasswordRecoveryCompleted,
+            target: "password_reset".to_owned(),
+            metadata: serde_json::json!({}),
+            created_at: now,
+        })
+        .await;
+    let accounts = Accounts::new(app.clone(), session_ttl_seconds);
+    accounts.grant_session(user).await
 }

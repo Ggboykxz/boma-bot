@@ -363,6 +363,18 @@ pub trait UserStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn find(&self, id: &UserId) -> Result<Option<User>, AppError>;
+
+    /// Replaces the stored hash; the plain password never travels past the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the person does not exist, or when the database cannot answer.
+    async fn set_password(
+        &self,
+        user_id: &UserId,
+        password_hash: &str,
+        now: &str,
+    ) -> Result<(), AppError>;
 }
 
 /// Stores and reads sessions.
@@ -388,6 +400,73 @@ pub trait SessionStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn delete(&self, id: &boma_domain::SessionId) -> Result<(), AppError>;
+
+    /// Deletes every session of one person; the count returned is how many were revoked.
+    ///
+    /// Used by the password recovery, which signs everyone out for safety (REQ-040).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn delete_for_user(&self, user_id: &UserId) -> Result<u64, AppError>;
+}
+
+/// One password recovery token, as the user store sees it (REQ-040).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPasswordResetToken {
+    /// The token row's id.
+    pub id: String,
+    /// The person the token belongs to.
+    pub user_id: UserId,
+    /// The hash of the opaque token, never the token itself.
+    pub token_hash: Vec<u8>,
+    /// When the token stops being usable.
+    pub expires_at: String,
+    /// When the token was created.
+    pub created_at: String,
+}
+
+/// One password recovery token as it is stored (REQ-040).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordResetToken {
+    /// The token row's id.
+    pub id: String,
+    /// The person the token belongs to.
+    pub user_id: UserId,
+    /// The hash of the opaque token.
+    pub token_hash: Vec<u8>,
+    /// When the token stops being usable.
+    pub expires_at: String,
+    /// When it was consumed, or `None` while valid.
+    pub used_at: Option<String>,
+}
+
+/// Stores and reads password recovery tokens (REQ-040).
+///
+/// Tokens are system-scoped rows: only the system paths mint and consume them, and nobody is
+/// *its* tenant.
+#[async_trait]
+pub trait PasswordResetStore: Send + Sync {
+    /// Records one recovery token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn create(&self, token: NewPasswordResetToken) -> Result<(), AppError>;
+
+    /// Finds one token by its hash while it is unconsumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find(&self, token_hash: &[u8]) -> Result<Option<PasswordResetToken>, AppError>;
+
+    /// Marks the token used; replay of a consumed token decides nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn mark_used(&self, id: &str, now: &str) -> Result<(), AppError>;
 }
 
 /// Stores and reads spaces.

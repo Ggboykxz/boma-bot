@@ -11,12 +11,13 @@ use boma_infra::{
     PostgresBillingStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
     PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresInvitationStore,
     PostgresMailStore, PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
-    PostgresMessagingStore, PostgresModelStore, PostgresPageStore, PostgresPendingToolCallStore,
-    PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
-    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
-    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore,
-    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresMessagingStore, PostgresModelStore, PostgresPageStore, PostgresPasswordResetStore,
+    PostgresPendingToolCallStore, PostgresPluginInstallStore, PostgresPluginSubmissionStore,
+    PostgresRateLimitStore, PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore,
+    PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore,
+    PostgresSessionStore, PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresTicketStore, PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock,
+    TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -62,6 +63,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         config.billing.webhook_secret.clone(),
         config.metrics,
         config.scim.token.clone(),
+        config.print_reset_link,
     )?;
     let state = AppState::new(
         readiness,
@@ -113,6 +115,7 @@ fn build_app(
     config_billing_webhook_secret: Option<String>,
     config_metrics: bool,
     config_scim_token: Option<String>,
+    config_print_reset_link: bool,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -189,6 +192,7 @@ fn build_app(
             Arc::new(PostgresBillingStore::new(pool.clone())),
             Arc::new(PostgresAccountExportStore::new(pool.clone())),
             Arc::new(PostgresAdminStore::new(pool.clone())),
+            Arc::new(PostgresPasswordResetStore::new(pool.clone())),
         ),
         {
             let services = Services::new(
@@ -224,7 +228,8 @@ fn build_app(
                 config_billing_webhook_secret.map(secrecy::SecretString::from),
             )
             .with_metrics(config_metrics)
-            .with_scim_option(config_scim_token);
+            .with_scim_option(config_scim_token)
+            .with_print_recovery_link(config_print_reset_link);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -266,6 +271,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         config.billing.webhook_secret.clone(),
         config.metrics,
         config.scim.token.clone(),
+        config.print_reset_link,
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

@@ -73,6 +73,7 @@ pub use stores::messages::PostgresMessageStore;
 pub use stores::messaging::PostgresMessagingStore;
 pub use stores::models::PostgresModelStore;
 pub use stores::pages::PostgresPageStore;
+pub use stores::password_resets::PostgresPasswordResetStore;
 pub use stores::pending_tool_calls::PostgresPendingToolCallStore;
 pub use stores::plugin_installs::PostgresPluginInstallStore;
 pub use stores::plugin_submissions::PostgresPluginSubmissionStore;

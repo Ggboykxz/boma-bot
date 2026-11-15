@@ -17,6 +17,11 @@ use crate::client::ClientAddr;
 /// The rate limit for auth endpoints: how many attempts an IP gets per window (D-01).
 /// Ten sign-in attempts per five minutes is strict enough against credential stuffing and
 /// lenient enough for a person mistyping; sign-up is rarer, so fewer and a wider window.
+const FORGOT_WINDOW_SECONDS: u64 = 60 * 60;
+const FORGOT_MAX_ATTEMPTS: u64 = 5;
+const RESET_WINDOW_SECONDS: u64 = 60 * 60;
+const RESET_MAX_ATTEMPTS: u64 = 5;
+
 const SIGN_IN_WINDOW_SECONDS: u64 = 300;
 const SIGN_IN_MAX_ATTEMPTS: u64 = 10;
 const SIGN_UP_WINDOW_SECONDS: u64 = 600;
@@ -52,6 +57,24 @@ use crate::{
     error::ApiError,
     state::AppState,
 };
+
+/// The body of `POST /api/auth/forgot-password`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForgotPasswordRequest {
+    /// The address asking for a recovery link.
+    pub email: String,
+}
+
+/// The body of `POST /api/auth/reset-password`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResetPasswordRequest {
+    /// The opaque one-time token, exactly as it appeared in the link.
+    pub token: String,
+    /// The new password.
+    pub password: String,
+}
 
 /// The body of `POST /api/auth/sign-up`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -97,6 +120,69 @@ pub struct UserView {
 pub struct SessionReply {
     /// The person.
     pub user: UserView,
+}
+
+/// `POST /api/auth/forgot-password` — issues one recovery link when the address exists.
+///
+/// The response is the same either way (spec §8.2): it never says whether the address is
+/// registered. A malformed address, an unknown address and an existing account all answer
+/// `200 {ok: true}`.
+pub async fn forgot_password(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, ApiError> {
+    over_limit(
+        &state,
+        peer,
+        &headers,
+        "forgot-password",
+        FORGOT_WINDOW_SECONDS,
+        FORGOT_MAX_ATTEMPTS,
+    )
+    .await?;
+    let request: ForgotPasswordRequest = parse(&body)?;
+    let _ = usecases::request_password_reset(state.app(), &request.email).await?;
+    Ok((
+        axum::http::StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        r#"{"ok":true}"#,
+    )
+        .into_response())
+}
+
+/// `POST /api/auth/reset-password` — consumes one recovery link; signs the person in.
+///
+/// The link is single-use; either it is refused in the same words as an absent one, or the person
+/// is signed in with the new password.
+pub async fn reset_password(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, ApiError> {
+    over_limit(
+        &state,
+        peer,
+        &headers,
+        "reset-password",
+        RESET_WINDOW_SECONDS,
+        RESET_MAX_ATTEMPTS,
+    )
+    .await?;
+    let request: ResetPasswordRequest = parse(&body)?;
+    let grant = usecases::reset_password(
+        state.app(),
+        &request.token,
+        &request.password,
+        state.http().session_ttl_seconds(),
+    )
+    .await?;
+    Ok(session_response(&state, grant))
 }
 
 /// `POST /api/auth/sign-up` — creates an account and signs the person in.

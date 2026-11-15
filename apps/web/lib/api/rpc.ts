@@ -251,6 +251,9 @@ export async function call<T>(
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      unauthorizedHandler?.();
+    }
     const envelope = await readEnvelope(response);
     throw new RpcError(
       envelope?.code ?? "INTERNAL",
@@ -726,4 +729,159 @@ export function adminPluginsDecide(
   signal?: AbortSignal,
 ): Promise<{ status: string }> {
   return call("admin", "plugins.decide", request, signal);
+}
+
+
+// ---------------------------------------------------------------------------
+// M10 — auth flows (spec §8.2)
+// ---------------------------------------------------------------------------
+
+/** The reply of `GET /api/auth/capabilities`. */
+export interface AuthCapabilities {
+  version: string;
+  runtime: string;
+  signup: "open" | "closed";
+  password: boolean;
+  emailCode: boolean;
+  passkey: boolean;
+  sso: string[];
+}
+
+/** `GET /api/auth/capabilities`. */
+export async function authCapabilities(signal?: AbortSignal): Promise<AuthCapabilities> {
+  const response = await fetch(`${apiBase()}/api/auth/capabilities`, {
+    credentials: "include",
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    throw new RpcError("INTERNAL", "The sign-in methods could not be loaded.", response.status);
+  }
+  return (await response.json()) as AuthCapabilities;
+}
+
+/** `POST /api/auth/sign-in`. */
+export async function authSignIn(
+  request: { email: string; password: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${apiBase()}/api/auth/sign-in`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    await throwErr(response);
+  }
+}
+
+/** `POST /api/auth/sign-out`. */
+export async function authSignOut(signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${apiBase()}/api/auth/sign-out`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    ...(signal ? { signal } : {}),
+    body: "{}",
+  });
+  if (!response.ok) {
+    await throwErr(response);
+  }
+}
+
+/** `POST /api/auth/sign-up`. */
+export async function authSignUp(
+  request: { email: string; password: string; name?: string; locale?: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${apiBase()}/api/auth/sign-up`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    await throwErr(response);
+  }
+}
+
+/** `POST /api/auth/forgot-password`. */
+export async function authForgotPassword(
+  request: { email: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${apiBase()}/api/auth/forgot-password`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    await throwErr(response);
+  }
+}
+
+/** `POST /api/auth/reset-password`. */
+export async function authResetPassword(
+  request: { token: string; password: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${apiBase()}/api/auth/reset-password`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    await throwErr(response);
+  }
+}
+
+/**
+ * The handler a host wires once to react to a `401` from any RPC.
+ *
+ * The shell redirects to `/sign-in?next=<current path>`; the app entry does the wiring.
+ */
+type UnauthorizedHandler = () => void;
+
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+/** Registers (or unregisters) the unauthorized handler; the last one wins. */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  unauthorizedHandler = handler;
+}
+
+// ---------------------------------------------------------------------------
+// internals
+// ---------------------------------------------------------------------------
+
+/**
+ * Throws `RpcError` from a non-ok fetch response.
+ *
+ * The envelope is solved exactly like `call`'s path, so a screen branching on `code` behaves the
+ * same across all endpoints.
+ */
+async function throwErr(response: Response): Promise<never> {
+  let envelope: { code?: string; error?: string } | null = null;
+  try {
+    envelope = (await response.json()) as { code?: string; error?: string } | null;
+  } catch {
+    try {
+      const text = await response.text();
+      if (text.includes("email") && text.length < 300) {
+        envelope = { error: text };
+      }
+    } catch {
+      envelope = null;
+    }
+  }
+  throw new RpcError(
+    envelope?.code ?? "INTERNAL",
+    envelope?.error ?? "The request could not be completed.",
+    response.status,
+  );
 }

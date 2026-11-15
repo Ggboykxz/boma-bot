@@ -133,6 +133,10 @@ pub struct Config {
     pub billing: BillingSettings,
     /// The SCIM sync settings (REQ-045).
     pub scim: ScimSettings,
+    /// Whether to print the one-time password recovery link (REQ-040). This deployment has no
+    /// outbound mail; `true` writes exactly one line with the account id and the link per request.
+    /// Off by default; only an operator who reads their own process output turns it on.
+    pub print_reset_link: bool,
 }
 
 /// The billing settings of this deployment (REQ-051).
@@ -336,6 +340,7 @@ impl Config {
             public_base_url: parse_public_base_url(&env)?,
             billing: parse_billing(&env)?,
             scim: parse_scim(&env)?,
+            print_reset_link: optional_parsed(&env, "BOMA_AUTH_PRINT_RESET_LINK", false)?,
         })
     }
 }

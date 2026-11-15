@@ -12,6 +12,10 @@ pub enum AuditKind {
     MailDropped,
     /// A private endpoint was reached for an installation (REQ-048, D-05).
     MessagingPrivateEndpoint,
+    /// A password recovery link was issued (REQ-040).
+    PasswordRecoveryIssued,
+    /// A password recovery link was consumed and the password changed (REQ-040).
+    PasswordRecoveryCompleted,
     /// A password sign-in attempt failed (REQ-045).
     SignInFailed,
     /// A browser reported a CSP violation (REQ-045, REQ-054).
@@ -47,6 +51,8 @@ impl AuditKind {
             Self::MailDropped => "mail.dropped",
             Self::MessagingPrivateEndpoint => "messaging.private_endpoint",
             Self::SignInFailed => "security.sign_in_failed",
+            Self::PasswordRecoveryIssued => "security.password_recovery_issued",
+            Self::PasswordRecoveryCompleted => "security.password_recovery_completed",
             Self::CspViolation => "security.csp_violation",
             Self::AccountDeleted => "account.deleted",
             Self::ExportDownloaded => "export.downloaded",

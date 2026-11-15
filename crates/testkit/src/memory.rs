@@ -512,6 +512,8 @@ struct State {
     spaces: Vec<SpaceRow>,
     /// Who belongs to which tenant.
     memberships: Vec<MembershipRow>,
+    /// The password recovery tokens (REQ-040).
+    password_resets: Vec<PasswordResetRow>,
     /// The export rows (REQ-044).
     account_exports: Vec<AccountExportRow>,
     /// The bots.
@@ -781,6 +783,12 @@ impl MemoryDatabase {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How many password recovery tokens remain stored (REQ-040).
+    #[must_use]
+    pub fn password_reset_count(&self) -> usize {
+        read(&self.state).password_resets.len()
     }
 
     /// Adds one member to a space, with a role.
@@ -1442,6 +1450,20 @@ impl UserStore for MemoryUserStore {
             .find(|row| row.user.id == *id)
             .map(|row| row.user.clone()))
     }
+
+    async fn set_password(
+        &self,
+        user_id: &UserId,
+        password_hash: &str,
+        _now: &str,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state.users.iter_mut().find(|row| row.user.id == *user_id) else {
+            return Err(AppError::NotFound);
+        };
+        row.password_hash = password_hash.to_owned();
+        Ok(())
+    }
 }
 
 /// The store of sessions.
@@ -1500,6 +1522,13 @@ impl SessionStore for MemorySessionStore {
             .iter()
             .find(|row| row.token_hash == token_hash)
             .map(|row| row.session.clone()))
+    }
+
+    async fn delete_for_user(&self, user_id: &boma_domain::UserId) -> Result<u64, AppError> {
+        let mut state = write(&self.state);
+        let before = state.sessions.len();
+        state.sessions.retain(|row| row.session.user_id != *user_id);
+        Ok((before - state.sessions.len()) as u64)
     }
 
     async fn delete(&self, id: &SessionId) -> Result<(), AppError> {
@@ -8157,6 +8186,75 @@ impl boma_app::ports::BillingStore for MemoryBillingStore {
         });
         Ok(())
     }
+}
+
+/// The in-memory password reset store (REQ-040).
+#[derive(Debug, Default)]
+pub struct MemoryPasswordResetStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryPasswordResetStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::PasswordResetStore for MemoryPasswordResetStore {
+    async fn create(&self, token: boma_app::ports::NewPasswordResetToken) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        state.password_resets.push(PasswordResetRow {
+            id: token.id,
+            user_id: token.user_id,
+            token_hash: token.token_hash,
+            expires_at: token.expires_at,
+            used_at: None,
+            created_at: token.created_at,
+        });
+        Ok(())
+    }
+
+    async fn find(
+        &self,
+        token_hash: &[u8],
+    ) -> Result<Option<boma_app::ports::PasswordResetToken>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .password_resets
+            .iter()
+            .find(|row| row.token_hash == token_hash && row.used_at.is_none())
+            .map(|row| boma_app::ports::PasswordResetToken {
+                id: row.id.clone(),
+                user_id: row.user_id.clone(),
+                token_hash: row.token_hash.clone(),
+                expires_at: row.expires_at.clone(),
+                used_at: row.used_at.clone(),
+            }))
+    }
+
+    async fn mark_used(&self, id: &str, now: &str) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        if let Some(row) = state.password_resets.iter_mut().find(|row| row.id == id) {
+            row.used_at = Some(now.to_owned());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PasswordResetRow {
+    id: String,
+    user_id: boma_domain::UserId,
+    token_hash: Vec<u8>,
+    expires_at: String,
+    used_at: Option<String>,
+    #[allow(dead_code)]
+    created_at: String,
 }
 
 /// The in-memory admin store: grants live in a shared vector since the deployment reuses one.

@@ -52,6 +52,10 @@ pub async fn sign_up(
     accounts(app, session_ttl_seconds).sign_up(request).await
 }
 
+/// Password recovery flows (REQ-040).
+#[doc(inline)]
+pub use crate::accounts::{request_password_reset, reset_password};
+
 /// Signs an existing person in.
 ///
 /// # Errors

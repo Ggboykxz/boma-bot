@@ -45,6 +45,14 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(authroutes::sign_out),
         )
         .route(
+            "/api/auth/forgot-password",
+            axum::routing::post(authroutes::forgot_password),
+        )
+        .route(
+            "/api/auth/reset-password",
+            axum::routing::post(authroutes::reset_password),
+        )
+        .route(
             "/api/internal/screen-target",
             post(screen::screen_target).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )

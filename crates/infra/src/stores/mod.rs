@@ -23,6 +23,7 @@ pub mod messages;
 pub mod messaging;
 pub mod models;
 pub mod pages;
+pub mod password_resets;
 pub mod pending_tool_calls;
 pub mod plugin_installs;
 pub mod plugin_submissions;

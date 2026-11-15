@@ -61,6 +61,26 @@ impl SessionStore for PostgresSessionStore {
         row.map(rows::session).transpose()
     }
 
+    async fn delete_for_user(&self, user_id: &boma_domain::UserId) -> Result<u64, AppError> {
+        let user_id = user_id.as_str().to_owned();
+        let affected = tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::Authentication,
+            |conn| {
+                Box::pin(async move {
+                    sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+                        .bind(&user_id)
+                        .execute(&mut *conn)
+                        .await
+                        .map(|result| result.rows_affected())
+                        .map_err(tenant::unavailable)
+                })
+            },
+        )
+        .await?;
+        Ok(affected)
+    }
+
     async fn delete(&self, id: &boma_domain::SessionId) -> Result<(), AppError> {
         sqlx::query("DELETE FROM sessions WHERE id = $1")
             .bind(id.as_str())
