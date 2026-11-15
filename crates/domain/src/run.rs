@@ -369,6 +369,20 @@ impl Run {
     pub const fn is_helper(&self) -> bool {
         matches!(self.trigger, RunTrigger::HelperResult) && self.parent_run_id.is_some()
     }
+
+    /// Whether this run is a member bot delegated to by another bot of the same room (REQ-010):
+    /// a `BotMessage` child with a parent. The reply surfaces in the room attributed to the
+    /// delegated bot; the outcome is relayed back to the parent as a tool message.
+    #[must_use]
+    pub const fn is_bot_delegation(&self) -> bool {
+        matches!(self.trigger, RunTrigger::BotMessage) && self.parent_run_id.is_some()
+    }
+
+    /// Whether the run reports back to a parent run instead of standing alone.
+    #[must_use]
+    pub const fn reports_to_parent(&self) -> bool {
+        self.is_helper() || self.is_bot_delegation()
+    }
 }
 
 #[cfg(test)]

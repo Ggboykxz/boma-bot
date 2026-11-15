@@ -1240,7 +1240,7 @@ mod tests {
             .expect("the run exists");
         assert_eq!(
             run.status,
-            RunStatus::WaitingInput,
+            boma_domain::RunStatus::WaitingInput,
             "a write-class call parks the run instead of executing"
         );
 
@@ -1379,7 +1379,7 @@ mod tests {
             .expect("the run exists");
         assert_eq!(
             run.status,
-            RunStatus::Queued,
+            boma_domain::RunStatus::Queued,
             "an approved tool re-queues the run"
         );
 
@@ -1523,7 +1523,7 @@ mod tests {
             .expect("the run exists");
         assert_eq!(
             run.status,
-            RunStatus::WaitingInput,
+            boma_domain::RunStatus::WaitingInput,
             "the parent waits for the helper, it does not answer first"
         );
 
@@ -1541,7 +1541,7 @@ mod tests {
             .expect("the run exists");
         assert_eq!(
             run.status,
-            RunStatus::Queued,
+            boma_domain::RunStatus::Queued,
             "the completed helper re-queues the parent"
         );
 
@@ -8458,6 +8458,421 @@ mod group_routing_tests {
         assert_eq!(
             bot_ids,
             vec![analyst.as_str().to_owned(), writer.as_str().to_owned()]
+        );
+    }
+    /// A member bot hands part of its work to another member bot of the room; the receiving
+    /// bot answers attributed in the room, the requester resumes with the result, and all of
+    /// it happens in one shared thread (REQ-010).
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_010_a_bot_delegates_to_a_sibling_bot_and_the_parent_continues() {
+        use std::sync::Arc;
+
+        use crate::ScriptedProvider;
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        let created = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "work out the release plan".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+        let parent_run_id = outcome.runs[0].id.clone();
+
+        // Analyst delegates, writer answers, analyst finalises.
+        let provider = Arc::new(ScriptedProvider::new_turn(vec![
+            boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+                id: "call_delegate".to_owned(),
+                name: "delegate.bot".to_owned(),
+                arguments: serde_json::json!({
+                    "bot": "writer",
+                    "prompt": "Draft the release notes.",
+                }),
+            }]),
+            boma_app::ports::ProviderTurn::Chunks(vec![
+                "release notes: ship v2 on Friday".to_owned(),
+            ]),
+            boma_app::ports::ProviderTurn::Chunks(vec!["Final: release notes drafted".to_owned()]),
+        ]));
+        let worker = Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            provider.clone(),
+            "worker-1".to_owned(),
+        );
+
+        // Pass 1: the analyst asks to delegate and parks on the approval card.
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread_id, None, 10)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+
+        // The owner approves: the writer's run starts; the analyst waits.
+        boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        let parent = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &parent_run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(
+            parent.status,
+            boma_domain::RunStatus::WaitingInput,
+            "the requester waits for the delegate, it does not answer first"
+        );
+
+        // Pass 2: the writer answers; the answer is attributed to it in the room.
+        assert!(worker.step().await.expect("the worker answers"));
+        let child_runs = test
+            .app()
+            .stores
+            .runs
+            .list(&context, Some(&writer), None, 10)
+            .await
+            .expect("the activity answers");
+        let child = child_runs
+            .runs
+            .into_iter()
+            .map(|entry| entry.run)
+            .next()
+            .expect("the delegated run exists");
+        assert_eq!(child.trigger, boma_domain::RunTrigger::BotMessage);
+        assert_eq!(
+            child.parent_run_id.as_ref().map(boma_domain::RunId::as_str),
+            Some(parent_run_id.as_str()),
+        );
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread_id, None, 20)
+            .await
+            .expect("the page answers");
+        let writer_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| {
+                message.role == boma_domain::MessageRole::Bot
+                    && message.bot_id.as_ref().map(boma_domain::BotId::as_str) == Some(writer.as_str())
+            })
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert_eq!(
+            writer_texts,
+            vec!["release notes: ship v2 on Friday"],
+            "the receiving bot's answer is attributed to it in the room"
+        );
+        let tool_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Tool)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert!(
+            tool_texts.iter().any(|text| text.contains("delegate.bot")),
+            "the relay records the delegation"
+        );
+
+        // Pass 3: the requester resumes with the result.
+        let parent = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &parent_run_id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(
+            parent.status,
+            boma_domain::RunStatus::Queued,
+            "the completed delegate re-queued the requester"
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &created.thread_id, None, 30)
+            .await
+            .expect("the page answers");
+        let parent_final: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| {
+                message.role == boma_domain::MessageRole::Bot
+                    && message.bot_id.as_ref().map(boma_domain::BotId::as_str) == Some(analyst.as_str())
+            })
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert!(parent_final.contains(&"Final: release notes drafted"));
+    }
+
+    /// A bot cannot hand work to a bot that does not share its room.
+    #[tokio::test]
+    async fn req_010_delegation_to_a_non_member_is_refused() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+        let (stranger, _) = test
+            .seed_bot(&space_id, &owner, "stranger")
+            .await
+            .expect("the stranger exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "work out the release plan".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+
+        let refused = boma_app::usecases::delegate_bot_run(
+            test.app(),
+            &context,
+            outcome.runs[0].id.as_str(),
+            stranger.as_str(),
+            "draft the notes",
+        )
+        .await;
+        assert!(
+            matches!(
+                refused,
+                Err(boma_app::AppError::Rule(
+                    boma_domain::DomainError::DelegationRefused(_)
+                ))
+            ),
+            "a stranger is not another member of the room"
+        );
+    }
+
+    /// A bot cannot delegate to itself.
+    #[tokio::test]
+    async fn req_010_a_bot_cannot_delegate_to_itself() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "work out the release plan".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+
+        let refused = boma_app::usecases::delegate_bot_run(
+            test.app(),
+            &context,
+            outcome.runs[0].id.as_str(),
+            analyst.as_str(),
+            "do this yourself",
+        )
+        .await;
+        assert!(matches!(
+            refused,
+            Err(boma_app::AppError::Rule(
+                boma_domain::DomainError::DelegationRefused(_)
+            ))
+        ));
+    }
+
+    /// One hop only: a bot already answering for another bot cannot delegate further.
+    #[tokio::test]
+    async fn req_010_nested_delegation_is_refused() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "work out the release plan".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+
+        let child = boma_app::usecases::delegate_bot_run(
+            test.app(),
+            &context,
+            outcome.runs[0].id.as_str(),
+            writer.as_str(),
+            "draft the notes",
+        )
+        .await
+        .expect("the delegation is created");
+        assert_eq!(child.trigger, boma_domain::RunTrigger::BotMessage);
+
+        let nested = boma_app::usecases::delegate_bot_run(
+            test.app(),
+            &context,
+            child.id.as_str(),
+            analyst.as_str(),
+            "hand it back",
+        )
+        .await;
+        assert!(
+            matches!(
+                nested,
+                Err(boma_app::AppError::Rule(
+                    boma_domain::DomainError::DelegationRefused(_)
+                ))
+            ),
+            "a bot answering for another bot cannot delegate further"
         );
     }
 }

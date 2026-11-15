@@ -178,7 +178,7 @@ impl Worker {
         usecases::record_routine_completed(&self.app, &run).await?;
         // A helper run reports its outcome to the parent thread as a tool message, and the
         // parent re-enters the worker (REQ-019).
-        if run.is_helper() {
+        if run.reports_to_parent() {
             usecases::complete_helper_run(&self.app, &context, &run, &text).await?;
         }
 
@@ -518,7 +518,7 @@ impl Worker {
         run: &boma_domain::Run,
         outcome: &str,
     ) {
-        if !run.is_helper() {
+        if !run.reports_to_parent() {
             return;
         }
         if let Err(error) = usecases::complete_helper_run(&self.app, context, run, outcome).await {

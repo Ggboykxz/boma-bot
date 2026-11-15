@@ -1922,16 +1922,11 @@ pub async fn webhook_wake(
 
     let now = app.services.clock.now();
     let space_id = bot.space_id.clone();
-    let thread = app
-        .stores
-        .threads
-        .for_bot(&context, &bot.id)
-        .await?
-        .ok_or(AppError::NotFound)?;
     let member = TenantContext::Member {
         space_id: space_id.clone(),
         user_id: bot.user_id.clone(),
     };
+    let thread = room_thread_for_bot(app, &member, &bot).await?;
 
     // The payload arrives as the newest user message, exactly like a person writing in.
     let text = format!(
@@ -2309,13 +2304,18 @@ pub async fn mail_inbound(
     })
 }
 
-/// The bot's thread, for a member or system context.
+/// The thread a bot's runs work in, for a member or system context: the group room when the
+/// bot belongs to one (REQ-010), its own thread otherwise.
 async fn thread_of(
     app: &App,
     context: &TenantContext,
     bot: &boma_domain::Bot,
 ) -> Result<Option<boma_domain::Thread>, AppError> {
-    app.stores.threads.for_bot(context, &bot.id).await
+    match room_thread_for_bot(app, context, bot).await {
+        Ok(thread) => Ok(Some(thread)),
+        Err(AppError::NotFound) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Creates or replaces one bot's mail policy (REQ-047).
@@ -2443,13 +2443,7 @@ pub async fn mail_held_release(
 {}",
         held.subject, held.body
     );
-    let thread_id = app
-        .stores
-        .threads
-        .for_bot(context, &bot.id)
-        .await?
-        .ok_or(AppError::NotFound)?
-        .id;
+    let thread_id = room_thread_for_bot(app, context, &bot).await?.id;
     let message = app
         .stores
         .messages
@@ -4089,6 +4083,55 @@ async fn model_choice_for(
     Ok(boma_domain::model::resolve(&preferences, models)?)
 }
 
+/// The context member-scoped on the run's space. The worker and the card answers run under a
+/// system context; the room resolution needs the space, and the run carries it — derive it
+/// here rather than push every call site to build one.
+fn member_context_for(run: &boma_domain::Run) -> TenantContext {
+    TenantContext::Member {
+        space_id: run.space_id.clone(),
+        user_id: run.user_id.clone(),
+    }
+}
+
+/// The thread a bot's runs work in: the group room when the bot belongs to one, its own
+/// thread otherwise (REQ-010). One room, several bots — the group owns the conversation.
+///
+/// Webhook paths pass a spaceless system context; the bot row carries the space, so the
+/// resolution falls back to a member context on the bot's own space instead of failing.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the room cannot be resolved.
+async fn room_thread_for_bot(
+    app: &App,
+    context: &TenantContext,
+    bot: &boma_domain::Bot,
+) -> Result<boma_domain::Thread, AppError> {
+    let fallback = TenantContext::Member {
+        space_id: bot.space_id.clone(),
+        user_id: bot.user_id.clone(),
+    };
+    let scoped = if context.space_id().is_some() {
+        context
+    } else {
+        &fallback
+    };
+    match app.stores.groups.find_for_bot(scoped, &bot.id).await? {
+        Some(group) => app
+            .stores
+            .threads
+            .find(scoped, &group.thread_id)
+            .await?
+            .ok_or(AppError::NotFound),
+        None => app
+            .stores
+            .threads
+            .for_bot(scoped, &bot.id)
+            .await?
+            .ok_or(AppError::NotFound),
+    }
+}
+
 /// Sends a message to a bot and starts the run that answers it.
 ///
 /// The send returns before any model call: one message row and one queued run, then the worker
@@ -4120,21 +4163,8 @@ pub async fn send_message(
 
     // A message to any member of a group lands in the shared thread — one room, several bots
     // (REQ-010). The bot's own thread is pushed aside; the group owns the conversation.
+    let thread = room_thread_for_bot(app, context, &bot).await?;
     let member_group = app.stores.groups.find_for_bot(context, &bot.id).await?;
-    let thread = match &member_group {
-        Some(group) => app
-            .stores
-            .threads
-            .find(context, &group.thread_id)
-            .await?
-            .ok_or(AppError::NotFound)?,
-        None => app
-            .stores
-            .threads
-            .for_bot(context, &bot.id)
-            .await?
-            .ok_or(AppError::NotFound)?,
-    };
     let space_id = context.space_id().ok_or(AppError::NotFound)?.clone();
     let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
     let now = app.services.clock.now();
@@ -4789,12 +4819,7 @@ pub async fn routines_create(
     if bot.is_archived() {
         return Err(AppError::NotFound);
     }
-    let thread = app
-        .stores
-        .threads
-        .for_bot(context, &bot.id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let thread = room_thread_for_bot(app, context, &bot).await?;
     let now = app.services.clock.now();
     let next_run_at = if active {
         Some(boma_domain::next_run_at(crons, timezone, &now)?)
@@ -6255,9 +6280,12 @@ pub async fn claim_run(app: &App, owner: &str) -> Result<Option<ClaimedRun>, App
     let Some(run) = app.stores.runs.claim_next_queued(owner).await? else {
         return Ok(None);
     };
-    let context = TenantContext::System {
-        reason: boma_domain::SystemReason::ScheduledJob,
-        user_id: Some(run.user_id.clone()),
+    // The claim itself is cross-tenant; everything the worker reads for this run belongs to
+    // the run's space, so the rest of the claim reads as the member whose run it is. This is
+    // also what lets the room resolution find a group room (a system context carries no space).
+    let context = TenantContext::Member {
+        space_id: run.space_id.clone(),
+        user_id: run.user_id.clone(),
     };
     let bot = app
         .stores
@@ -6265,12 +6293,7 @@ pub async fn claim_run(app: &App, owner: &str) -> Result<Option<ClaimedRun>, App
         .find(&context, &run.bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let thread = app
-        .stores
-        .threads
-        .for_bot(&context, &run.bot_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let thread = room_thread_for_bot(app, &context, &bot).await?;
     Ok(Some(ClaimedRun { run, bot, thread }))
 }
 
@@ -7093,6 +7116,7 @@ async fn approved_page_save(
 ///
 /// An approval never fakes a success: the only tool whose effects are implemented here is
 /// `memory.write`; anything else is refused inside the tool message instead of skipped silently.
+#[allow(clippy::too_many_lines)] // one arm per approved tool; splitting hides the contract
 async fn execute_approved_tool(
     app: &App,
     context: &TenantContext,
@@ -7142,6 +7166,40 @@ async fn execute_approved_tool(
         "page.save" => approved_page_save(app, context, bot, call).await,
         "purchase.request" => approved_purchase_request(app, context, call).await,
         key if key.starts_with("mcp.") => approved_mcp_call(app, context, call).await,
+        "delegate.bot" => {
+            let Some(bot_ref) = string("bot") else {
+                return (
+                    serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `bot` argument (the name or id of a member of the room)" } }),
+                    false,
+                );
+            };
+            let Some(prompt) = string("prompt") else {
+                return (
+                    serde_json::json!({ "ok": false, "body": { "error": "the tool needs a `prompt` argument" } }),
+                    false,
+                );
+            };
+            match delegate_bot_run(app, context, call.run_id.as_str(), &bot_ref, &prompt).await {
+                Ok(run) => (
+                    serde_json::json!({
+                        "ok": true,
+                        "body": {
+                            "runId": run.id.as_str(),
+                            "botId": run.bot_id.as_str(),
+                            "status": run.status.as_str(),
+                        },
+                    }),
+                    true,
+                ),
+                Err(error) => (
+                    serde_json::json!({
+                        "ok": false,
+                        "body": { "error": format!("the delegate run could not be created: {error}") },
+                    }),
+                    false,
+                ),
+            }
+        }
         "delegate.helper" => {
             let Some(prompt) = string("prompt") else {
                 return (
@@ -7255,12 +7313,20 @@ pub async fn answer_card(
             .find(context, &run.bot_id)
             .await?
             .ok_or(AppError::Unavailable)?;
-        let thread = app
+        let parked = app
             .stores
-            .threads
-            .for_bot(context, &run.bot_id)
-            .await?
-            .ok_or(AppError::Unavailable)?;
+            .pending_tool_calls
+            .find_pending(context, run_id)
+            .await?;
+        let thread = match parked.first() {
+            Some(parked) => app
+                .stores
+                .threads
+                .find(context, &parked.thread_id)
+                .await?
+                .ok_or(AppError::Unavailable)?,
+            None => room_thread_for_bot(app, context, &bot).await?,
+        };
         // Parked calls apply only from the card that parked them: approve applies, anything else
         // refuses; question cards have no parked calls.
         let mut child_created = false;
@@ -7354,6 +7420,13 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
             effect: boma_domain::ToolEffect::Write,
         },
         ToolSpec {
+            key: "delegate.bot".to_owned(),
+            description:
+                "Ask another member bot of this group room to do a task; the reply is posted in the room and the requesting run continues with the result. One hop: a bot cannot hand the work off further.".to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Write,
+        },
+        ToolSpec {
             key: "computer.observe".to_owned(),
             description: "Capture the current screen of this bot's computer.".to_owned(),
             kind: boma_domain::ToolKind::Builtin,
@@ -7425,12 +7498,14 @@ pub async fn delegate_helper_run(
 
     validate_message_text(prompt)?;
 
-    let thread = app
+    let scoped = member_context_for(&parent);
+    let parent_bot = app
         .stores
-        .threads
-        .for_bot(context, &parent.bot_id)
+        .bots
+        .find(&scoped, &parent.bot_id)
         .await?
         .ok_or(AppError::NotFound)?;
+    let thread = room_thread_for_bot(app, &scoped, &parent_bot).await?;
 
     let preferences = boma_domain::model::ModelPreferences {
         bot: parent.model_id.clone().map(|model| {
@@ -7502,12 +7577,22 @@ pub async fn complete_helper_run(
     let Some(parent) = app.stores.runs.find(context, &parent_run_id).await? else {
         return Ok(false);
     };
-    let Some(thread) = app.stores.threads.for_bot(context, &parent.bot_id).await? else {
-        return Ok(false);
+    let scoped = member_context_for(&parent);
+    let parent_bot = app
+        .stores
+        .bots
+        .find(&scoped, &parent.bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let thread = room_thread_for_bot(app, &scoped, &parent_bot).await?;
+    let tool = if helper.is_helper() {
+        "delegate.helper"
+    } else {
+        "delegate.bot"
     };
     let now = app.services.clock.now();
     let body = serde_json::json!({
-        "tool": "delegate.helper",
+        "tool": tool,
         "helperRunId": helper.id.as_str(),
         "result": outcome,
     });
@@ -7515,7 +7600,7 @@ pub async fn complete_helper_run(
         .stores
         .messages
         .insert(
-            context,
+            &scoped,
             NewMessage {
                 id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
                 space_id: thread.space_id.clone(),
@@ -7524,9 +7609,9 @@ pub async fn complete_helper_run(
                 blocks: vec![boma_domain::Block::Text {
                     text: body.to_string(),
                 }],
-                bot_id: Some(parent.bot_id.clone()),
+                bot_id: Some(helper.bot_id.clone()),
                 author_user_id: None,
-                run_id: Some(parent.id.clone()),
+                run_id: Some(helper.id.clone()),
                 client_nonce: None,
                 created_at: now.clone(),
                 reply_to_message_id: None,
@@ -7537,7 +7622,7 @@ pub async fn complete_helper_run(
     app.stores
         .events
         .append(
-            context,
+            &scoped,
             crate::ports::NewEvent {
                 space_id: thread.space_id.clone(),
                 thread_id: thread.id.clone(),
@@ -7554,7 +7639,7 @@ pub async fn complete_helper_run(
     if parent.status == RunStatus::WaitingInput {
         set_run_status(
             app,
-            context,
+            &scoped,
             parent.id.as_str(),
             RunStatus::Queued,
             None,
@@ -7565,6 +7650,131 @@ pub async fn complete_helper_run(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Delegates a task to another member bot of the same room (REQ-010).
+///
+/// The receiving bot runs in its own name: its reply is posted attributed to it in the
+/// shared thread, and the outcome is relayed to the requesting run as a tool message so the
+/// requesting run continues with the result. One hop only: a bot asked to help cannot hand
+/// the work off again (no chains, no loops). Write-class: the call parks for approval like
+/// every other write-effect tool.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] wrapping [`boma_domain::DomainError::DelegationRefused`] when
+/// the run is already a delegation (nested delegation) or the target is not another member
+/// of the room; [`AppError::NotFound`] when the parent run does not exist, or the bot is not
+/// in a group room.
+pub async fn delegate_bot_run(
+    app: &App,
+    context: &TenantContext,
+    parent_run_id: &str,
+    bot_ref: &str,
+    prompt: &str,
+) -> Result<Run, AppError> {
+    let parent = app
+        .stores
+        .runs
+        .find(
+            context,
+            &boma_domain::RunId::new(parent_run_id.to_owned()).map_err(|_| AppError::NotFound)?,
+        )
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // A bot asked to help cannot hand the work off further: one hop, no loops (REQ-010).
+    if parent.is_helper() || parent.is_bot_delegation() {
+        return Err(AppError::Rule(boma_domain::DomainError::DelegationRefused(
+            "a bot already answering for another bot cannot delegate further".to_owned(),
+        )));
+    }
+    validate_message_text(prompt)?;
+
+    // Delegation happens inside a group room: without other member bots there is nothing
+    // to hand the work to, and the tool says so.
+    let scoped = member_context_for(&parent);
+    let group = app
+        .stores
+        .groups
+        .find_for_bot(&scoped, &parent.bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let parent_bot = app
+        .stores
+        .bots
+        .find(&scoped, &parent.bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let thread = room_thread_for_bot(app, &scoped, &parent_bot).await?;
+
+    // The target must be a member of the room, addressed by id or by name, never the
+    // requester itself.
+    let mut target = None;
+    for bot_id in &group.bot_ids {
+        if *bot_id == parent.bot_id {
+            continue;
+        }
+        let bot = app
+            .stores
+            .bots
+            .find(context, bot_id)
+            .await?
+            .ok_or(AppError::Unavailable)?;
+        if bot_id.as_str() == bot_ref || bot.name.eq_ignore_ascii_case(bot_ref) {
+            target = Some(bot);
+            break;
+        }
+    }
+    let target = target.ok_or_else(|| {
+        AppError::Rule(boma_domain::DomainError::DelegationRefused(format!(
+            "{bot_ref} is not another member of this group"
+        )))
+    })?;
+
+    let preferences = boma_domain::model::ModelPreferences {
+        bot: parent.model_id.clone().map(|model| {
+            (
+                format!(
+                    "{}/{}",
+                    parent
+                        .model_provider
+                        .clone()
+                        .unwrap_or_else(|| "custom".to_owned()),
+                    model
+                ),
+                parent.model_pinned,
+            )
+        }),
+        space: None,
+        person: None,
+    };
+    let choice = boma_domain::model::resolve(&preferences, &app.services.models)?;
+    let now = app.services.clock.now();
+
+    let run = app
+        .stores
+        .runs
+        .create(NewRun {
+            id: boma_domain::RunId::new(app.services.ids.new_id("drun"))?,
+            space_id: parent.space_id.clone(),
+            bot_id: target.id.clone(),
+            thread_id: thread.id.clone(),
+            user_id: parent.user_id.clone(),
+            trigger: RunTrigger::BotMessage,
+            client_nonce: None,
+            source_message_id: parent.source_message_id.clone(),
+            created_at: now,
+            model_provider: Some(choice.provider),
+            model_id: Some(choice.model),
+            model_pinned: choice.pinned,
+            parent_run_id: Some(parent.id.clone()),
+            routine_id: None,
+        })
+        .await?;
+
+    tracing::info!(run = %run.id, parent = %parent.id, target = %run.bot_id, "the run delegated to a member bot");
+    Ok(run)
 }
 
 /// The tool catalogue of one run: the built-ins plus the tools the bot may use (REQ-016).

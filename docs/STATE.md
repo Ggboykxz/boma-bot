@@ -72,8 +72,8 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     room's owner; one run per mentioned bot per message, in creation order; per-bot nonce
     scoping (`RunStore::create` + `find_by_nonce(context, thread, nonce, bot_id)`) so a
     fan-out replay never collapses; wire `SendReply.runIds` (single-bot reply byte-exact).
-  - M11.3 (this slice) — groups read surface + the `/app/g/:groupId` screen + the rail
-    action: `groups.get|list|messages` (bot attribution via `GroupMessageView.botId`; member
+  - M11.3 (`46e26d6`, follow-up `8be558d`, CI green `43748287335`, all four jobs) — groups
+    read surface + the `/app/g/:groupId` screen + the rail action: `groups.get|list|messages` (bot attribution via `GroupMessageView.botId`; member
     messages carry none), `GroupGetReply`/`GroupsListReply`/`GroupMessagesReply` (m…), with
     the round-trip integration test `req_010_the_group_read_surface_returns_the_room_and_its_messages`
     and the wire unit pin `req_010_a_bot_message_serialises_its_attribution_and_a_user_message_does_not`.
@@ -83,17 +83,34 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     `router.push` to the room), typed web client (`groupsCreate|List|Get|Messages`), Playwright
     `group.spec.ts` ×2, `/app/g/group_golden` on the axe gate. REQ-007/REQ-026 goldens now pin
     their control by accessible name (DEV-04).
-  - **Gap carried explicitly: bot-to-bot handoffs are NOT built.** The second REQ-010 clause —
-    a member bot's message mentioning another member bot queues a run for the mentioned bot,
-    attributed in the shared thread, and the requesting run resumes with the result — needs
-    the delegation contract chosen by the owner (synchronous continuation vs async mention
-    fan-out without resume, hop cap, whose tool approvals govern the handoff, loop prevention).
-    REQ-010 is therefore not complete; TRACEABILITY says so in the row.
+  - M11.3b (same commit range as M11.3 plus the delegation work riding this slice) —
+    bot-to-bot handoffs are BUILT (REQ-010, second clause): `delegate.bot` builtin tool
+    (Write effect, `delegate.helper` approval-card convention). A bot hands work to another
+    member bot of the same room by name or id; one hop only (a bot already answering for
+    another bot cannot hand the work off further — nested delegation is refused with
+    DelegationRefused); self and non-member targets refused the same way. The receiving
+    bot runs as a `BotMessage` child with `parent_run_id` set; its reply is attributed to it
+    in the shared thread; the parent resumes with the outcome via the relay
+    (`role=tool`, fed by the same `complete_helper_run` path, Tool-JSON in the parent's history).
+    Pinned by `group_routing_tests` ×4 (`req_010_a_bot_delegates_to_a_sibling_bot_and_the_parent_continues`,
+    `req_010_delegation_to_a_non_member_is_refused`, `req_010_a_bot_cannot_delegate_to_itself`,
+    `req_010_nested_delegation_is_refused`).
+  - **Latent defect fixed in this slice (M11.2-class, worker path)**: the worker claimed a
+    run with `threads.for_bot` — the bot's own thread — so a grouped bot's answers, approval
+    cards and relay rows would have landed outside the shared room. `claim_run` now resolves
+    the room via `room_thread_for_bot` (member context on the run's space; bot row carries it
+    for spaceless system contexts), and per-run reads run as the run's Member context. The
+    same room resolution now applies to the webhook wake, the held-mail release path,
+    routine wake runs, and `thread_of` (mail inbound). Solo bots are unaffected (falls back
+    to the bot's own thread). Relay rows now carry the child run/bot attribution (REQ-019
+    unchanged; `helperRunId` key kept).
+  - Docs coherence: `spec/03-api-contract.md` groups section extended (additive procedures
+    documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
   - M11.4 (regression + signed release) and the release signing identity are the owner's.
 
-M10 is not closed until M11 releases; REQ-010 ships honestly as M11.1–M11.3 with the gap
-recorded, not as "done".
+REQ-010 ships complete as M11.1–M11.3b: creation (byte-exact golden), mention fan-out, groups
+read surface + room UI, bot-to-bot handoff. M10 stays closed-by-record until M11.4 releases.
 
 REQ-010 (group chats) and REQ-011 (activity view) arrive with M11 alongside their regression set,
 as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay out, recorded.

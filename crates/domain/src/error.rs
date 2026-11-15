@@ -59,6 +59,9 @@ pub enum DomainError {
         /// The largest size the product accepts.
         max: usize,
     },
+    /// A bot-to-bot handoff is refused (REQ-010): nested delegation, or a target the room
+    /// does not share. Carries the refusal-safe reason.
+    DelegationRefused(String),
 }
 
 impl fmt::Display for DomainError {
@@ -91,6 +94,9 @@ impl fmt::Display for DomainError {
             Self::UnknownSystemReason(value) => write!(f, "unknown system reason: {value}"),
             Self::InvalidPageSize { size, max } => {
                 write!(f, "a page of {size} messages is not allowed (max {max})")
+            }
+            Self::DelegationRefused(reason) => {
+                write!(f, "the handoff was refused: {reason}")
             }
         }
     }

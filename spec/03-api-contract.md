@@ -60,6 +60,16 @@ paymentWallet, voice, externalConversations, agentSecrets, vault, botSecrets`
 
 **groups**
 - `groups.create` — input `{name, botIds[]}` → group with one thread.
+- `groups.get` — input `{id}` → the group with its shared thread handle, member bot ids and
+  the member bots with display names. Additive (rebuild, REQ-010).
+- `groups.list` — no input → the caller's groups, oldest first, each with the shared thread
+  handle and member count. Additive (rebuild, REQ-010).
+- `groups.messages` — same input shape as `threads.messages` → the shared thread's page,
+  messages attributed with `botId` when a bot authored them (REQ-010).
+- Member messages fan out to the mentioned bots only (`@name`, exact mention of a member);
+  with no mention the room's owner bot runs (one room, several bots). One run per mentioned
+  bot per message. `delegate.bot` (write-class, approval card) is the bot-to-bot handoff:
+  the receiving bot answers attributed in the room, the requester resumes with the result.
 - `groups.addMember`, `groups.removeMember`, `groups.rename`, `groups.remove`.
 
 **computer**
