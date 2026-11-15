@@ -289,11 +289,52 @@ pub trait AccountStore: Send + Sync {
     ///
     /// Returns [`AppError::Conflict`] when the address is already registered.
     async fn create_account(&self, account: NewAccount) -> Result<Account, AppError>;
+
+    /// Creates just the person row: no organization, no space, nothing to sign in to.
+    ///
+    /// Used by the SCIM provisioning path (REQ-045); a SCIM-created account stays passwordless
+    /// until a human invites them or an admin re-enables it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the address is already registered, and an error when
+    /// the store cannot answer.
+    async fn create_person(&self, user: NewUser) -> Result<User, AppError>;
+
+    /// Revokes every session the person holds and removes every membership, then marks the
+    /// account deactivated (`deactivated_at`).
+    ///
+    /// This is what "the member leaves" means everywhere else in the product: their session
+    /// dies at this line of SQL and cannot survive a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn scim_deprovision(&self, user_id: &UserId, now: &str) -> Result<(), AppError>;
+
+    /// Sets or clears `deactivated_at`, revoking every session the moment the account closes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn scim_set_deactivated(
+        &self,
+        user_id: &UserId,
+        deactivated_at: Option<&str>,
+        now: &str,
+    ) -> Result<(), AppError>;
 }
 
 /// Stores and reads people.
 #[async_trait]
 pub trait UserStore: Send + Sync {
+    /// Every person, oldest first, capped. System-scoped: only the SCIM sync path and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list(&self, limit: i64) -> Result<Vec<User>, AppError>;
+
     /// Finds a person by address, with the hash of their password.
     ///
     /// The hash travels with the person so that sign-in never has to fetch it separately, and it

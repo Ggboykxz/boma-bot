@@ -61,6 +61,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         config.billing.provider(),
         config.billing.webhook_secret.clone(),
         config.metrics,
+        config.scim.token.clone(),
     )?;
     let state = AppState::new(
         readiness,
@@ -111,6 +112,7 @@ fn build_app(
     config_billing_provider: Option<std::sync::Arc<dyn boma_app::ports::BillingProvider>>,
     config_billing_webhook_secret: Option<String>,
     config_metrics: bool,
+    config_scim_token: Option<String>,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -219,7 +221,8 @@ fn build_app(
                 config_billing_provider,
                 config_billing_webhook_secret.map(secrecy::SecretString::from),
             )
-            .with_metrics(config_metrics);
+            .with_metrics(config_metrics)
+            .with_scim_option(config_scim_token);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -260,6 +263,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         config.billing.provider(),
         config.billing.webhook_secret.clone(),
         config.metrics,
+        config.scim.token.clone(),
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

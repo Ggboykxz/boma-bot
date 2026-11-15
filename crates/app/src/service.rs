@@ -235,6 +235,9 @@ pub struct Services {
     /// Whether the messaging surface exists (`BOMA_MESSAGING`). Off by default: without the
     /// flag the messaging routes and procedures answer 404, signed in or not.
     pub messaging_enabled: bool,
+    /// Whether the SCIM sync surface exists (`BOMA_SCIM`), and the bearer an enterprise
+    /// directory presents on it. `None` means the routes are uniformly absent (REQ-045).
+    pub scim_token: Option<secrecy::SecretString>,
     /// The counters the process keeps; exposed at `/metrics` when the deployment enables it.
     pub metrics: Arc<crate::metrics::Metrics>,
     /// Whether `GET /metrics` answers (BOMA_METRICS). Off by default; the endpoint is absent,
@@ -299,6 +302,7 @@ impl Services {
             billing_provider: None,
             billing_webhook_secret: None,
             billing_enabled: false,
+            scim_token: None,
             metrics: Arc::new(crate::metrics::Metrics::new()),
             metrics_enabled: false,
             slack: None,
@@ -350,6 +354,20 @@ impl Services {
         settings: Option<crate::ports::EmailInboundSettings>,
     ) -> Self {
         self.email_inbound = settings;
+        self
+    }
+
+    /// Builds the services with the SCIM sync surface enabled (REQ-045).
+    #[must_use]
+    pub fn with_scim(mut self, token: secrecy::SecretString) -> Self {
+        self.scim_token = Some(token);
+        self
+    }
+
+    /// Builds the services with the SCIM surface wired from deployment config, when present.
+    #[must_use]
+    pub fn with_scim_option(mut self, token: Option<String>) -> Self {
+        self.scim_token = token.map(secrecy::SecretString::from);
         self
     }
 

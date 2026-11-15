@@ -2,23 +2,24 @@
 //!
 //! The tenant context is a typed enum, so the compiler is the first line of defence. This
 //! test is the second line: it scans the workspace for every construction of a `SystemReason`
-//! and refuses a variant outside the five the deployment ships. A reviewer adding a sixth
-//! reason by accident or by pressure hits this wall.
+//! and refuses a variant outside the ones the deployment ships. A reviewer adding a reason
+//! by accident or by pressure hits this wall.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// The six variants the deployment ships, plus the constant that enumerates them. A seventh
+// The variants the deployment ships, plus the constant that enumerates them. An extra
 // reason means: add the variant and this allow-list together, or the change does not pass.
-const KNOWN: [&str; 7] = [
+const KNOWN: [&str; 8] = [
     "Boot",
     "Authentication",
     "WebhookDelivery",
     "ScheduledJob",
     "DataMigration",
     "SharedPageRead",
+    "ScimDirectorySync",
     "ALL",
 ];
 

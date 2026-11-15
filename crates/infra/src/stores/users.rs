@@ -26,6 +26,30 @@ impl PostgresUserStore {
 
 #[async_trait::async_trait]
 impl UserStore for PostgresUserStore {
+    async fn list(&self, limit: i64) -> Result<Vec<User>, AppError> {
+        let rows = tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::ScimDirectorySync,
+            |conn| {
+                Box::pin(async move {
+                    sqlx::query_as::<_, crate::stores::rows::UserRow>(
+                        "SELECT id, email, name, email_verified, locale, password_hash,
+                                boma.rfc3339(deactivated_at) AS deactivated_at
+                         FROM users
+                         ORDER BY created_at ASC, id ASC
+                         LIMIT $1",
+                    )
+                    .bind(limit)
+                    .fetch_all(&mut *conn)
+                    .await
+                    .map_err(tenant::unavailable)
+                })
+            },
+        )
+        .await?;
+        rows.into_iter().map(crate::stores::rows::user).collect()
+    }
+
     async fn find_by_email(&self, email: &Email) -> Result<Option<(User, String)>, AppError> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT id, email, name, email_verified, locale, password_hash,

@@ -7817,3 +7817,230 @@ pub async fn audit_export(
         events: rows.len(),
     })
 }
+
+// ---------------------------------------------------------------------------
+// M9 — directory sync (REQ-045): SCIM provisioning, list and deprovision
+// ---------------------------------------------------------------------------
+
+/// A SCIM-provisioned account lands in this shape; it carries no space, opens no door.
+///
+/// The `active` flag is the whole point of the directory flow: a born-disabled account can never
+/// sign in, and enabling it still grants nothing — an admin must invite the person into a space
+/// first, as with any other walk-in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScimAccountOutcome {
+    /// The person.
+    pub user: boma_domain::User,
+    /// Whether the account can sign in.
+    pub active: bool,
+}
+
+/// One line of the SCIM user-list answer, also used for a single user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScimUserEntry {
+    /// The person.
+    pub user: boma_domain::User,
+    /// `true` when the account can sign in.
+    pub active: bool,
+}
+
+/// The outcome of a SCIM deprovision or re-enable (REQ-045).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScimPatchOutcome {
+    /// The person, after the write.
+    pub user: boma_domain::User,
+    /// Whether the account can sign in now.
+    pub active: bool,
+}
+
+/// Passwordless handles are not secrets; a random opaque handle is good enough.
+async fn opaque_password_hash(app: &App) -> Result<String, AppError> {
+    let handle = app.services.tokens.generate()?;
+    app.services.hasher.hash(&handle).await
+}
+
+/// Provisions one account from an enterprise directory (REQ-045).
+///
+/// With an `initial_password`, the person can sign in immediately. Without it, the account is
+/// born disabled (`deactivated_at` set) so it never opens a door until an admin re-enables it.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot record the account; the caller sees it as a generic
+/// failure. A duplicate address is [`AppError::Conflict`].
+pub async fn scim_provision(
+    app: &App,
+    email: &str,
+    display_name: &str,
+    initial_password: Option<&str>,
+) -> Result<ScimAccountOutcome, AppError> {
+    let email = boma_domain::Email::new(email.trim().to_ascii_lowercase())
+        .map_err(|_| AppError::NotFound)?;
+    let password_hash = match initial_password {
+        Some(password) => app.services.hasher.hash(password).await?,
+        None => opaque_password_hash(app).await?,
+    };
+    let now = app.services.clock.now();
+    let user_id = boma_domain::UserId::new(app.services.ids.new_id("usr"))?;
+    let user = app
+        .stores
+        .accounts
+        .create_person(crate::ports::NewUser {
+            id: user_id,
+            email,
+            password_hash,
+            name: display_name.trim().to_owned(),
+            locale: "en-US".to_owned(),
+            created_at: now.clone(),
+        })
+        .await?;
+    let exists = initial_password.is_none();
+    if initial_password.is_none() {
+        app.stores
+            .accounts
+            .scim_set_deactivated(&user.id, Some(&now), &now)
+            .await?;
+    }
+    let user = if initial_password.is_none() {
+        boma_domain::User {
+            deactivated_at: Some(now.clone()),
+            ..user
+        }
+    } else {
+        user
+    };
+    let _ = app
+        .stores
+        .audit
+        .append(crate::ports::NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: None,
+            actor_user_id: None,
+            kind: boma_domain::AuditKind::ScimProvisioned,
+            target: "scim".to_owned(),
+            metadata: serde_json::json!({
+                "hasInitialPassword": !exists,
+            }),
+            created_at: now,
+        })
+        .await;
+    Ok(ScimAccountOutcome {
+        user,
+        active: initial_password.is_some(),
+    })
+}
+
+/// Lists the accounts in the deployment, oldest first (REQ-045).
+///
+/// The `filter` parameter is the SCIM dialect's simplest form: `userName eq "address"` or
+/// `active eq true` / `active eq false`; an empty filter means everything, a shape we cannot
+/// place matches nothing, never a guess.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn scim_list(
+    app: &App,
+    filter: Option<&str>,
+    start_index: u64,
+    count: u64,
+) -> Result<Vec<ScimUserEntry>, AppError> {
+    const MAX_ROWS: i64 = 200;
+    let limit = i64::try_from(count).unwrap_or(MAX_ROWS).clamp(1, MAX_ROWS);
+    let rows = app.stores.users.list(limit).await?;
+    let offset = usize::try_from(start_index.saturating_sub(1)).unwrap_or(0);
+    let entries = rows
+        .into_iter()
+        .skip(offset)
+        .filter(|user| scim_filter_matches(user, filter))
+        .map(|user| {
+            let active = user.deactivated_at.is_none();
+            ScimUserEntry { user, active }
+        })
+        .collect();
+    Ok(entries)
+}
+
+/// Whether one user row passes the SCIM filter (both forms).
+fn scim_filter_matches(user: &boma_domain::User, filter: Option<&str>) -> bool {
+    let Some(filter) = filter else { return true };
+    let filter = filter.trim();
+    let user_name = format!("userName eq \"{}\"", user.email);
+    if filter.eq_ignore_ascii_case(&user_name) {
+        return true;
+    }
+    let active = user.deactivated_at.is_none();
+    if filter.eq_ignore_ascii_case("active eq true") {
+        return active;
+    }
+    if filter.eq_ignore_ascii_case("active eq false") {
+        return !active;
+    }
+    false
+}
+
+/// Finds one SCIM account, or not found; the endpoint maps the not-found to 404.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn scim_find(app: &App, id: &str) -> Result<Option<boma_domain::User>, AppError> {
+    let id = boma_domain::UserId::new(id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores.users.find(&id).await
+}
+
+/// Applies one SCIM state change: activate or deactivate (REQ-045).
+///
+/// Deactivating is the "member leaves" path everywhere in the system: their sessions die, their
+/// memberships go, and the account cannot sign in any more. Enabling flips only the account's
+/// flag back; it grants nothing.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot record the change.
+pub async fn scim_set_active(
+    app: &App,
+    user_id: &str,
+    active: bool,
+) -> Result<ScimPatchOutcome, AppError> {
+    let user_id = boma_domain::UserId::new(user_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let now = app.services.clock.now();
+    let deactivated_at = if active { None } else { Some(now.as_str()) };
+    if active {
+        app.stores
+            .accounts
+            .scim_set_deactivated(&user_id, None, &now)
+            .await?;
+    } else {
+        app.stores.accounts.scim_deprovision(&user_id, &now).await?;
+    }
+    let _ = app
+        .stores
+        .audit
+        .append(crate::ports::NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: None,
+            actor_user_id: None,
+            kind: if active {
+                boma_domain::AuditKind::ScimProvisioned
+            } else {
+                boma_domain::AuditKind::ScimDeprovisioned
+            },
+            target: "scim".to_owned(),
+            metadata: serde_json::json!({
+                "action": if active { "enabled" } else { "deprovisioned" },
+            }),
+            created_at: now.clone(),
+        })
+        .await;
+    let user = app
+        .stores
+        .users
+        .find(&user_id)
+        .await?
+        .ok_or(AppError::Unavailable)?;
+    Ok(ScimPatchOutcome {
+        user,
+        active: deactivated_at.is_none(),
+    })
+}

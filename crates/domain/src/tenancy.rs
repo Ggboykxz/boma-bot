@@ -29,17 +29,20 @@ pub enum SystemReason {
     DataMigration,
     /// An anonymous browser reads a shared page by its token (REQ-037).
     SharedPageRead,
+    /// A SCIM-provisioning request from an enterprise directory (REQ-045).
+    ScimDirectorySync,
 }
 
 impl SystemReason {
     /// Every reason, in the order the product declares them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Boot,
         Self::Authentication,
         Self::WebhookDelivery,
         Self::ScheduledJob,
         Self::DataMigration,
         Self::SharedPageRead,
+        Self::ScimDirectorySync,
     ];
 
     /// The wire value, used in the audit log.
@@ -52,6 +55,7 @@ impl SystemReason {
             Self::ScheduledJob => "scheduled_job",
             Self::DataMigration => "data_migration",
             Self::SharedPageRead => "shared_page_read",
+            Self::ScimDirectorySync => "scim_directory_sync",
         }
     }
 
@@ -68,6 +72,7 @@ impl SystemReason {
             "scheduled_job" => Ok(Self::ScheduledJob),
             "data_migration" => Ok(Self::DataMigration),
             "shared_page_read" => Ok(Self::SharedPageRead),
+            "scim_directory_sync" => Ok(Self::ScimDirectorySync),
             other => Err(DomainError::UnknownSystemReason(other.to_owned())),
         }
     }

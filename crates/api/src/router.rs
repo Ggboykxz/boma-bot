@@ -17,6 +17,7 @@ use crate::{
 /// The spec's contract is `/health` and `/ready` (`spec/openapi.yaml`). `/healthz` and `/readyz`
 /// are aliases required by AGENTS.md "Observability"; they are deliberately absent from the
 /// generated document, and the contract test asserts that (docs/STATE.md records the deviation).
+#[allow(clippy::too_many_lines)] // the route table; splitting it hides the contract
 pub fn router(state: AppState) -> Router {
     let http = state.http().clone();
     let middleware_state = state.clone();
@@ -79,6 +80,20 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/csp-report",
             post(public::csp_report).route_layer(DefaultBodyLimit::max(17 * 1024)),
+        )
+        // Directory sync (REQ-045): SCIM 2.0 /Users behind one bearer, all-or-nothing.
+        .route(
+            "/api/auth/scim/v2/ServiceProviderConfig",
+            get(public::scim_service_provider_config),
+        )
+        .route(
+            "/api/auth/scim/v2/Users",
+            get(public::scim_list).post(public::scim_create),
+        )
+        .route(
+            "/api/auth/scim/v2/Users/{id}",
+            get(public::scim_get)
+                .patch(public::scim_patch),
         )
         .route(
             "/api/v1/assets/page-runtime.js",

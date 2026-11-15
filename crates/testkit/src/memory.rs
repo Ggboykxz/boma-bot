@@ -1201,6 +1201,58 @@ impl AccountStore for MemoryAccountStore {
 
         Ok(Account { user, space })
     }
+
+    async fn create_person(
+        &self,
+        user: boma_app::ports::NewUser,
+    ) -> Result<boma_domain::User, AppError> {
+        let mut state = write(&self.state);
+        if state.users.iter().any(|row| row.user.email == user.email) {
+            return Err(AppError::Conflict);
+        }
+        let created = boma_domain::User {
+            id: user.id.clone(),
+            email: user.email.clone(),
+            name: user.name.clone(),
+            email_verified: false,
+            locale: user.locale.clone(),
+            deactivated_at: None,
+        };
+        state.users.push(UserRow {
+            user: created.clone(),
+            password_hash: user.password_hash.clone(),
+        });
+        Ok(created)
+    }
+
+    async fn scim_deprovision(&self, user_id: &UserId, now: &str) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        // Sessions die on the spot.
+        state.sessions.retain(|row| row.session.user_id != *user_id);
+        // Memberships are gone, space after space.
+        state.memberships.retain(|row| row.user_id != *user_id);
+        // And the account is disabled.
+        if let Some(row) = state.users.iter_mut().find(|row| row.user.id == *user_id) {
+            row.user.deactivated_at = Some(now.to_owned());
+        }
+        Ok(())
+    }
+
+    async fn scim_set_deactivated(
+        &self,
+        user_id: &UserId,
+        deactivated_at: Option<&str>,
+        _now: &str,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        if deactivated_at.is_some() {
+            state.sessions.retain(|row| row.session.user_id != *user_id);
+        }
+        if let Some(row) = state.users.iter_mut().find(|row| row.user.id == *user_id) {
+            row.user.deactivated_at = deactivated_at.map(str::to_owned);
+        }
+        Ok(())
+    }
 }
 
 /// The store of people.
@@ -1231,6 +1283,18 @@ impl Default for MemoryUserStore {
 
 #[async_trait::async_trait]
 impl UserStore for MemoryUserStore {
+    async fn list(&self, limit: i64) -> Result<Vec<User>, AppError> {
+        let limit = usize::try_from(limit).unwrap_or(0);
+        let state = read(&self.state);
+        let mut rows: Vec<&UserRow> = state.users.iter().collect();
+        rows.sort_by(|left, right| left.user.id.cmp(&right.user.id));
+        Ok(rows
+            .into_iter()
+            .take(limit)
+            .map(|row| row.user.clone())
+            .collect())
+    }
+
     async fn find_by_email(&self, email: &Email) -> Result<Option<(User, String)>, AppError> {
         let state = read(&self.state);
         Ok(state

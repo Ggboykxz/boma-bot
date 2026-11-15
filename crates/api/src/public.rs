@@ -906,6 +906,454 @@ fn summarize_violation(report: &serde_json::Value) -> Option<usecases::CspViolat
     })
 }
 
+// ---------------------------------------------------------------------------
+// M9 — directory sync (REQ-045): SCIM 2.0 `/Users`, behind one bearer, behind one flag
+// ---------------------------------------------------------------------------
+
+/// The per-IP allowance per minute for SCIM; directory sync is bursty, abuse is linear.
+const SCIM_PER_IP_PER_MINUTE: u64 = 240;
+
+/// The body cap for a SCIM request; SCIM payloads are small, and a bigger one is not a directory record.
+const SCIM_MAX_BODY_BYTES: usize = 64 * 1024;
+
+const SCIM_USER_SCHEMA: &str = "urn:ietf:params:scim:schemas:core:2.0:User";
+const SCIM_ERROR_SCHEMA: &str = "urn:ietf:params:scim:api:messages:2.0:Error";
+const SCIM_LIST_SCHEMA: &str = "urn:ietf:params:scim:api:messages:2.0:ListResponse";
+const SCIM_SP_SCHEMA: &str = "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig";
+
+/// A uniform refusal: in a deployment that never opted into SCIM, the surface does not exist.
+fn scim_not_found() -> Response {
+    scim_body(
+        StatusCode::NOT_FOUND,
+        &serde_json::json!({
+            "schemas": [SCIM_ERROR_SCHEMA],
+            "detail": "Not found.",
+            "status": 404,
+        }),
+    )
+}
+
+fn scim_body(status: StatusCode, body: &serde_json::Value) -> Response {
+    let body = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_owned());
+    (
+        status,
+        [
+            (
+                HeaderName::from_static("content-type"),
+                "application/scim+json",
+            ),
+            (HeaderName::from_static("cache-control"), "no-store"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+fn scim_unauthorized() -> Response {
+    scim_body(
+        StatusCode::UNAUTHORIZED,
+        &serde_json::json!({
+            "schemas": [SCIM_ERROR_SCHEMA],
+            "detail": "The bearer does not match.",
+            "status": 401,
+        }),
+    )
+}
+
+/// The bearer matches the configured one only against tokens.hash on both sides, in constant time.
+fn scim_bearer_ok(app: &boma_app::App, headers: &axum::http::HeaderMap) -> bool {
+    let Some(expected) = app.services.scim_token.as_ref() else {
+        return false;
+    };
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let Some(provided) = bearer else {
+        return false;
+    };
+    let tokens = app.services.tokens.as_ref();
+    let Ok(provided) = tokens.hash(provided) else {
+        return false;
+    };
+    let Ok(expected) = tokens.hash(secrecy::ExposeSecret::expose_secret(expected)) else {
+        return false;
+    };
+    provided.len() == expected.len()
+        && provided
+            .iter()
+            .zip(expected.iter())
+            .fold(0_u8, |accumulator, (left, right)| {
+                accumulator | (left ^ right)
+            })
+            == 0
+}
+
+/// The one SCIM shape this deployment supports, stated plainly.
+fn scim_service_provider_json() -> Response {
+    scim_body(
+        StatusCode::OK,
+        &serde_json::json!({
+            "schemas": [SCIM_SP_SCHEMA],
+            "patch": { "supported": true },
+            "bulk": { "supported": false },
+            "filter": { "supported": true, "maxResults": 200 },
+            "changePassword": { "supported": false },
+            "sort": { "supported": false },
+            "etag": { "supported": false },
+            "authenticationSchemes": [
+                {
+                    "type": "oauthbearertoken",
+                    "name": "Bearer token",
+                    "description": "The deployment's SCIM token, from the configuration.",
+                    "primary": true,
+                }
+            ],
+        }),
+    )
+}
+
+fn scim_user_json(entry: &boma_app::usecases::ScimAccountOutcome) -> serde_json::Value {
+    scim_person_json(&entry.user, entry.active)
+}
+
+fn scim_list_view(entry: &boma_app::usecases::ScimUserEntry) -> serde_json::Value {
+    scim_person_json(&entry.user, entry.active)
+}
+
+fn scim_person_json(user: &boma_domain::User, active: bool) -> serde_json::Value {
+    serde_json::json!({
+        "schemas": [SCIM_USER_SCHEMA],
+        "id": user.id.as_str(),
+        "userName": user.email.as_str(),
+        "displayName": user.name,
+        "active": active,
+        "meta": { "resourceType": "User" },
+    })
+}
+
+/// The visible shell of one user for the single-user routes.
+fn scim_patch_view(entry: &boma_app::usecases::ScimPatchOutcome) -> serde_json::Value {
+    scim_person_json(&entry.user, entry.active)
+}
+
+/// Applies the pre-handler decisions every SCIM route needs: role of the deployment (flag shape),
+/// the bounded counter and the bearer. A shared function, so the sequence cannot drift.
+async fn scim_guard(
+    state: &AppState,
+    peer: ClientAddr,
+    headers: &axum::http::HeaderMap,
+) -> Option<Response> {
+    if state.app().services.scim_token.is_none() {
+        return Some(scim_not_found());
+    }
+    let client_ip =
+        crate::client::resolve_client_ip(peer.0, headers, state.http().trusted_proxies());
+    let key = format!("scim:{client_ip}");
+    match usecases::hit_rate_limit(state.app(), &key, 60).await {
+        Ok(decision) if decision.count > SCIM_PER_IP_PER_MINUTE => Some(scim_body(
+            StatusCode::TOO_MANY_REQUESTS,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "Too many requests.",
+                "status": 429,
+            }),
+        )),
+        Ok(_) => {
+            if scim_bearer_ok(state.app(), headers) {
+                None
+            } else {
+                Some(scim_unauthorized())
+            }
+        }
+        Err(_error) => Some(ApiError::unavailable().into_response()),
+    }
+}
+
+/// `GET /api/auth/scim/v2/ServiceProviderConfig` (REQ-045).
+pub async fn scim_service_provider_config(State(state): State<AppState>) -> Response {
+    if state.app().services.scim_token.is_none() {
+        return scim_not_found();
+    }
+    scim_service_provider_json()
+}
+
+/// `GET /api/auth/scim/v2/Users` — list, optionally filtered (REQ-045).
+pub async fn scim_list(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+) -> Response {
+    if let Some(refusal) = scim_guard(&state, ClientAddr(peer), &headers).await {
+        return refusal;
+    }
+    let mut filter = None;
+    let mut start_index = 1_u64;
+    let mut count = 100_u64;
+    if let Some(query) = request.uri().query() {
+        for part in query.split('&') {
+            let Some((key, value)) = part.split_once('=') else {
+                continue;
+            };
+            match key {
+                "filter" => filter = Some(decode_percent(value)),
+                "startIndex" => {
+                    start_index = value.parse().unwrap_or(1).max(1);
+                }
+                "count" => {
+                    count = value.parse().unwrap_or(100).clamp(1, 200);
+                }
+                _ => {}
+            }
+        }
+    }
+    match usecases::scim_list(state.app(), filter.as_deref(), start_index, count).await {
+        Ok(entries) => {
+            let resources: Vec<serde_json::Value> = entries.iter().map(scim_list_view).collect();
+            let total = u64::try_from(resources.len()).unwrap_or(u64::MAX);
+            scim_body(
+                StatusCode::OK,
+                &serde_json::json!({
+                    "schemas": [SCIM_LIST_SCHEMA],
+                    "startIndex": start_index,
+                    "itemsPerPage": total,
+                    "totalResults": total,
+                    "Resources": resources,
+                }),
+            )
+        }
+        Err(_error) => ApiError::unavailable().into_response(),
+    }
+}
+
+/// `POST /api/auth/scim/v2/Users` — provision one account (REQ-045).
+pub async fn scim_create(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Some(refusal) = scim_guard(&state, ClientAddr(peer), &headers).await {
+        return refusal;
+    }
+    if body.len() > SCIM_MAX_BODY_BYTES {
+        return scim_body(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "The body is too large for a directory record.",
+                "status": 413,
+            }),
+        );
+    }
+    let required = "The body needs \"userName\" (an email) and an optional \"password\".";
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return scim_body(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": required,
+                "status": 400,
+            }),
+        );
+    };
+    let Some(user_name) = value
+        .get("userName")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return scim_body(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": required,
+                "status": 400,
+            }),
+        );
+    };
+    let display_name = value
+        .get("displayName")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let password = value.get("password").and_then(serde_json::Value::as_str);
+    let password = match password {
+        Some(password) if password.chars().count() >= 10 => Some(password),
+        Some(_) => {
+            return scim_body(
+                StatusCode::BAD_REQUEST,
+                &serde_json::json!({
+                    "schemas": [SCIM_ERROR_SCHEMA],
+                    "detail": "The password is too short; the floor is ten characters.",
+                    "status": 400,
+                }),
+            );
+        }
+        None => None,
+    };
+    match usecases::scim_provision(state.app(), user_name, &display_name, password).await {
+        Ok(outcome) => scim_body(StatusCode::CREATED, &scim_user_json(&outcome)),
+        Err(AppError::Conflict) => scim_body(
+            StatusCode::CONFLICT,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "That email is already registered.",
+                "status": 409,
+            }),
+        ),
+        Err(_error) => ApiError::unavailable().into_response(),
+    }
+}
+
+/// `GET /api/auth/scim/v2/Users/{id}` (REQ-045).
+pub async fn scim_get(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(refusal) = scim_guard(&state, ClientAddr(peer), &headers).await {
+        return refusal;
+    }
+    match usecases::scim_find(state.app(), &id).await {
+        Ok(Some(user)) => scim_body(
+            StatusCode::OK,
+            &scim_person_json(&user, user.deactivated_at.is_none()),
+        ),
+        Ok(None) => scim_body(
+            StatusCode::NOT_FOUND,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "No such user.",
+                "status": 404,
+            }),
+        ),
+        Err(_error) => ApiError::unavailable().into_response(),
+    }
+}
+
+/// `PATCH /api/auth/scim/v2/Users/{id}` — activate or deactivate one account (REQ-045).
+pub async fn scim_patch(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    if let Some(refusal) = scim_guard(&state, ClientAddr(peer), &headers).await {
+        return refusal;
+    }
+    if body.len() > SCIM_MAX_BODY_BYTES {
+        return scim_body(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "The body is too large for a patch.",
+                "status": 413,
+            }),
+        );
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return scim_body(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "The body is not a PatchOp.",
+                "status": 400,
+            }),
+        );
+    };
+    let Some(operations) = value
+        .get("Operations")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return scim_body(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "The body needs an Operations array.",
+                "status": 400,
+            }),
+        );
+    };
+    // A directory's PATCH carries one useful toggle; we accept (and apply) all of them.
+    let mut active: Option<bool> = None;
+    for op in operations {
+        let path = op
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if path.eq_ignore_ascii_case("active") {
+            if let Some(value) = op.get("value").and_then(serde_json::Value::as_bool) {
+                active = Some(value);
+            }
+            continue;
+        }
+        if let Some(object) = op.get("value").and_then(serde_json::Value::as_object)
+            && let Some(value) = object.get("active").and_then(serde_json::Value::as_bool)
+        {
+            active = Some(value);
+        }
+    }
+    let Some(active) = active else {
+        return scim_body(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "The body needs an active toggle.",
+                "status": 400,
+            }),
+        );
+    };
+    match usecases::scim_set_active(state.app(), &id, active).await {
+        Ok(outcome) => scim_body(StatusCode::OK, &scim_patch_view(&outcome)),
+        Err(AppError::NotFound) => scim_body(
+            StatusCode::NOT_FOUND,
+            &serde_json::json!({
+                "schemas": [SCIM_ERROR_SCHEMA],
+                "detail": "No such user.",
+                "status": 404,
+            }),
+        ),
+        Err(_error) => ApiError::unavailable().into_response(),
+    }
+}
+
+/// Percent-decoding for the SCIM filter string.
+fn decode_percent(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = &bytes[index + 1..=index + 2];
+                let Ok(text) = std::str::from_utf8(hex) else {
+                    index += 1;
+                    continue;
+                };
+                let Ok(value) = u8::from_str_radix(text, 16) else {
+                    index += 1;
+                    continue;
+                };
+                out.push(value);
+                index += 3;
+            }
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{host_of, summarize_violation};

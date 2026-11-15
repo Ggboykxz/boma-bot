@@ -315,6 +315,8 @@ pub struct TestAppBuilder {
     billing_webhook_secret: Option<String>,
     /// The scripted model credential probe (REQ-052).
     model_transport: Option<Arc<crate::ScriptedModelTransport>>,
+    /// The SCIM token the tests sign with (REQ-045).
+    scim_token: Option<String>,
 }
 
 impl Default for TestAppBuilder {
@@ -341,6 +343,7 @@ impl Default for TestAppBuilder {
             billing_provider: None,
             billing_webhook_secret: None,
             model_transport: None,
+            scim_token: None,
         }
     }
 }
@@ -491,6 +494,13 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with the SCIM sync surface enabled (REQ-045).
+    #[must_use]
+    pub fn scim(mut self, token: &str) -> Self {
+        self.scim_token = Some(token.to_owned());
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -619,7 +629,8 @@ impl TestAppBuilder {
             self.billing_provider
                 .map(|provider| provider as Arc<dyn boma_app::ports::BillingProvider>),
             self.billing_webhook_secret.map(secrecy::SecretString::from),
-        );
+        )
+        .with_scim_option(self.scim_token.clone());
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
         } else if self.computers {

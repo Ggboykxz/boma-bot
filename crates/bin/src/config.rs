@@ -131,6 +131,8 @@ pub struct Config {
     pub public_base_url: String,
     /// The billing settings (REQ-051).
     pub billing: BillingSettings,
+    /// The SCIM sync settings (REQ-045).
+    pub scim: ScimSettings,
 }
 
 /// The billing settings of this deployment (REQ-051).
@@ -173,6 +175,16 @@ impl std::fmt::Debug for BillingSettings {
             )
             .finish()
     }
+}
+
+/// The SCIM sync settings (REQ-045): `BOMA_SCIM=true` plus one bearer an enterprise directory
+/// presents on every SCIM call. Both or none: a half-configured surface answers 404 everywhere
+/// while loudly asking for the second setting at boot.
+#[derive(Debug, Clone)]
+pub struct ScimSettings {
+    /// The at-least-16-character bearer (`BOMA_SCIM_TOKEN`), unknown to the app itself.
+    /// `None` means the SCIM surface answers 404 for every request, exactly as if it were absent.
+    pub token: Option<String>,
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -321,6 +333,7 @@ impl Config {
             slack: parse_slack(&env)?,
             public_base_url: parse_public_base_url(&env)?,
             billing: parse_billing(&env)?,
+            scim: parse_scim(&env)?,
         })
     }
 }
@@ -555,6 +568,29 @@ fn parse_billing(env: &BTreeMap<String, String>) -> Result<BillingSettings, Conf
         }
         _ => Err(ConfigError::Billing(
             "BOMA_BILLING_PROVIDER, BOMA_BILLING_STRIPE_SECRET, BOMA_BILLING_STRIPE_PRICE_PRO and BOMA_BILLING_WEBHOOK_SECRET must be set together".to_owned(),
+        )),
+    }
+}
+
+/// Parses the SCIM settings (REQ-045): the flag and its token come together or not at all.
+fn parse_scim(env: &BTreeMap<String, String>) -> Result<ScimSettings, ConfigError> {
+    let enabled = optional_parsed(env, "BOMA_SCIM", false)?;
+    let token = optional(env, "BOMA_SCIM_TOKEN");
+    match (enabled, token) {
+        (false, None) => Ok(ScimSettings { token: None }),
+        (true, Some(value)) => {
+            if value.len() < 16 {
+                return Err(ConfigError::Billing(
+                    "BOMA_SCIM_TOKEN must be at least 16 characters".to_owned(),
+                ));
+            }
+            Ok(ScimSettings { token: Some(value) })
+        }
+        (true, None) => Err(ConfigError::Billing(
+            "BOMA_SCIM_TOKEN must be set when BOMA_SCIM=true".to_owned(),
+        )),
+        (false, Some(_)) => Err(ConfigError::Billing(
+            "BOMA_SCIM_TOKEN without BOMA_SCIM=true does nothing; set both".to_owned(),
         )),
     }
 }

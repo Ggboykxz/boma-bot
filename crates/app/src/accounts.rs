@@ -138,6 +138,10 @@ impl Accounts {
             let _ = self.record_sign_in_failure(now.clone()).await;
             return Err(AppError::InvalidCredentials);
         };
+        if user.deactivated_at.is_some() {
+            let _ = self.record_sign_in_failure(now).await;
+            return Err(AppError::InvalidCredentials);
+        }
         if !self
             .app
             .services

@@ -6,9 +6,9 @@
 
 use boma_app::{
     AppError,
-    ports::{Account, AccountStore, NewAccount},
+    ports::{Account, AccountStore, NewAccount, NewUser},
 };
-use boma_domain::{Space, User};
+use boma_domain::{Space, User, UserId};
 use sqlx::PgPool;
 
 use crate::tenant;
@@ -122,6 +122,123 @@ impl AccountStore for PostgresAccountStore {
                 })
             })
         })
+        .await
+    }
+
+    async fn create_person(&self, user: NewUser) -> Result<User, AppError> {
+        tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::ScimDirectorySync,
+            |conn| {
+                Box::pin(async move {
+                    let inserted = sqlx::query(
+                        "INSERT INTO users (id, email, name, email_verified, locale, password_hash, created_at)
+                         VALUES ($1, $2, $3, false, $4, $5, $6::timestamptz)",
+                    )
+                    .bind(user.id.as_str())
+                    .bind(user.email.as_str())
+                    .bind(&user.name)
+                    .bind(&user.locale)
+                    .bind(&user.password_hash)
+                    .bind(&user.created_at)
+                    .execute(&mut *conn)
+                    .await;
+                    match inserted {
+                        Ok(_) => Ok(User {
+                            id: user.id,
+                            email: user.email,
+                            name: user.name,
+                            email_verified: false,
+                            locale: user.locale,
+                            deactivated_at: None,
+                        }),
+                        Err(error) if tenant::is_unique_violation(&error) => {
+                            Err(AppError::Conflict)
+                        }
+                        Err(error) => Err(tenant::unavailable(error)),
+                    }
+                })
+            },
+        )
+        .await
+    }
+
+    async fn scim_deprovision(&self, user_id: &UserId, now: &str) -> Result<(), AppError> {
+        let user_id = user_id.as_str().to_owned();
+        let now = now.to_owned();
+        tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::ScimDirectorySync,
+            |conn| {
+                Box::pin(async move {
+                    for statement in [
+                        "DELETE FROM sessions WHERE user_id = $1",
+                        "DELETE FROM space_members WHERE user_id = $1",
+                        "DELETE FROM organization_members WHERE user_id = $1",
+                    ] {
+                        sqlx::query(statement)
+                            .bind(&user_id)
+                            .execute(&mut *conn)
+                            .await
+                            .map_err(tenant::unavailable)?;
+                    }
+                    sqlx::query("UPDATE users SET deactivated_at = $2::timestamptz WHERE id = $1")
+                        .bind(&user_id)
+                        .bind(&now)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(tenant::unavailable)?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn scim_set_deactivated(
+        &self,
+        user_id: &UserId,
+        deactivated_at: Option<&str>,
+        _now: &str,
+    ) -> Result<(), AppError> {
+        let user_id = user_id.as_str().to_owned();
+        let deactivated_at = deactivated_at.map(str::to_owned);
+        tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::ScimDirectorySync,
+            |conn| {
+                Box::pin(async move {
+                    if deactivated_at.is_some() {
+                        // The session dies at the exact moment the account closes.
+                        sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+                            .bind(&user_id)
+                            .execute(&mut *conn)
+                            .await
+                            .map_err(tenant::unavailable)?;
+                    }
+                    match deactivated_at {
+                        Some(value) => {
+                            sqlx::query(
+                                "UPDATE users SET deactivated_at = $2::timestamptz WHERE id = $1",
+                            )
+                            .bind(&user_id)
+                            .bind(&value)
+                            .execute(&mut *conn)
+                            .await
+                            .map_err(tenant::unavailable)?;
+                        }
+                        None => {
+                            sqlx::query("UPDATE users SET deactivated_at = NULL WHERE id = $1")
+                                .bind(&user_id)
+                                .execute(&mut *conn)
+                                .await
+                                .map_err(tenant::unavailable)?;
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        )
         .await
     }
 }

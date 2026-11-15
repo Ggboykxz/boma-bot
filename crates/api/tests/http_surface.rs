@@ -19,6 +19,7 @@ use axum::{
 };
 use boma_api::{AppState, HttpConfig, router};
 use boma_app::{Capabilities, Readiness, ReadinessCheck};
+use boma_testkit::TestApp;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -612,4 +613,209 @@ async fn req_045_a_failed_sign_in_writes_one_security_event() {
         let text = format!("{failure:?}");
         assert!(!text.contains("nobody"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// M9 — directory sync (REQ-045): SCIM 2.0 /Users through the real router
+// ---------------------------------------------------------------------------
+
+const SCIM_TOKEN: &str = "scim-token-not-a-real-secret-0123456789abcdef";
+
+fn scim_world(scim: bool) -> (AppState, boma_testkit::TestApp) {
+    let mut builder = TestApp::builder();
+    if scim {
+        builder = builder.scim(SCIM_TOKEN);
+    }
+    let test_app = builder.build();
+    let state = AppState::new(
+        Readiness::new(vec![Arc::new(Probe { healthy: true })]),
+        capabilities(),
+        auth_capabilities(),
+        http_config(),
+        test_app.app().clone(),
+    );
+    (state, test_app)
+}
+
+async fn post_scim(state: AppState, path: &str, bearer: &str, body: &str) -> Response {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/scim+json")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body(Body::from(body.to_owned()))
+        .expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+async fn get_scim(state: AppState, path: &str, bearer: &str) -> Response {
+    let mut builder = Request::builder().method("GET").uri(path);
+    if !bearer.is_empty() {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+    }
+    let request = builder.body(Body::empty()).expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+async fn patch_scim(state: AppState, path: &str, bearer: &str, body: &str) -> Response {
+    let request = Request::builder()
+        .method("PATCH")
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/scim+json")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body(Body::from(body.to_owned()))
+        .expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+#[tokio::test]
+async fn req_045_the_scim_surface_is_absent_without_the_flag_and_needs_one_bearer() {
+    let (state, _) = scim_world(false);
+    let response = get_scim(
+        state.clone(),
+        "/api/auth/scim/v2/ServiceProviderConfig",
+        SCIM_TOKEN,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let (state, test_app) = scim_world(true);
+    let _ = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await;
+    let response = post_scim(
+        state,
+        "/api/auth/scim/v2/Users",
+        "not-the-right-token",
+        r#"{"userName":"n@example.com"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn req_045_a_directory_provisions_a_disabled_user_served_by_list_and_get() {
+    let (state, test_app) = scim_world(true);
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let _ = owner;
+    let created = post_scim(
+        state.clone(),
+        "/api/auth/scim/v2/Users",
+        SCIM_TOKEN,
+        r#"{"userName":"scim@example.com","displayName":"Scim Person"}"#,
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json(created).await;
+    assert_eq!(body["active"], false, "born disabled without a password");
+    assert_eq!(body["userName"], "scim@example.com");
+    let id = body["id"].as_str().expect("an id").to_owned();
+
+    // The born-disabled account can never sign in.
+    let signed_in = boma_app::usecases::sign_in(
+        test_app.app(),
+        0,
+        &boma_app::usecases::SignIn {
+            email: "scim@example.com".to_owned(),
+            password: "anything-at-all-1234".to_owned(),
+        },
+    )
+    .await;
+    assert!(signed_in.is_err());
+
+    // A directory listing carries it back.
+    let response = get_scim(state.clone(), "/api/auth/scim/v2/Users", SCIM_TOKEN).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let resources = body["Resources"].as_array().expect("Resources");
+    assert_eq!(resources.len(), 2, "owner and scim user");
+    let scim_entry = resources
+        .iter()
+        .find(|row| row["userName"] == "scim@example.com")
+        .expect("the scim user is listed");
+    assert_eq!(scim_entry["active"], false);
+
+    // One user by id.
+    let response = get_scim(state, &format!("/api/auth/scim/v2/Users/{id}"), SCIM_TOKEN).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["id"], id);
+}
+
+#[tokio::test]
+async fn req_045_a_directory_provisions_an_enabled_user_and_deprovisions_it() {
+    let (state, test_app) = scim_world(true);
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let _ = owner;
+    let created = post_scim(
+        state.clone(),
+        "/api/auth/scim/v2/Users",
+        SCIM_TOKEN,
+        r#"{"userName":"active@example.com","displayName":"Active Person","password":"scim-only-secret-0123456789"}"#,
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json(created).await;
+    assert_eq!(body["active"], true);
+    let id = body["id"].as_str().expect("an id").to_owned();
+
+    // The password grants a session, by the normal path.
+    let signed_in = boma_app::usecases::sign_in(
+        test_app.app(),
+        0,
+        &boma_app::usecases::SignIn {
+            email: "active@example.com".to_owned(),
+            password: "scim-only-secret-0123456789".to_owned(),
+        },
+    )
+    .await;
+    assert!(signed_in.is_ok(), "active accounts sign in");
+
+    // Deprovision it: the body disables active=false and the test proves the door is shut afterward.
+    let deactivated = patch_scim(
+        state,
+        &format!("/api/auth/scim/v2/Users/{id}"),
+        SCIM_TOKEN,
+        r#"{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":false}]}"#,
+    )
+    .await;
+    assert_eq!(deactivated.status(), StatusCode::OK);
+    let body = json(deactivated).await;
+    assert_eq!(body["active"], false);
+
+    // And signed-in state is gone: the same credentials fail.
+    let signed_in = boma_app::usecases::sign_in(
+        test_app.app(),
+        0,
+        &boma_app::usecases::SignIn {
+            email: "active@example.com".to_owned(),
+            password: "scim-only-secret-0123456789".to_owned(),
+        },
+    )
+    .await;
+    assert!(signed_in.is_err(), "deprovisioned accounts cannot sign in");
+
+    // The audit row for the deprovision exists.
+    let events = test_app.database().audit().events();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == "scim.deprovisioned"),
+        "a scim.deprovisioned event is recorded"
+    );
 }
