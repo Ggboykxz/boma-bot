@@ -81,6 +81,8 @@ pub struct Stores {
     pub admin: Arc<dyn crate::ports::AdminStore>,
     /// The password recovery tokens (REQ-040).
     pub password_resets: Arc<dyn crate::ports::PasswordResetStore>,
+    /// The group chats (REQ-010).
+    pub groups: Arc<dyn crate::ports::GroupStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -150,6 +152,7 @@ impl Stores {
         account_export: Arc<dyn crate::ports::AccountExportStore>,
         admin: Arc<dyn crate::ports::AdminStore>,
         password_resets: Arc<dyn crate::ports::PasswordResetStore>,
+        groups: Arc<dyn crate::ports::GroupStore>,
     ) -> Self {
         Self {
             accounts,
@@ -181,6 +184,7 @@ impl Stores {
             account_export,
             admin,
             password_resets,
+            groups,
             tickets,
             effects,
             tools,

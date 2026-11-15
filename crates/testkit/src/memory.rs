@@ -30,11 +30,11 @@ use boma_app::{
     AppError,
     ports::{
         Account, AccountStore, ActivityPage, BotStore, CardStore, Clock, EffectStore,
-        EventPublisher, EventStore, Invitation, InvitationStore, MemoryStore, MessageStore,
-        NewAccount, NewBot, NewEffect, NewEvent, NewInvitation, NewMemoryDocument, NewMessage,
-        NewRun, NewSession, NewSpace, NewThread, ReactionAction, ReactionStore, ReadStateStore,
-        RosterStore, RoutineOutcome, RoutineStore, RunActivity, RunStore, SessionStore, SpaceStore,
-        StoredMessage, ThreadStore, ToolStore, UserStore,
+        EventPublisher, EventStore, GroupStore, Invitation, InvitationStore, MemoryStore,
+        MessageStore, NewAccount, NewBot, NewEffect, NewEvent, NewInvitation, NewMemoryDocument,
+        NewMessage, NewRun, NewSession, NewSpace, NewThread, ReactionAction, ReactionStore,
+        ReadStateStore, RosterStore, RoutineOutcome, RoutineStore, RunActivity, RunStore,
+        SessionStore, SpaceStore, StoredMessage, ThreadStore, ToolStore, UserStore,
     },
 };
 use boma_domain::DomainError;
@@ -490,6 +490,151 @@ struct SessionRow {
     token_hash: Vec<u8>,
 }
 
+/// The groups (REQ-010).
+#[derive(Debug, Clone)]
+struct GroupRow {
+    id: boma_domain::GroupId,
+    space_id: boma_domain::SpaceId,
+    name: String,
+    thread_id: boma_domain::ThreadId,
+    created_at: String,
+    bot_ids: Vec<boma_domain::BotId>,
+}
+
+/// A membership of one group; `member_kind` decides what `member_id` names (REQ-010).
+/// An opaque string because the target table differs per kind.
+#[derive(Debug, Clone)]
+enum GroupMemberKind {
+    Person,
+    Bot,
+}
+
+#[derive(Debug, Clone)]
+struct GroupMembershipRow {
+    group_id: boma_domain::GroupId,
+    member_kind: GroupMemberKind,
+    member_id: String,
+}
+
+/// The in-memory group store (REQ-010).
+#[derive(Debug, Clone)]
+pub struct MemoryGroupStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryGroupStore {
+    /// Builds the store on a database.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl GroupStore for MemoryGroupStore {
+    async fn create(
+        &self,
+        group: boma_app::ports::NewGroup,
+    ) -> Result<boma_domain::Group, AppError> {
+        let mut state = write(&self.state);
+        let owner_bot = group
+            .bot_ids
+            .first()
+            .cloned()
+            .ok_or(AppError::Unavailable)?;
+        state.threads.push(ThreadRow {
+            thread: Thread {
+                id: group.thread_id.clone(),
+                space_id: group.space_id.clone(),
+                bot_id: owner_bot.clone(),
+                user_id: group.owner.clone(),
+                external: None,
+                next_message_seq: 0,
+                next_event_seq: 0,
+                created_at: group.created_at.clone(),
+            },
+        });
+        state.groups.push(GroupRow {
+            id: group.id.clone(),
+            space_id: group.space_id.clone(),
+            name: group.name.clone(),
+            thread_id: group.thread_id.clone(),
+            created_at: group.created_at.clone(),
+            bot_ids: group.bot_ids.clone(),
+        });
+        for bot_id in &group.bot_ids {
+            state.group_memberships.push(GroupMembershipRow {
+                group_id: group.id.clone(),
+                member_kind: GroupMemberKind::Bot,
+                member_id: bot_id.as_str().to_owned(),
+            });
+        }
+        state.group_memberships.push(GroupMembershipRow {
+            group_id: group.id.clone(),
+            member_kind: GroupMemberKind::Person,
+            member_id: group.owner.as_str().to_owned(),
+        });
+        Ok(boma_domain::Group {
+            id: group.id,
+            space_id: group.space_id,
+            name: group.name,
+            thread_id: group.thread_id,
+            created_at: group.created_at,
+            bot_ids: group.bot_ids,
+        })
+    }
+
+    async fn find(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &boma_domain::GroupId,
+    ) -> Result<Option<boma_domain::Group>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .groups
+            .iter()
+            .find(|row| &row.id == id && Some(&row.space_id) == context.space_id())
+            .map(|row| boma_domain::Group {
+                id: row.id.clone(),
+                space_id: row.space_id.clone(),
+                name: row.name.clone(),
+                thread_id: row.thread_id.clone(),
+                created_at: row.created_at.clone(),
+                bot_ids: row.bot_ids.clone(),
+            }))
+    }
+
+    async fn list_for_member(
+        &self,
+        context: &boma_domain::TenantContext,
+        user_id: &boma_domain::UserId,
+    ) -> Result<Vec<boma_domain::Group>, AppError> {
+        let state = read(&self.state);
+        let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let mut out = Vec::new();
+        for row in state.groups.iter().filter(|row| row.space_id == space_id) {
+            let member = state.group_memberships.iter().any(|membership| {
+                membership.group_id == row.id
+                    && matches!(membership.member_kind, GroupMemberKind::Person)
+                    && membership.member_id == user_id.as_str()
+            });
+            if member {
+                out.push(boma_domain::Group {
+                    id: row.id.clone(),
+                    space_id: row.space_id.clone(),
+                    name: row.name.clone(),
+                    thread_id: row.thread_id.clone(),
+                    created_at: row.created_at.clone(),
+                    bot_ids: row.bot_ids.clone(),
+                });
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// An invitation, with the hash of its token.
 #[derive(Debug, Clone)]
 struct InvitationRow {
@@ -530,6 +675,10 @@ struct State {
     sessions: Vec<SessionRow>,
     /// The invitations, with the hash of their token.
     invitations: Vec<InvitationRow>,
+    /// The groups (REQ-010).
+    groups: Vec<GroupRow>,
+    /// The group memberships (REQ-010).
+    group_memberships: Vec<GroupMembershipRow>,
     /// The cards, with the space they belong to.
     cards: Vec<CardRow>,
     /// The tool calls waiting on an approval (REQ-017).

@@ -44,9 +44,9 @@
    "req": "REQ-044"
   },
   "group-create": {
-   "status": "pending",
+   "status": "implemented",
    "req": "REQ-010",
-   "reason": "M11 - group chats and the shared thread arrive with the groups milestone; M2 has no groups"
+   "reason": null
   },
   "health": {
    "status": "implemented",

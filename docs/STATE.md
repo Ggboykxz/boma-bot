@@ -62,11 +62,12 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   `/app/board` flag-gated, `/p/<token>`, admin access/plugins, activity, shared not-found screen,
   computer panel), all 7 UI goldens are implemented with zero pending, axe zero critical/serious
   everywhere incl. RTL, Electron shell packs in CI and serves the static export at the origin.
-  Caveats needing M11: `/app/g/:groupId` (group chats) and `/app/x/:linkId`
-  (a pre-M10 navigation row whose semantics were never defined; the shared-page flow settled at
-  `/p/<token>`) — stale rows on the owner's side; see the report to the owner.
-- M11 — Harden and release: regression across the workspace, all defects closed, budgets measured,
-  ADRs complete, upgrade guide, signed release notes.
+- M11 — Harden and release: REQ-010 (group chats, split into M11.1 politeness —
+  `groups.create`, the shared thread + membership, the `group-create` API golden replayed
+  byte for byte — then M11.2 mention routing and the `/app/g/:groupId` screen), regression
+  across the workspace, all defects closed, budgets measured, ADRs complete, upgrade guide,
+  signed release notes. M10 is not closed until M11 releases, so the REQ-010 row in
+  TRACEABILITY is `M11.1` for now and the rest lands with M11.2+.
 
 REQ-010 (group chats) and REQ-011 (activity view) arrive with M11 alongside their regression set,
 as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay out, recorded.
@@ -1044,6 +1045,7 @@ Recorded going into the owner report; per-slice DEC-18/DEC-19 follow.
 |---|---|---|---|
 | DEV-01 | `/healthz` and `/readyz` exist as aliases of `/health` and `/ready` | AGENTS.md mandates those names; the spec's contract is `/health` and `/ready` | `crates/api/src/router.rs`; aliases are absent from the OpenAPI document and `tests/contract.rs` asserts that |
 | DEV-02 | `/invite/:token` is `/invite?token=<token>` | a static export cannot pre-render one page per invitation token; the query form works identically in dev and production | `spec/08-ui-ux.md`, `apps/web/app/invite/page.tsx` |
+| DEV-03 | The route row `/app/x/:linkId` ("A saved navigation link") is removed from `spec/08-ui-ux.md` | It is defined nowhere in the spec, in no requirement, and in no code: a leftover row from before the share/open-link design settled at `/p/:slugToken`. Keeping a screen you cannot see is how undocumented screens ship. Its replacement is the in-shell page viewer (REQ-039) reachable from any artifact/page | `spec/08-ui-ux.md` §8.1 |
 
 Any other externally visible difference would be a DEVIATION needing owner approval; none is known.
 

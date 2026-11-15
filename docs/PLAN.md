@@ -151,7 +151,7 @@ Sizes: S ≤ 1 week, M ≤ 3 weeks, L ≤ 6 weeks of single-maintainer work.
 | M8 | Money and models | REQ-018, 051, 052 | Spending caps enforce before paid tools, purchase card, credits ledger, model catalogue and BYOK | M |
 | M9 | Operate | REQ-044, 045, 054, 058 | Export/import/delete, audit JSONL, security events, SCIM, structured logs + metrics, admin screens | M |
 | M10 | UI complete + desktop | REQ-055 (+ every UI golden) | All screens and states from `spec/08-ui-ux.md`, 7 UI goldens, axe zero critical/serious, RTL, Electron shell (owner veto 2026-11-15, spec-REQ-055 wording) | L |
-| M11 | Harden and release | REQ-010, 011, 018, 026… (regression across all) | All 9 defects fixed with tests, budgets measured, ADRs complete, signed release + upgrade guide | M |
+| M11 | Harden and release | REQ-010, 011, 018, 026… (regression across all) | All 9 defects fixed with tests, budgets measured, ADRs complete, signed release + upgrade guide. Broken into bounded slices: **M11.1 groups foundation** (groups + memberships + shared thread, `groups.create`, the `group-create` golden), **M11.2 mention routing** (a message addressed to N bots runs exactly those N; bot-to-bot handoffs return results), **M11.3 the `/app/g/:groupId` screen and the "New group" rail action**, **M11.4 regression + signed release** (release signing identity is the owner's to provide; a release not signed is not a release) | M |
 | — | Deferred | REQ-049 (COULD, voice), REQ-056 (SHOULD, mobile) | Recorded in `docs/STATE.md` with reason; trace_check ORPHAN explained | — |
 
 Every milestone ends with: fmt + clippy clean, tests green, the REQ ids in test names, and a STATE.md

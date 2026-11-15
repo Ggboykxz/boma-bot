@@ -4500,3 +4500,94 @@ async fn req_042_the_public_preview_answers_only_with_the_names_and_the_expiry()
     let body = json(response).await;
     assert_eq!(body["error"], serde_json::json!("Not found."));
 }
+
+// ---------------------------------------------------------------------------
+// M11.1 — groups (REQ-010)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_010_creating_a_group_over_rpc_makes_the_shared_room() {
+    let test_app = TestApp::builder()
+        // Scripted ids in mint order across the whole test: user, org, two spaces,
+        // two bots and their threads, then the group's thread and the group's id.
+        .ids(vec![
+            "usr_golden".to_owned(),
+            "org_golden".to_owned(),
+            "spc_seed".to_owned(),
+            "spc_golden".to_owned(),
+            "bot_a".to_owned(),
+            "thr_a".to_owned(),
+            "bot_b".to_owned(),
+            "thr_b".to_owned(),
+            "ses_golden".to_owned(),
+            "thr_group_golden".to_owned(),
+            "grp_golden".to_owned(),
+        ])
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+    let _ = &space_id;
+    let (bot_a, _) = test_app
+        .seed_bot(&space_id, &owner, "Analyst")
+        .await
+        .expect("the bot exists");
+    let _ = &bot_a;
+    let (bot_b, _) = test_app
+        .seed_bot(&space_id, &owner, "Writer")
+        .await
+        .expect("the bot exists");
+    let _ = &bot_b;
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let response = post(
+        state(&test_app),
+        "/rpc/groups/create",
+        Some(&caller),
+        serde_json::json!({
+            "name": "Triage",
+            "botIds": [bot_a.as_str(), bot_b.as_str()],
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["id"], serde_json::json!("grp_golden"));
+    assert_eq!(body["name"], serde_json::json!("Triage"));
+    assert_eq!(body["threadId"], serde_json::json!("thr_group_golden"));
+    assert_eq!(
+        body["memberBotIds"],
+        serde_json::json!([bot_a.as_str(), bot_b.as_str()]),
+    );
+}
+
+#[tokio::test]
+async fn req_010_creating_a_group_without_a_session_is_refused() {
+    let test_app = TestApp::builder().build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let _ = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+
+    let response = post(
+        state(&test_app),
+        "/rpc/groups/create",
+        None,
+        serde_json::json!({"name": "Triage", "botIds": ["bot_a"]}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

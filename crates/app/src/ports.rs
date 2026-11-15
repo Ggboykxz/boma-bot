@@ -14,9 +14,9 @@
 
 use async_trait::async_trait;
 use boma_domain::{
-    Bot, Card, CardId, CardKind, Email, Event, ExternalEffect, Message, MessagePage, Reaction, Run,
-    RunId, RunStatus, Session, Space, SpaceId, SpaceRole, TenantContext, Thread, ThreadId,
-    ToolSpec, User, UserId,
+    Bot, BotId, Card, CardId, CardKind, Email, Event, ExternalEffect, Group, Message, MessagePage,
+    Reaction, Run, RunId, RunStatus, Session, Space, SpaceId, SpaceRole, TenantContext, Thread,
+    ThreadId, ToolSpec, User, UserId,
 };
 
 use crate::error::AppError;
@@ -463,6 +463,58 @@ pub trait PasswordResetStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn revoke_all_for_user(&self, user_id: &UserId, now: &str) -> Result<u64, AppError>;
+}
+
+/// What goes into `groups.create` (REQ-010).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewGroup {
+    /// The group's id, minted by the caller.
+    pub id: boma_domain::GroupId,
+    /// The tenant the group lives in.
+    pub space_id: SpaceId,
+    /// The name people see.
+    pub name: String,
+    /// The member who created the group (joined as a person member).
+    pub owner: UserId,
+    /// The bots in the group, in creation order; the first owns the shared thread's bot handle.
+    pub bot_ids: Vec<BotId>,
+    /// The one shared thread, minted together with the group.
+    pub thread_id: ThreadId,
+    /// When it was created.
+    pub created_at: String,
+}
+
+/// Groups, their memberships and their shared thread (REQ-010).
+#[async_trait]
+pub trait GroupStore: Send + Sync {
+    /// Creates the shared thread, the group and the memberships, both or neither.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn create(&self, group: NewGroup) -> Result<Group, AppError>;
+
+    /// The group, as its members see it; `None` when the id is unknown or another tenant's.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find(
+        &self,
+        context: &TenantContext,
+        id: &boma_domain::GroupId,
+    ) -> Result<Option<Group>, AppError>;
+
+    /// Every group a person belongs to, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list_for_member(
+        &self,
+        context: &TenantContext,
+        user_id: &UserId,
+    ) -> Result<Vec<Group>, AppError>;
 }
 
 /// Stores and reads spaces.

@@ -8493,3 +8493,104 @@ pub async fn admin_plugins_decide(
         .await;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// M11.1 — groups (REQ-010)
+// ---------------------------------------------------------------------------
+
+use boma_domain::{BotId, ThreadId};
+
+/// The member-facing create-group request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupsCreate {
+    /// The group's name.
+    pub name: String,
+    /// The bots in the room, at most [`Group::MAX_GROUP_BOTS`] implied below.
+    pub bot_ids: Vec<String>,
+}
+
+/// The `groups.create` outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupsCreated {
+    /// The new group's id.
+    pub id: boma_domain::GroupId,
+    /// The name people see.
+    pub name: String,
+    /// The conversation everyone shares.
+    pub thread_id: ThreadId,
+    /// The member bots, in creation order.
+    pub member_bot_ids: Vec<BotId>,
+}
+
+/// Creates the shared room: one thread, the group row, every membership row (REQ-010).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the name or the bot list is refused, [`AppError::NotFound`]
+/// when a bot is unknown or another tenant's, and an error when a store cannot answer.
+pub async fn create_group(
+    app: &App,
+    context: &TenantContext,
+    request: &GroupsCreate,
+) -> Result<GroupsCreated, AppError> {
+    let name = boma_domain::Group::validate_name(&request.name)?;
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    let user_id = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    if request.bot_ids.is_empty() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a group needs at least one bot".to_owned(),
+        )));
+    }
+    if request.bot_ids.len() > boma_domain::MAX_GROUP_BOTS {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            format!(
+                "a group cannot hold more than {} bots",
+                boma_domain::MAX_GROUP_BOTS
+            ),
+        )));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(request.bot_ids.len());
+    let mut bots = Vec::with_capacity(request.bot_ids.len());
+    for raw in &request.bot_ids {
+        let bot_id = BotId::new(raw.trim().to_owned())?;
+        if !seen.insert(bot_id.clone()) {
+            // The same bot named twice is one bot in the room, not a duplicate membership.
+            continue;
+        }
+        let bot = app
+            .stores
+            .bots
+            .find(context, &bot_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if bot.archived_at.is_some() {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "an archived bot cannot be added to a group".to_owned(),
+            )));
+        }
+        bots.push(bot_id);
+    }
+
+    let now = app.services.clock.now();
+    let thread_id = ThreadId::new(app.services.ids.new_id("thr"))?;
+    let group_id = boma_domain::GroupId::new(app.services.ids.new_id("grp"))?;
+    let group = app
+        .stores
+        .groups
+        .create(crate::ports::NewGroup {
+            id: group_id,
+            space_id,
+            name,
+            owner: user_id,
+            bot_ids: bots.clone(),
+            thread_id,
+            created_at: now,
+        })
+        .await?;
+    Ok(GroupsCreated {
+        id: group.id,
+        name: group.name,
+        thread_id: group.thread_id,
+        member_bot_ids: group.bot_ids,
+    })
+}

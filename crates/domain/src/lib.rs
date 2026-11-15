@@ -20,6 +20,7 @@ pub mod computer;
 pub mod connector;
 pub mod error;
 pub mod event;
+pub mod group;
 pub mod ids;
 pub mod mail;
 pub mod mcp;
@@ -64,6 +65,7 @@ pub use connector::{
 };
 pub use error::DomainError;
 pub use event::{Event, EventType};
+pub use group::{Group, GroupId, MAX_GROUP_BOTS, MAX_GROUP_NAME_LENGTH, MemberKind};
 pub use ids::{
     BotId, EventId, InviteId, MessageId, OrganizationId, RoutineId, RunId, SessionId, SpaceId,
     ThreadId, UserId,

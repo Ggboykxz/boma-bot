@@ -90,6 +90,8 @@ pub fn created_ids(fixture: &str) -> Vec<String> {
         "bot-create" => &["bot_golden", "thr_golden"],
         "space-invite" => &["inv_golden"],
         "export-start" => &["exp_golden"],
+        // The world seeds bots with fixed ids; only the group's mint is scripted, in mint order.
+        "group-create" => &["thr_group_golden", "grp_golden"],
         _ => &[],
     };
     ids.iter().map(|id| (*id).to_owned()).collect()
@@ -171,6 +173,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "plugin-submission-invalid"
             | "shared-page-invalid"
             | "export-start"
+            | "group-create"
     );
     if !needs_world {
         return None;
@@ -204,6 +207,18 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         | "plugin-submission"
         | "plugin-submission-invalid"
         | "shared-page-invalid" => {}
+        "group-create" => {
+            let _ = seed_bot(&app, &space_id, &user_id).await;
+            seed_bot_named(
+                &app,
+                &space_id,
+                &user_id,
+                "bot_golden_2",
+                "thr_golden_2",
+                "Analyst Two",
+            )
+            .await;
+        }
         "thread-messages" | "run-list" => {
             let (bot, thread) = seed_bot(&app, &space_id, &user_id).await;
             seed_history(&test_app, &space_id, &bot, &thread, &user_id);
@@ -315,22 +330,33 @@ async fn seed_account_and_session(test_app: &TestApp, app: &App) -> (UserId, Spa
 
 /// Creates the bot and its thread with the ids the fixture names.
 async fn seed_bot(app: &App, space_id: &SpaceId, user_id: &UserId) -> (Bot, Thread) {
+    seed_bot_named(app, space_id, user_id, BOT_ID, THREAD_ID, "Analyst").await
+}
+
+async fn seed_bot_named(
+    app: &App,
+    space_id: &SpaceId,
+    user_id: &UserId,
+    bot_id: &str,
+    thread_id: &str,
+    name: &str,
+) -> (Bot, Thread) {
     app.stores
         .bots
         .create_with_thread(
             NewBot {
-                id: BotId::new(BOT_ID).expect("the seed id is valid"),
+                id: BotId::new(bot_id).expect("the seed id is valid"),
                 space_id: space_id.clone(),
                 user_id: user_id.clone(),
-                name: "Analyst".to_owned(),
+                name: name.to_owned(),
                 description: Some("Reads commits and reports.".to_owned()),
                 color: Some("blue".to_owned()),
                 created_at: SEED_INSTANT.to_owned(),
             },
             NewThread {
-                id: ThreadId::new(THREAD_ID).expect("the seed id is valid"),
+                id: ThreadId::new(thread_id).expect("the seed id is valid"),
                 space_id: space_id.clone(),
-                bot_id: BotId::new(BOT_ID).expect("the seed id is valid"),
+                bot_id: BotId::new(bot_id).expect("the seed id is valid"),
                 user_id: user_id.clone(),
                 created_at: SEED_INSTANT.to_owned(),
             },

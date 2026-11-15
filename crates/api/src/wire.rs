@@ -1847,3 +1847,28 @@ pub struct InvitationPublicPreview {
     /// When the invitation stops being usable.
     pub expires_at: String,
 }
+
+/// The body of `groups.create` (REQ-010).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupsCreateRequest {
+    /// The name people see.
+    pub name: String,
+    /// The bots in the room, at most eight.
+    #[serde(default)]
+    pub bot_ids: Vec<String>,
+}
+
+/// The reply of `groups.create` (REQ-010).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupsCreateReply {
+    /// The new group's id.
+    pub id: String,
+    /// The name people see.
+    pub name: String,
+    /// The conversation everyone shares.
+    pub thread_id: String,
+    /// The member bots, in creation order.
+    pub member_bot_ids: Vec<String>,
+}

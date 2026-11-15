@@ -149,6 +149,32 @@ pub(crate) struct EventRow {
     pub(crate) created_at: String,
 }
 
+/// A row of `groups`.
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct GroupRow {
+    pub(crate) id: String,
+    pub(crate) space_id: String,
+    pub(crate) name: String,
+    pub(crate) thread_id: String,
+    pub(crate) created_at: String,
+}
+
+/// Turns a stored row into the group it describes (REQ-010).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn group(
+    row: GroupRow,
+    bot_ids: Vec<boma_domain::BotId>,
+) -> Result<boma_domain::Group, AppError> {
+    Ok(boma_domain::Group {
+        id: boma_domain::GroupId::new(row.id)?,
+        space_id: SpaceId::new(row.space_id)?,
+        name: row.name,
+        thread_id: ThreadId::new(row.thread_id)?,
+        created_at: row.created_at,
+        bot_ids,
+    })
+}
+
 /// A row of `invitations`.
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct InvitationRow {

@@ -569,6 +569,7 @@ impl TestAppBuilder {
             Arc::new(crate::memory::MemoryAccountExportStore::new(&database)),
             Arc::new(crate::memory::MemoryAdminStore::new(&database)),
             Arc::new(crate::memory::MemoryPasswordResetStore::new(&database)),
+            Arc::new(crate::memory::MemoryGroupStore::new(&database)),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -8148,5 +8149,145 @@ mod invitation_tests {
             .await
             .expect("the store answers");
         assert_eq!(role, Some(boma_domain::SpaceRole::Member));
+    }
+}
+
+#[cfg(test)]
+mod groups_tests {
+    // REQ-010 — the shared room: membership, thread, the door rule.
+
+    use super::TestApp;
+
+    #[tokio::test]
+    async fn req_010_creating_a_group_makes_one_shared_room_for_its_bots() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot_a, _) = test
+            .seed_bot(&space_id, &owner, "Analyst")
+            .await
+            .expect("the bot exists");
+        let (bot_b, _) = test
+            .seed_bot(&space_id, &owner, "Writer")
+            .await
+            .expect("the bot exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        let created = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![bot_a.as_str().to_owned(), bot_b.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+        assert_eq!(created.name, "Triage");
+        assert_eq!(created.member_bot_ids, vec![bot_a.clone(), bot_b.clone()]);
+
+        let found = test
+            .app()
+            .stores
+            .groups
+            .find(&context, &created.id)
+            .await
+            .expect("the store answers")
+            .expect("the group exists");
+        assert_eq!(found.bot_ids, vec![bot_a.clone(), bot_b.clone()]);
+        let groups = test
+            .app()
+            .stores
+            .groups
+            .list_for_member(&context, &owner)
+            .await
+            .expect("the store answers");
+        assert_eq!(groups.len(), 1);
+        let thread = test
+            .app()
+            .stores
+            .threads
+            .find(&context, &created.thread_id)
+            .await
+            .expect("the store answers")
+            .expect("the shared thread exists");
+        assert_eq!(thread.bot_id, bot_a);
+    }
+
+    #[tokio::test]
+    async fn req_010_a_group_with_an_outsider_bot_is_refused() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let stranger = test
+            .seed_user("stranger@example.com", "correct horse battery")
+            .await
+            .expect("the stranger exists");
+        let strangers_space = test
+            .seed_space(&stranger, "Other space")
+            .await
+            .expect("the other space exists");
+        let (foreign_bot, _) = test
+            .seed_bot(&strangers_space, &stranger, "Foreigner")
+            .await
+            .expect("the foreign bot exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        let refused = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![foreign_bot.as_str().to_owned()],
+            },
+        )
+        .await;
+        assert!(refused.is_err(), "a bot outside the space is refused");
+    }
+
+    #[tokio::test]
+    async fn req_010_a_too_crowded_group_is_refused() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let context = TestApp::member_context(&space_id, &owner);
+        let refused = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Crowd".to_owned(),
+                bot_ids: (1..=9).map(|n| format!("bot_{n}")).collect(),
+            },
+        )
+        .await;
+        assert!(refused.is_err(), "more than eight bots — refused");
+        let refused_empty = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Empty".to_owned(),
+                bot_ids: vec![],
+            },
+        )
+        .await;
+        assert!(refused_empty.is_err(), "no bots at all — refused");
     }
 }

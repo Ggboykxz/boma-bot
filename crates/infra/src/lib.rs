@@ -65,6 +65,7 @@ pub use stores::cards::{PostgresCardStore, PostgresEffectStore};
 pub use stores::computer::PostgresComputerStore;
 pub use stores::connectors::PostgresConnectorStore;
 pub use stores::events::PostgresEventStore;
+pub use stores::groups::PostgresGroupStore;
 pub use stores::invitations::PostgresInvitationStore;
 pub use stores::mail::PostgresMailStore;
 pub use stores::mcp::PostgresMcpServerStore;

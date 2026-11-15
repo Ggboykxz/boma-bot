@@ -28,7 +28,6 @@ Design constraints that apply everywhere:
 | `/app` | Shell with the selected bot's thread | signed in |
 | `/app/:botId` | Shell, thread of one bot | signed in |
 | `/app/g/:groupId` | Shell, group thread | member of the group |
-| `/app/x/:linkId` | A saved navigation link | signed in |
 | `/app/artifacts`, `/app/artifacts/:artifactId` | Artifact library and viewer | signed in |
 | `/app/board` | Ticket board (feature-flagged) | signed in, board enabled |
 | `/integrations/setup` | Connector setup return path | signed in |

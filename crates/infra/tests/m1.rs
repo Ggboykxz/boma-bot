@@ -114,6 +114,7 @@ fn app_with_scripts(
             Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresAdminStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresPasswordResetStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresGroupStore::new(pool.clone())),
         ),
         boma_app::Services::new(
             publisher,
@@ -2339,6 +2340,7 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                 Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresAdminStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresPasswordResetStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresGroupStore::new(pool.clone())),
             ),
             boma_app::Services::new(
                 publisher,
@@ -2875,6 +2877,7 @@ async fn req_048_a_messaging_install_and_ingress_round_trip_through_postgres() {
             Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresAdminStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresPasswordResetStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresGroupStore::new(pool.clone())),
         ),
         boma_app::Services::new(
             publisher,

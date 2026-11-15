@@ -37,21 +37,21 @@ use crate::{
         ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
         ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
         ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
-        ExportStartReply, ExportStatusReply, HeldDropReply, HeldListReply, HeldMailView,
-        HeldReleaseReply, InstallGenericReply, InstallTelegramReply, InstallUrlReply,
-        InstallationsReply, InvitationAcceptReply, InvitationAcceptRequest, InvitationReply,
-        MailPolicyReply, MailPolicyView, MarketplaceInstallReply, MarketplaceListReply,
-        MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply, McpServerView,
-        McpServersListReply, McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply,
-        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply,
-        MessagingInstallationView, MessagingRemoveReply, ModelConnectReply, ModelCredentialView,
-        ModelCredentialsReply, ModelPreferenceReply, ModelsCatalogReply, PagesGetReply,
-        PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView, ReactReply,
-        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
-        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
-        SecretView, SecretsReply, SecurityEventsReply, SendReply, SkillReply, SkillView,
-        SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply, ThreadHeadReply,
-        TicketCommentReply, TicketCommentView, TicketReply, TicketView,
+        ExportStartReply, ExportStatusReply, GroupsCreateReply, GroupsCreateRequest, HeldDropReply,
+        HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply, InstallTelegramReply,
+        InstallUrlReply, InstallationsReply, InvitationAcceptReply, InvitationAcceptRequest,
+        InvitationReply, MailPolicyReply, MailPolicyView, MarketplaceInstallReply,
+        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
+        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
+        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
+        MessagesReply, MessagingInstallationView, MessagingRemoveReply, ModelConnectReply,
+        ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply, ModelsCatalogReply,
+        PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
+        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
+        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
+        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply, SkillReply,
+        SkillView, SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply,
+        ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -110,6 +110,8 @@ pub mod namespaces {
     pub const ADMIN: &str = "admin";
     /// Invitations: the token-gated acceptance path (REQ-042).
     pub const INVITATIONS: &str = "invitations";
+    /// Groups: the shared rooms the bots work in (REQ-010).
+    pub const GROUPS: &str = "groups";
 }
 
 /// Every procedure this deployment serves.
@@ -222,6 +224,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::ADMIN, "plugins.list"),
         (namespaces::ADMIN, "plugins.decide"),
         (namespaces::INVITATIONS, "accept"),
+        (namespaces::GROUPS, "create"),
     ]
 }
 
@@ -605,6 +608,9 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::INVITATIONS, "accept") => invitations_accept(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::GROUPS, "create") => groups_create(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -3553,5 +3559,40 @@ async fn invitations_accept(
     let outcome = usecases::invite_accept(state.app(), &auth.actor.context, &request.token).await?;
     Ok(InvitationAcceptReply {
         space_id: outcome.space_id.as_str().to_owned(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M11.1 — groups (REQ-010)
+// ---------------------------------------------------------------------------
+
+/// `groups.create` — creates the shared room (REQ-010).
+///
+/// The golden (`spec/golden/group-create.json`) pins the reply shape: the group's id, the
+/// shared thread's id, the member bot ids in the order the caller listed them.
+async fn groups_create(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<GroupsCreateReply, ApiError> {
+    let request: GroupsCreateRequest = parse(&body)?;
+    let created = usecases::create_group(
+        state.app(),
+        &auth.actor.context,
+        &usecases::GroupsCreate {
+            name: request.name,
+            bot_ids: request.bot_ids,
+        },
+    )
+    .await?;
+    Ok(GroupsCreateReply {
+        id: created.id.as_str().to_owned(),
+        name: created.name,
+        thread_id: created.thread_id.as_str().to_owned(),
+        member_bot_ids: created
+            .member_bot_ids
+            .into_iter()
+            .map(|bot| bot.as_str().to_owned())
+            .collect(),
     })
 }
