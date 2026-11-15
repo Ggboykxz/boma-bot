@@ -225,7 +225,9 @@ pub async fn request_password_reset(app: &App, email: &str) -> Result<(), AppErr
         return Ok(());
     };
     let Some((user, _)) = app.stores.users.find_by_email(&email).await? else {
-        // The time taken is indistinguishable: the same hasher runs.
+        // Best-effort equal shape: the local hash runs on both branches. A timing side channel
+        // from the mint-and-insert work cannot be eliminated without issuing a token that would
+        // never be used — the response stays byte-identical instead.
         let _ = app.services.hasher.hash(email.as_str()).await;
         return Ok(());
     };
@@ -286,32 +288,34 @@ pub async fn reset_password(
     session_ttl_seconds: i64,
 ) -> Result<SessionGrant, AppError> {
     validate_password(password)?;
-    let hash = app.services.tokens.hash(token)?;
     let now = app.services.clock.now();
-    let Some(record) = app.stores.password_resets.find(&hash).await? else {
+    let hash = app.services.tokens.hash(token)?;
+
+    // The token is consumed by one conditional statement; two racing submissions of the same
+    // token cannot both succeed. The expiry check lives inside the same statement, so a failure
+    // leaves the row consumed rather than half-used.
+    let Some(user_id) = app.stores.password_resets.consume(&hash, &now).await? else {
         return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
             RECOVERY_REFUSED.to_owned(),
         )));
     };
-    if record.expires_at.as_str() <= now.as_str() {
-        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
-            RECOVERY_REFUSED.to_owned(),
-        )));
-    }
+    // Every outstanding link for this person dies with this recovery, not only this one.
+    let _ = app
+        .stores
+        .password_resets
+        .revoke_all_for_user(&user_id, &now)
+        .await;
+
     let password_hash = app.services.hasher.hash(password).await?;
     app.stores
         .users
-        .set_password(&record.user_id, &password_hash, &now)
+        .set_password(&user_id, &password_hash, &now)
         .await?;
-    app.stores
-        .password_resets
-        .mark_used(&record.id, &now)
-        .await?;
-    let _ = app.stores.sessions.delete_for_user(&record.user_id).await;
+    let _ = app.stores.sessions.delete_for_user(&user_id).await;
     let user = app
         .stores
         .users
-        .find(&record.user_id)
+        .find(&user_id)
         .await?
         .ok_or(AppError::Unavailable)?;
     let _ = app

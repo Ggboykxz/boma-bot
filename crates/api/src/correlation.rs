@@ -107,6 +107,11 @@ fn template(path: &str) -> String {
     if path.starts_with("/api/v1/pages/shared/") {
         return "/api/v1/pages/shared/{token}".to_owned();
     }
+    // The invite token is a credential: one-time, space-joining, only the hash is stored.
+    // It must never reach a log line, so the path is rendered with the slot, not the value.
+    if path.starts_with("/api/v1/invites/") {
+        return "/api/v1/invites/{token}".to_owned();
+    }
     if let Some(suffix) = path.strip_prefix("/api/v1/bots/")
         && suffix.ends_with("/webhook")
         && suffix.len() > "/webhook".len()
@@ -255,6 +260,19 @@ mod tests {
         );
         assert_eq!(parse_traceparent(Some("not-a-trace-parent")), None);
         assert_eq!(parse_traceparent(None), None);
+    }
+
+    #[test]
+    fn req_054_the_template_hides_the_invite_token() {
+        // REQ-042: the invite token is one-time and joins a space; it must never reach a log.
+        assert_eq!(
+            template("/api/v1/invites/invite-secret-token-abc"),
+            "/api/v1/invites/{token}"
+        );
+        assert_eq!(
+            template("/api/v1/invites/dead-beef-cafe"),
+            "/api/v1/invites/{token}"
+        );
     }
 
     #[test]

@@ -430,21 +430,6 @@ pub struct NewPasswordResetToken {
     pub created_at: String,
 }
 
-/// One password recovery token as it is stored (REQ-040).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PasswordResetToken {
-    /// The token row's id.
-    pub id: String,
-    /// The person the token belongs to.
-    pub user_id: UserId,
-    /// The hash of the opaque token.
-    pub token_hash: Vec<u8>,
-    /// When the token stops being usable.
-    pub expires_at: String,
-    /// When it was consumed, or `None` while valid.
-    pub used_at: Option<String>,
-}
-
 /// Stores and reads password recovery tokens (REQ-040).
 ///
 /// Tokens are system-scoped rows: only the system paths mint and consume them, and nobody is
@@ -458,19 +443,26 @@ pub trait PasswordResetStore: Send + Sync {
     /// Returns an error when the database cannot answer.
     async fn create(&self, token: NewPasswordResetToken) -> Result<(), AppError>;
 
-    /// Finds one token by its hash while it is unconsumed.
+    /// Consumes one token by its hash, atomically.
+    ///
+    /// One statement: `UPDATE … WHERE token_hash=$1 AND used_at IS NULL AND expires_at > $2
+    /// RETURNING user_id`. Two concurrent submissions of the same token cannot both succeed; a
+    /// failure never poisons the token nor another valid one.
     ///
     /// # Errors
     ///
-    /// Returns an error when the database cannot answer.
-    async fn find(&self, token_hash: &[u8]) -> Result<Option<PasswordResetToken>, AppError>;
+    /// Returns an error when the database cannot answer. The `None` case — unknown, used, expired —
+    /// is the same uniform refusal the rest of the flow gives.
+    async fn consume(&self, token_hash: &[u8], now: &str) -> Result<Option<UserId>, AppError>;
 
-    /// Marks the token used; replay of a consumed token decides nothing.
+    /// Revokes every unconsumed token of one person; how many died.
+    ///
+    /// Used after a successful reset so an account never holds a second live link (REQ-040).
     ///
     /// # Errors
     ///
     /// Returns an error when the database cannot answer.
-    async fn mark_used(&self, id: &str, now: &str) -> Result<(), AppError>;
+    async fn revoke_all_for_user(&self, user_id: &UserId, now: &str) -> Result<u64, AppError>;
 }
 
 /// Stores and reads spaces.
@@ -1003,12 +995,17 @@ pub trait InvitationStore: Send + Sync {
     /// Returns an error when the database cannot answer.
     async fn find_by_token_hash(&self, token_hash: &[u8]) -> Result<Option<Invitation>, AppError>;
 
-    /// Accepts the invitation named by `id`; the transition happens once.
+    /// Accepts the invitation named by `id`, atomically.
+    ///
+    /// One statement: `UPDATE invitations SET status='accepted' WHERE id=$1 AND status='pending'`;
+    /// the bool reports whether this call consumed the pending row. The use case decides what to
+    /// do with the answer — under concurrent accepts the loser already holds the membership and
+    /// nothing is lost.
     ///
     /// # Errors
     ///
     /// Returns an error when the database cannot answer.
-    async fn accept(&self, id: &boma_domain::InviteId, now: &str) -> Result<(), AppError>;
+    async fn accept(&self, id: &boma_domain::InviteId, now: &str) -> Result<bool, AppError>;
 }
 
 /// Hands events to the live subscribers.

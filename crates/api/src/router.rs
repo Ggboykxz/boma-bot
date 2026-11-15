@@ -161,32 +161,29 @@ pub fn router(state: AppState) -> Router {
 /// - with no `BOMA_WEB_ROOT`, the fallback is the JSON `404` it has always been.
 fn resolve_static(root: &str, path: &str) -> Option<std::path::PathBuf> {
     let relative = path.trim_start_matches('/');
-    if relative
-        .split('/')
-        .any(|segment| segment.contains('.') || segment.contains('\\'))
-    {
+    // The one traversal shape is the parent-dot: only `..`, `.` and backslashes are refused.
+    // Every other dotted *name* (assets, `index.html`) is a perfectly legal file of the export.
+    if relative.split('/').any(|segment| {
+        !segment.is_empty() && (segment == ".." || segment == "." || segment.contains('\\'))
+    }) {
         return None;
     }
-    // `/` and `/app/` are the export's directory-style URLs; they resolve to `<dir>/index.html`.
-    let segments: Vec<&str> = relative
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
     let mut base = std::path::PathBuf::from(root);
-    for segment in segments {
-        if segment.is_empty() {
-            continue;
-        }
+    for segment in relative.split('/').filter(|segment| !segment.is_empty()) {
         base.push(segment);
     }
-    if base.is_file() {
-        return Some(base);
-    }
-    let index = base.join("index.html");
-    if index.is_file() {
-        return Some(index);
-    }
-    None
+    let candidate = if base.is_file() {
+        Some(base)
+    } else {
+        let index = base.join("index.html");
+        index.is_file().then_some(index)
+    };
+    // The export's files may not escape the export: symlinks do not buy a path outside root.
+    let root = std::path::Path::new(root).canonicalize().ok()?;
+    candidate.filter(|file| {
+        file.canonicalize()
+            .is_ok_and(|resolved| resolved.starts_with(&root))
+    })
 }
 
 /// The app-prefix fallbacks of ADR-013.
@@ -252,6 +249,7 @@ fn content_type(path: &std::path::Path) -> &'static str {
 async fn web_fallback(State(state): State<AppState>, request: Request<Body>) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+
     let accepts_html = request
         .headers()
         .get(header::ACCEPT)

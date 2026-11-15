@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   RiAddLine,
   RiChat1Line,
   RiKanbanView,
-  RiMoreFill,
+  RiCloseLine,
 } from "@remixicon/react";
 
 import { Button } from "@/components/base/buttons/button";
@@ -49,6 +49,7 @@ export function BoardScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const [commenting, setCommenting] = useState(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   const load = () =>
     Promise.allSettled([boardsGet(), botsList()]).then(([boardResult, botsResult]) => {
@@ -64,6 +65,14 @@ export function BoardScreen() {
         setBots(botsResult.value.bots);
       }
     });
+
+  // Move focus into the dialog when it opens (WCAG: modal pattern).
+  useEffect(() => {
+    if (selected) {
+      dialogRef.current?.focus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Boolean(selected)]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -286,7 +295,38 @@ export function BoardScreen() {
       </div>
 
       {selected ? (
-        <div className="fixed inset-0 z-20 flex items-end justify-center md:items-center" role="dialog" aria-modal="true" aria-label={`${selected.key} ${selected.title}`}>
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${selected.key} ${selected.title}`}
+          className="fixed inset-0 z-20 flex items-end justify-center md:items-center"
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setSelected(null);
+              return;
+            }
+            if (event.key === "Tab" && dialogRef.current) {
+              const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+                "button:not([disabled]), textarea, input, select, a[href]:not([disabled])",
+              );
+              if (focusable.length === 0) {
+                return;
+              }
+              const first = focusable[0]!;
+              const last = focusable[focusable.length - 1]!;
+              const active = document.activeElement as HTMLElement | null;
+              if (event.shiftKey && active === first) {
+                event.preventDefault();
+                last.focus();
+              } else if (!event.shiftKey && active === last) {
+                event.preventDefault();
+                first.focus();
+              }
+            }
+          }}
+        >
           <button
             type="button"
             className="absolute inset-0 h-full w-full cursor-default bg-black/40"
@@ -300,7 +340,7 @@ export function BoardScreen() {
                 <h2 className="text-headline-medium text-text-primary break-words">{selected.title}</h2>
               </div>
               <button type="button" className="boma-target boma-focus text-text-tertiary hover:text-text-secondary rounded-md" aria-label={t("common.close")} onClick={() => setSelected(null)}>
-                <RiMoreFill className="h-5 w-5" aria-hidden="true" />
+                <RiCloseLine className="h-5 w-5" aria-hidden="true" />
               </button>
             </div>
             {selected.description ? <p className="text-text-secondary text-body-regular whitespace-pre-wrap">{selected.description}</p> : null}

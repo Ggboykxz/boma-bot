@@ -2656,16 +2656,20 @@ impl Default for MemoryToolStore {
 
 #[async_trait::async_trait]
 impl InvitationStore for MemoryInvitationStore {
-    async fn accept(&self, id: &boma_domain::InviteId, _now: &str) -> Result<(), AppError> {
+    async fn accept(&self, id: &boma_domain::InviteId, _now: &str) -> Result<bool, AppError> {
         let mut state = write(&self.state);
-        if let Some(row) = state
+        let Some(row) = state
             .invitations
             .iter_mut()
             .find(|row| row.invitation.id == *id)
-        {
-            row.invitation.pending = false;
+        else {
+            return Ok(false);
+        };
+        if !row.invitation.pending {
+            return Ok(false);
         }
-        Ok(())
+        row.invitation.pending = false;
+        Ok(true)
     }
     async fn create(&self, invitation: NewInvitation) -> Result<Invitation, AppError> {
         let mut state = write(&self.state);
@@ -8264,34 +8268,40 @@ impl boma_app::ports::PasswordResetStore for MemoryPasswordResetStore {
         Ok(())
     }
 
-    async fn find(
+    async fn consume(
         &self,
         token_hash: &[u8],
-    ) -> Result<Option<boma_app::ports::PasswordResetToken>, AppError> {
-        let state = read(&self.state);
-        Ok(state
-            .password_resets
-            .iter()
-            .find(|row| row.token_hash == token_hash && row.used_at.is_none())
-            .map(|row| boma_app::ports::PasswordResetToken {
-                id: row.id.clone(),
-                user_id: row.user_id.clone(),
-                token_hash: row.token_hash.clone(),
-                expires_at: row.expires_at.clone(),
-                used_at: row.used_at.clone(),
-            }))
+        now: &str,
+    ) -> Result<Option<boma_domain::UserId>, AppError> {
+        let mut state = write(&self.state);
+        let Some(row) = state.password_resets.iter_mut().find(|row| {
+            row.token_hash == token_hash && row.used_at.is_none() && row.expires_at.as_str() > now
+        }) else {
+            return Ok(None);
+        };
+        row.used_at = Some(now.to_owned());
+        Ok(Some(row.user_id.clone()))
     }
 
-    async fn mark_used(&self, id: &str, now: &str) -> Result<(), AppError> {
+    async fn revoke_all_for_user(
+        &self,
+        user_id: &boma_domain::UserId,
+        now: &str,
+    ) -> Result<u64, AppError> {
         let mut state = write(&self.state);
-        if let Some(row) = state.password_resets.iter_mut().find(|row| row.id == id) {
-            row.used_at = Some(now.to_owned());
+        let mut revoked = 0_u64;
+        for row in &mut state.password_resets {
+            if row.user_id == *user_id && row.used_at.is_none() {
+                row.used_at = Some(now.to_owned());
+                revoked += 1;
+            }
         }
-        Ok(())
+        Ok(revoked)
     }
 }
 
 #[derive(Debug, Clone)]
+#[expect(dead_code)] // the id is read only by the schema contract, not by the fake
 struct PasswordResetRow {
     id: String,
     user_id: boma_domain::UserId,

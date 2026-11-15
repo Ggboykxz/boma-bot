@@ -50,44 +50,44 @@ impl ports::PasswordResetStore for PostgresPasswordResetStore {
         .await
     }
 
-    async fn find(&self, token_hash: &[u8]) -> Result<Option<ports::PasswordResetToken>, AppError> {
+    async fn consume(
+        &self,
+        token_hash: &[u8],
+        now: &str,
+    ) -> Result<Option<boma_domain::UserId>, AppError> {
         let hash = token_hash.to_vec();
+        let now = now.to_owned();
         tenant::as_system(
             &self.pool,
             boma_domain::SystemReason::Authentication,
             |conn| {
                 Box::pin(async move {
-                    sqlx::query_as::<_, (String, String, Vec<u8>, String, Option<String>)>(
-                        "SELECT id, user_id, token_hash, boma.rfc3339(expires_at), boma.rfc3339(used_at)
-                           FROM password_reset_tokens
-                          WHERE token_hash = $1 AND used_at IS NULL",
+                    let user_id = sqlx::query_scalar::<_, String>(
+                        "UPDATE password_reset_tokens SET used_at = $2::timestamptz
+                          WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2::timestamptz
+                          RETURNING user_id",
                     )
                     .bind(&hash)
+                    .bind(&now)
                     .fetch_optional(&mut *conn)
                     .await
-                    .map(|row| {
-                        row.map(|(id, user_id, token_hash, expires_at, used_at)| {
-                            let user_id = boma_domain::UserId::new(user_id)
-                                .map_err(|_| AppError::Unavailable)?;
-                            Ok(ports::PasswordResetToken {
-                                id,
-                                user_id,
-                                token_hash,
-                                expires_at,
-                                used_at,
-                            })
-                        })
+                    .map_err(tenant::unavailable)?;
+                    user_id
+                        .map(boma_domain::UserId::new)
                         .transpose()
-                    })
-                    .map_err(tenant::unavailable)?
+                        .map_err(|_| AppError::Unavailable)
                 })
             },
         )
         .await
     }
 
-    async fn mark_used(&self, id: &str, now: &str) -> Result<(), AppError> {
-        let id = id.to_owned();
+    async fn revoke_all_for_user(
+        &self,
+        user_id: &boma_domain::UserId,
+        now: &str,
+    ) -> Result<u64, AppError> {
+        let user_id = user_id.as_str().to_owned();
         let now = now.to_owned();
         tenant::as_system(
             &self.pool,
@@ -95,14 +95,15 @@ impl ports::PasswordResetStore for PostgresPasswordResetStore {
             |conn| {
                 Box::pin(async move {
                     sqlx::query(
-                        "UPDATE password_reset_tokens SET used_at = $2::timestamptz WHERE id = $1",
+                        "UPDATE password_reset_tokens SET used_at = $2::timestamptz
+                          WHERE user_id = $1 AND used_at IS NULL",
                     )
-                    .bind(&id)
+                    .bind(&user_id)
                     .bind(&now)
                     .execute(&mut *conn)
                     .await
-                    .map_err(tenant::unavailable)?;
-                    Ok(())
+                    .map(|result| result.rows_affected())
+                    .map_err(tenant::unavailable)
                 })
             },
         )

@@ -28,14 +28,16 @@ impl Email {
     /// empty local part or has a domain without a dot.
     pub fn new(value: impl Into<String>) -> Result<Self, DomainError> {
         let value = value.into();
-        let trimmed = value.trim();
+        // Addresses are compared byte for byte across stores; lowercase once, here, so the
+        // Stores never see a differently-cased twin (REQ-040 recovery finds by address).
+        let trimmed = value.trim().to_ascii_lowercase();
         let Some((local, domain)) = trimmed.split_once('@') else {
-            return Err(DomainError::InvalidEmail(trimmed.to_owned()));
+            return Err(DomainError::InvalidEmail(trimmed.clone()));
         };
         if local.is_empty() || domain.is_empty() || !domain.contains('.') {
-            return Err(DomainError::InvalidEmail(trimmed.to_owned()));
+            return Err(DomainError::InvalidEmail(trimmed.clone()));
         }
-        Ok(Self(trimmed.to_owned()))
+        Ok(Self(trimmed.clone()))
     }
 
     /// The address as a string.

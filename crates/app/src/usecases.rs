@@ -8156,26 +8156,58 @@ pub async fn invite_accept(
         return Err(AppError::NotFound);
     }
 
-    // Idempotent path: the membership exists already, so accepting it here means nothing new.
-    if let Some(_role) = app
+    let now = app.services.clock.now();
+
+    // The membership insert is idempotent by conflict semantics: an already-member caller ends
+    // here with Ok — a replay of the accept never errors on a seeded membership.
+    match app
         .stores
         .spaces
         .membership(&invitation.space_id, &user_id)
         .await?
     {
-        let now = app.services.clock.now();
-        let _ = app.stores.invitations.accept(&invitation.id, &now).await;
-        return Ok(InvitationAcceptedOutcome {
-            space_id: invitation.space_id,
-        });
+        Some(_role) => {}
+        None => match app
+            .stores
+            .spaces
+            .add_member(&invitation.space_id, &user_id, invitation.role, &now)
+            .await
+        {
+            Ok(()) => {}
+            // The loser of a concurrent accept raced the pending check, got here, and collided:
+            // the winner already wrote the membership, so this side is still a success.
+            Err(AppError::Conflict) => {
+                if app
+                    .stores
+                    .spaces
+                    .membership(&invitation.space_id, &user_id)
+                    .await?
+                    .is_none()
+                {
+                    return Err(AppError::Unavailable);
+                }
+            }
+            Err(error) => return Err(error),
+        },
     }
 
-    let now = app.services.clock.now();
-    app.stores
-        .spaces
-        .add_member(&invitation.space_id, &user_id, invitation.role, &now)
-        .await?;
-    app.stores.invitations.accept(&invitation.id, &now).await?;
+    // One statement decides: the bool is true exactly once per invitation, for the caller that
+    // flipped it. Audit happens for whoever won *or* was already a member — the acceptance is
+    // a real joining event either way.
+    let _ = app.stores.invitations.accept(&invitation.id, &now).await?;
+    let _ = app
+        .stores
+        .audit
+        .append(crate::ports::NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: Some(invitation.space_id.clone()),
+            actor_user_id: Some(user_id.clone()),
+            kind: boma_domain::AuditKind::InviteAccepted,
+            target: invitation.id.as_str().to_owned(),
+            metadata: serde_json::json!({"role": invitation.role.as_str()}),
+            created_at: now,
+        })
+        .await;
     Ok(InvitationAcceptedOutcome {
         space_id: invitation.space_id,
     })

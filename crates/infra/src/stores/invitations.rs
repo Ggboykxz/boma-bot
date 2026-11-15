@@ -33,19 +33,22 @@ impl PostgresInvitationStore {
 
 #[async_trait::async_trait]
 impl InvitationStore for PostgresInvitationStore {
-    async fn accept(&self, id: &boma_domain::InviteId, _now: &str) -> Result<(), AppError> {
+    async fn accept(&self, id: &boma_domain::InviteId, _now: &str) -> Result<bool, AppError> {
         let id = id.as_str().to_owned();
         tenant::as_system(
             &self.pool,
             boma_domain::SystemReason::Authentication,
             |conn| {
                 Box::pin(async move {
-                    sqlx::query("UPDATE invitations SET status = 'accepted' WHERE id = $1")
-                        .bind(&id)
-                        .execute(&mut *conn)
-                        .await
-                        .map_err(tenant::unavailable)?;
-                    Ok(())
+                    let updated = sqlx::query(
+                        "UPDATE invitations SET status = 'accepted' WHERE id = $1 AND status = 'pending'",
+                    )
+                    .bind(&id)
+                    .execute(&mut *conn)
+                    .await
+                    .map(|result| result.rows_affected() > 0)
+                    .map_err(tenant::unavailable)?;
+                    Ok(updated)
                 })
             },
         )

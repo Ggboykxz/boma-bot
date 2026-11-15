@@ -867,8 +867,16 @@ fn export_fixture() -> std::path::PathBuf {
         "<!doctype html><title>Boma Bot</title>shared-page-shell",
     )
     .expect("shared page shell writes");
-    std::fs::write(root.join("secret.txt"), "should not be reachable?")
-        .expect("fixture file writes");
+    std::fs::create_dir_all(root.join("_next").join("static").join("chunks"))
+        .expect("the fixture directory is writable");
+    std::fs::write(
+        root.join("_next")
+            .join("static")
+            .join("chunks")
+            .join("app-deadbeef.js"),
+        "console.log('fixture')",
+    )
+    .expect("a hashed chunk writes");
     root
 }
 
@@ -1093,5 +1101,36 @@ async fn req_055_an_arbitrary_share_link_serves_the_shared_page_shell() {
 async fn req_055_an_unknown_top_level_page_keeps_the_exports_404() {
     let (state, _root) = state_with_web_root(true);
     let response = get_accept(state, "/this-page-does-not-exist", "text/html").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn req_055_a_dotted_asset_of_the_export_is_served() {
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(
+        state,
+        "/_next/static/chunks/app-deadbeef.js",
+        "application/javascript, */*",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        content_type.starts_with("text/javascript"),
+        "{content_type}"
+    );
+}
+
+#[tokio::test]
+async fn req_055_a_parent_dot_path_never_resolves_to_the_export() {
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(state.clone(), "/..%2f..%2foutside.txt", "text/html").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = get_accept(state, "/definitely-not-in-the-export.txt", "text/html").await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

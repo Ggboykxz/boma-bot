@@ -24,7 +24,10 @@ export function SignUpScreen() {
   const t = useTranslation();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const next = searchParams.get("next") ?? "/onboarding/1/";
+  // Only same-origin paths are accepted; an absolute or protocol-relative URL in the query
+  // string would otherwise bounce the freshly authenticated member to an arbitrary origin.
+  const rawNext = searchParams.get("next");
+  const next = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/onboarding/1/";
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [reloadToken, setReloadToken] = useState(0);

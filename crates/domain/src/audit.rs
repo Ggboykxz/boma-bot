@@ -16,6 +16,8 @@ pub enum AuditKind {
     PasswordRecoveryIssued,
     /// A password recovery link was consumed and the password changed (REQ-040).
     PasswordRecoveryCompleted,
+    /// An invitee accepted the invitation and joined the space (REQ-042).
+    InviteAccepted,
     /// A password sign-in attempt failed (REQ-045).
     SignInFailed,
     /// A browser reported a CSP violation (REQ-045, REQ-054).
@@ -53,6 +55,7 @@ impl AuditKind {
             Self::SignInFailed => "security.sign_in_failed",
             Self::PasswordRecoveryIssued => "security.password_recovery_issued",
             Self::PasswordRecoveryCompleted => "security.password_recovery_completed",
+            Self::InviteAccepted => "security.invite_accepted",
             Self::CspViolation => "security.csp_violation",
             Self::AccountDeleted => "account.deleted",
             Self::ExportDownloaded => "export.downloaded",
