@@ -22,6 +22,7 @@ use serde::Deserialize;
 use crate::{
     auth::AuthContext,
     error::ApiError,
+    error::ErrorCode,
     state::AppState,
     wire::{
         AccountDeleteReply, AccountDeleteRequest, AdminGrantCreateReply, AdminGrantCreateRequest,
@@ -48,13 +49,15 @@ use crate::{
         MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
         MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
         ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
-        ModelsCatalogReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
-        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
-        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
-        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SecurityEventsReply,
-        SendReply, SignInRequestView, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
-        SpendingLimitReply, TeachSkillReply, ThreadHeadReply, TicketCommentReply,
-        TicketCommentView, TicketReply, TicketView,
+        ModelsCatalogReply, NotificationsPolicyGetRequest, NotificationsPolicySetRequest,
+        NotificationsPolicyView, NotificationsStatusReply, NotificationsSubscribeReply,
+        NotificationsUnsubscribeReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply,
+        PagesShareReply, PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply,
+        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
+        RunsReply, SecretForgetReply, SecretSetReply, SecretView, SecretsReply,
+        SecurityEventsReply, SendReply, SignInRequestView, SkillReply, SkillView, SkillsReply,
+        SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply, ThreadHeadReply,
+        TicketCommentReply, TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -98,6 +101,8 @@ pub mod namespaces {
     pub const MESSAGING: &str = "messaging";
     /// Models: the catalogue, BYOK credentials and the person's preference (REQ-052).
     pub const MODELS: &str = "models";
+    /// Notifications: Web Push subscriptions and per-bot policy (REQ-064).
+    pub const NOTIFICATIONS: &str = "notifications";
     /// Billing: the plan, the checkout, the spending limit (REQ-018, REQ-051). Absent when the
     /// deployment does not offer billing.
     pub const BILLING: &str = "billing";
@@ -141,6 +146,11 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BOTS, "disconnectExternal"),
         (namespaces::BOTS, "signIns"),
         (namespaces::BOTS, "externalAgentStatus"),
+        (namespaces::NOTIFICATIONS, "status"),
+        (namespaces::NOTIFICATIONS, "subscribe"),
+        (namespaces::NOTIFICATIONS, "unsubscribe"),
+        (namespaces::NOTIFICATIONS, "policyGet"),
+        (namespaces::NOTIFICATIONS, "policySet"),
         (namespaces::SPACES, "create"),
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
@@ -359,6 +369,21 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "externalAgentStatus") => bots_external_agent_status(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::NOTIFICATIONS, "status") => notifications_status(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::NOTIFICATIONS, "subscribe") => notifications_subscribe(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::NOTIFICATIONS, "unsubscribe") => notifications_unsubscribe(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::NOTIFICATIONS, "policyGet") => notifications_policy_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::NOTIFICATIONS, "policySet") => notifications_policy_set(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::SPACES, "create") => spaces_create(state, auth, body)
@@ -3872,4 +3897,244 @@ async fn bots_external_agent_status(
         secret_name: outcome.secret_name,
         connected_at: outcome.connected_at,
     })
+}
+
+// ---------------------------------------------------------------------------
+// M15.1 — notifications (REQ-064)
+// ---------------------------------------------------------------------------
+
+/// The body of `notifications.status`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationsStatusBody {}
+
+/// The reply of `notifications.status`.
+///
+/// The public key never leaves the server without the feature being enabled; a push-disabled
+/// deployment advertises exactly that, nothing else.
+#[allow(clippy::unused_async)]
+async fn notifications_status(
+    state: AppState,
+    _auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsStatusReply, ApiError> {
+    let _: NotificationsStatusBody = parse(&body)?;
+    let public_key = state
+        .app()
+        .services
+        .vapid
+        .as_ref()
+        .map(|vapid| {
+            vapid
+                .public_key_base64url()
+                .map_err(|_| ApiError::new(ErrorCode::Internal, "the push configuration is broken"))
+        })
+        .transpose()?;
+    Ok(NotificationsStatusReply {
+        enabled: state.app().services.vapid.is_some(),
+        vapid_public_key: public_key,
+    })
+}
+
+/// The body of `notifications.subscribe`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationsSubscribeBody {
+    /// The push service endpoint the member's browser minted.
+    endpoint: String,
+    /// The client public key, base64url.
+    p256dh: String,
+    /// The client auth secret, base64url.
+    auth: String,
+    /// The browser, for display only.
+    #[serde(default)]
+    user_agent: Option<String>,
+}
+
+/// `notifications.subscribe` — registers a browser subscription for Web Push.
+///
+/// Refuses when VAPID is not configured, when the endpoint is not https-bare (no credentials,
+/// no metadata host), or when the DNS-resolving checker refuses it.
+async fn notifications_subscribe(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsSubscribeReply, ApiError> {
+    let request: NotificationsSubscribeBody = parse(&body)?;
+    if state.app().services.vapid.is_none() {
+        return Err(ApiError::new(
+            ErrorCode::BadRequest,
+            "push is not configured on this deployment",
+        ));
+    }
+    let endpoint = request.endpoint.trim().to_owned();
+    let parsed = url::Url::parse(&endpoint)
+        .map_err(|_| ApiError::new(ErrorCode::BadRequest, "the endpoint is not a URL"))?;
+    if parsed.scheme() != "https" || parsed.host_str().is_none() {
+        return Err(ApiError::new(
+            ErrorCode::BadRequest,
+            "the endpoint must be an https URL",
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(ApiError::new(
+            ErrorCode::BadRequest,
+            "the endpoint carries no credentials",
+        ));
+    }
+    if let Some(checker) = state.app().services.endpoint_safety.as_ref() {
+        checker
+            .check(&endpoint)
+            .await
+            .map_err(|error| match error {
+                boma_app::AppError::Rule(_) => {
+                    ApiError::new(ErrorCode::BadRequest, "the endpoint address is refused")
+                }
+                _ => ApiError::new(ErrorCode::BadRequest, "the endpoint address is refused"),
+            })?;
+    }
+    if request.p256dh.trim().is_empty() || request.auth.trim().is_empty() {
+        return Err(ApiError::new(
+            ErrorCode::BadRequest,
+            "the subscription keys are required",
+        ));
+    }
+    let user_id = auth.actor.context.user_id().cloned().ok_or(ApiError::new(
+        ErrorCode::Forbidden,
+        "a subscription needs a member",
+    ))?;
+    let space_id = auth.actor.context.space_id().cloned().ok_or(ApiError::new(
+        ErrorCode::BadRequest,
+        "a subscription needs a space",
+    ))?;
+    let sub_id = state.app().services.ids.new_id("sub");
+    state
+        .app()
+        .stores
+        .notifications
+        .subscribe(boma_domain::notification::NewNotificationSubscription {
+            id: sub_id.clone(),
+            space_id,
+            user_id,
+            endpoint,
+            p256dh: request.p256dh,
+            auth: request.auth,
+            user_agent: request.user_agent,
+            created_at: state.app().services.clock.now(),
+        })
+        .await?;
+    Ok(NotificationsSubscribeReply { id: sub_id })
+}
+
+/// The body of `notifications.unsubscribe`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationsUnsubscribeBody {
+    /// The push service endpoint to drop.
+    endpoint: String,
+}
+
+/// `notifications.unsubscribe` — drops a browser subscription. Idempotent.
+async fn notifications_unsubscribe(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsUnsubscribeReply, ApiError> {
+    let request: NotificationsUnsubscribeBody = parse(&body)?;
+    if request.endpoint.trim().is_empty() {
+        return Err(ApiError::new(
+            ErrorCode::BadRequest,
+            "the endpoint is required",
+        ));
+    }
+    let removed = state
+        .app()
+        .stores
+        .notifications
+        .unsubscribe(&auth.actor.context, request.endpoint.trim())
+        .await?;
+    Ok(NotificationsUnsubscribeReply { removed })
+}
+
+/// `notifications.policyGet` — the per-bot policy for this member.
+async fn notifications_policy_get(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsPolicyView, ApiError> {
+    let request: NotificationsPolicyGetRequest = parse(&body)?;
+    let bot_id = boma_domain::BotId::new(request.bot_id).map_err(|_| ApiError::not_found())?;
+    check_bot_live(&state, &auth, &bot_id).await?;
+    let policy = state
+        .app()
+        .stores
+        .notifications
+        .get_policy(&auth.actor.context, &bot_id)
+        .await?;
+    Ok(policy_view(&policy))
+}
+
+/// `notifications.policySet` — the same, with a patch of the members' choice.
+///
+/// `dailyCap` must be at most 10000; zero would cap someone into never being told again with a
+/// silent success.
+async fn notifications_policy_set(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsPolicyView, ApiError> {
+    let request: NotificationsPolicySetRequest = parse(&body)?;
+    if request.daily_cap.is_some_and(|value| value > 10_000) {
+        return Err(ApiError::new(
+            ErrorCode::BadRequest,
+            "the daily cap is unreasonably large",
+        ));
+    }
+    let bot_id = boma_domain::BotId::new(request.bot_id).map_err(|_| ApiError::not_found())?;
+    check_bot_live(&state, &auth, &bot_id).await?;
+    let policy = state
+        .app()
+        .stores
+        .notifications
+        .set_policy(
+            &auth.actor.context,
+            boma_domain::notification::SetNotificationPolicy {
+                bot_id,
+                notify_waiting: request.notify_waiting,
+                notify_completed: request.notify_completed,
+                daily_cap: request.daily_cap,
+            },
+        )
+        .await?;
+    Ok(policy_view(&policy))
+}
+
+fn policy_view(policy: &boma_domain::notification::NotificationPolicy) -> NotificationsPolicyView {
+    NotificationsPolicyView {
+        bot_id: policy.bot_id.as_str().to_owned(),
+        notify_waiting: policy.notify_waiting,
+        notify_completed: policy.notify_completed,
+        daily_cap: policy.daily_cap,
+    }
+}
+
+/// Refetches the bot to refuse a missing or archived one with the same shape the other
+/// bot-scoped RPCs use (REQ-001).
+async fn check_bot_live(
+    state: &AppState,
+    auth: &AuthContext,
+    bot_id: &boma_domain::BotId,
+) -> Result<(), ApiError> {
+    let bot = state
+        .app()
+        .stores
+        .bots
+        .find(&auth.actor.context, bot_id)
+        .await
+        .map_err(|_| ApiError::new(ErrorCode::Internal, "the bot could not be read"))?
+        .ok_or(ApiError::not_found())?;
+    if bot.is_archived() {
+        return Err(ApiError::not_found());
+    }
+    Ok(())
 }

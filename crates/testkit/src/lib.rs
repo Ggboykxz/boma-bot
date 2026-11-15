@@ -35,7 +35,9 @@ pub mod build;
 pub mod memory;
 pub mod scripts;
 
-pub use build::{TestApp, TestAppBuilder};
+pub use build::{
+    ScriptedEndpointSafety, TEST_VAPID_PRIVATE_KEY, TestApp, TestAppBuilder, vapid_test_config,
+};
 pub use memory::{
     MemoryAccountExportStore, MemoryAccountStore, MemoryAdminStore, MemoryArtifactContentStore,
     MemoryArtifactStore, MemoryAuditStore, MemoryBillingStore, MemoryBotStore, MemoryCardStore,

@@ -23,6 +23,7 @@ utoipa = { workspace = true }
 uuid = { workspace = true }
 
 boma-app = { workspace = true }
+url = "2.5.8"
 tokio-stream = "0.1.19"
 tokio.workspace = true
 serde_json.workspace = true

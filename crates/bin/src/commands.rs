@@ -236,6 +236,7 @@ fn build_app(
             )
             .with_metrics(config_metrics)
             .with_scim_option(config_scim_token)
+            .with_endpoint_safety(Some(Arc::new(boma_infra::InfraEndpointSafety)))
             .with_print_recovery_link(config_print_reset_link)
             .with_print_invite_link(config_print_invite_link);
             match computer {

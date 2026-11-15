@@ -2111,3 +2111,69 @@ pub struct ExternalAgentStatusView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connected_at: Option<String>,
 }
+
+/// The reply of `notifications.status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsStatusReply {
+    /// Whether the deployment is sending pushes.
+    pub enabled: bool,
+    /// The browser-facing public key, present only when pushes are enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vapid_public_key: Option<String>,
+}
+
+/// The reply of `notifications.subscribe`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsSubscribeReply {
+    /// The subscription id.
+    pub id: String,
+}
+
+/// The reply of `notifications.unsubscribe`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsUnsubscribeReply {
+    /// Whether a row was removed.
+    pub removed: bool,
+}
+
+/// The per-bot policy view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsPolicyView {
+    /// The bot this policy governs.
+    pub bot_id: String,
+    /// Whether waiting pushes go to this member for this bot.
+    pub notify_waiting: bool,
+    /// Whether completion (completed/failed) pushes go to this member for this bot.
+    pub notify_completed: bool,
+    /// The UTC-day cap across this member and this bot.
+    pub daily_cap: u32,
+}
+
+/// The request of `notifications.policyGet`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationsPolicyGetRequest {
+    /// The bot to read.
+    pub bot_id: String,
+}
+
+/// The request of `notifications.policySet`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationsPolicySetRequest {
+    /// The bot to manage.
+    pub bot_id: String,
+    /// Override waiting pings.
+    #[serde(default)]
+    pub notify_waiting: Option<bool>,
+    /// Override completion pings.
+    #[serde(default)]
+    pub notify_completed: Option<bool>,
+    /// Override the daily cap.
+    #[serde(default)]
+    pub daily_cap: Option<u32>,
+}

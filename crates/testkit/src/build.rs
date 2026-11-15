@@ -307,6 +307,8 @@ pub struct TestAppBuilder {
     slack: Option<(String, String, String)>,
     /// The Web Push signing material (REQ-064); tests opt in per test.
     vapid: Option<boma_app::push::VapidConfig>,
+    /// The endpoint checker for subscriptions (REQ-064).
+    endpoint_safety: Option<Arc<dyn boma_app::ports::EndpointSafetyChecker>>,
     /// The scripted messaging transport (REQ-048); one is scripted for every platform call.
     messaging_transport: Option<Arc<crate::ScriptedMessagingTransport>>,
     /// Whether the billing surface exists (REQ-051).
@@ -342,6 +344,7 @@ impl Default for TestAppBuilder {
             slack: None,
             messaging_transport: None,
             vapid: None,
+            endpoint_safety: None,
             billing: false,
             billing_provider: None,
             billing_webhook_secret: None,
@@ -466,6 +469,16 @@ impl TestAppBuilder {
         transport: Arc<crate::ScriptedMessagingTransport>,
     ) -> Self {
         self.messaging_transport = Some(transport);
+        self
+    }
+
+    /// Builds the application with a specific endpoint checker for subscriptions (REQ-064).
+    #[must_use]
+    pub fn endpoint_safety(
+        mut self,
+        endpoint_safety: Arc<dyn boma_app::ports::EndpointSafetyChecker>,
+    ) -> Self {
+        self.endpoint_safety = Some(endpoint_safety);
         self
     }
 
@@ -649,7 +662,8 @@ impl TestAppBuilder {
             self.billing_webhook_secret.map(secrecy::SecretString::from),
         )
         .with_scim_option(self.scim_token.clone())
-        .with_vapid(self.vapid.clone());
+        .with_vapid(self.vapid.clone())
+        .with_endpoint_safety(self.endpoint_safety.clone());
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
         } else if self.computers {
@@ -8900,33 +8914,9 @@ mod group_routing_tests {
 
 #[cfg(test)]
 mod notification_tests {
-    use super::TestApp;
-
-    use std::collections::BTreeMap;
+    use super::{TestApp, vapid_test_config};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
-
-    const TEST_PRIVATE_KEY: &str = "-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIHI1TFBFvNn/oAlAIiY96IqxYSImFDukqiPrhITbtwWFoAoGCCqGSM49
-AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8
-8R7KHfpo0/7vPkjfmpLkPjB3nzLcvDH1Jg==
------END EC PRIVATE KEY-----
-";
-
-    fn test_vapid() -> boma_app::push::VapidConfig {
-        boma_app::push::VapidConfig::from_env(&BTreeMap::from([
-            (
-                "BOMA_VAPID_PRIVATE_KEY".to_owned(),
-                TEST_PRIVATE_KEY.to_owned(),
-            ),
-            (
-                "BOMA_VAPID_SUBJECT".to_owned(),
-                "mailto:boma-test@example.com".to_owned(),
-            ),
-        ]))
-        .expect("the test key parses")
-        .expect("the test key is complete")
-    }
 
     struct StubPushServer {
         addr: String,
@@ -8992,7 +8982,7 @@ AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8
     }
 
     async fn push_fixture(status: u16) -> PushFixture {
-        let test = TestApp::builder().vapid(Some(test_vapid())).build();
+        let test = TestApp::builder().vapid(vapid_test_config()).build();
         let owner = test
             .seed_user("owner@example.com", "correct horse battery")
             .await
@@ -9273,7 +9263,7 @@ AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8
 
     #[tokio::test]
     async fn req_064_a_wedged_push_leaves_the_run_parked() {
-        let test = TestApp::builder().vapid(Some(test_vapid())).build();
+        let test = TestApp::builder().vapid(vapid_test_config()).build();
         let owner = test
             .seed_user("owner@example.com", "correct horse battery")
             .await
@@ -9922,5 +9912,64 @@ data: {\"type\":\"RUN_FINISHED\"}\n";
             ["Noted, and recorded."],
             "the post-approval answer landed from the external executor"
         );
+    }
+}
+
+/// The shared Web Push test key (test-only; valueless outside the test suite).
+///
+/// # Panics
+///
+/// Returns `None` only when the built-in PEM is unusable; it is not, ever, the test suite
+/// would fail to build.
+#[must_use]
+pub fn vapid_test_config() -> Option<boma_app::push::VapidConfig> {
+    boma_app::push::VapidConfig::from_env(&std::collections::BTreeMap::from([
+        (
+            "BOMA_VAPID_PRIVATE_KEY".to_owned(),
+            TEST_VAPID_PRIVATE_KEY.to_owned(),
+        ),
+        (
+            "BOMA_VAPID_SUBJECT".to_owned(),
+            "mailto:boma-test@example.com".to_owned(),
+        ),
+    ]))
+    .ok()
+    .flatten()
+}
+
+/// The test-only Web Push private key (valueless outside the test suite).
+pub const TEST_VAPID_PRIVATE_KEY: &str = "-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIHI1TFBFvNn/oAlAIiY96IqxYSImFDukqiPrhITbtwWFoAoGCCqGSM49
+AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8
+8R7KHfpo0/7vPkjfmpLkPjB3nzLcvDH1Jg==
+-----END EC PRIVATE KEY-----
+";
+
+/// An endpoint checker that refuses URLs containing any of the refused fragments; empty means
+/// accept everything. The wire-layer tests drive the deny path through it.
+#[derive(Debug, Clone)]
+pub struct ScriptedEndpointSafety {
+    refused: Vec<String>,
+}
+
+impl ScriptedEndpointSafety {
+    /// Builds the checker from the fragments it refuses.
+    #[must_use]
+    pub fn refusing(refused: &[&str]) -> Self {
+        Self {
+            refused: refused.iter().map(|value| (*value).to_owned()).collect(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::EndpointSafetyChecker for ScriptedEndpointSafety {
+    async fn check(&self, url: &str) -> Result<(), boma_app::AppError> {
+        if self.refused.iter().any(|fragment| url.contains(fragment)) {
+            return Err(boma_app::AppError::Rule(
+                boma_domain::DomainError::InvalidName("the endpoint address is refused".to_owned()),
+            ));
+        }
+        Ok(())
     }
 }

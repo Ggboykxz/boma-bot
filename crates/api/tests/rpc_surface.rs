@@ -4849,3 +4849,230 @@ async fn req_060_bots_request_signin_and_list_round_trips() {
         "no sign-in requests before anyone asks"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M15.1 — notifications (REQ-064)
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_lines)] // one round-trip on purpose; splitting hides the contract
+#[tokio::test]
+async fn req_064_notifications_status_subscribe_policy_round_trip() {
+    let test_app = TestApp::builder()
+        .vapid(boma_testkit::vapid_test_config())
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot, _) = test_app
+        .seed_bot(&space_id, &owner, "Analyst")
+        .await
+        .expect("the bot exists");
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // status: enabled, public key present and URL-safe.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/status",
+        Some(&caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["enabled"], serde_json::json!(true));
+    let public_key = body["vapidPublicKey"].as_str().expect("the key is present");
+    assert!(
+        public_key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    );
+
+    // policyGet: the documented default.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/policyGet",
+        Some(&caller),
+        serde_json::json!({ "botId": bot.as_str() }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["notifyWaiting"], serde_json::json!(true));
+    assert_eq!(body["notifyCompleted"], serde_json::json!(false));
+    assert_eq!(body["dailyCap"], serde_json::json!(20));
+
+    // policySet: flips the two booleans and the cap.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/policySet",
+        Some(&caller),
+        serde_json::json!({ "botId": bot.as_str(), "notifyCompleted": true, "dailyCap": 7 }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["notifyWaiting"], serde_json::json!(true));
+    assert_eq!(body["notifyCompleted"], serde_json::json!(true));
+    assert_eq!(body["dailyCap"], serde_json::json!(7));
+
+    // An unknown bot is not found.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/policyGet",
+        Some(&caller),
+        serde_json::json!({ "botId": "bot_missing" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // subscribe: https endpoint round-trips.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/subscribe",
+        Some(&caller),
+        serde_json::json!({
+            "endpoint": "https://updates.push.services.mozilla.com/wpush/v1/abc123",
+            "p256dh": "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg",
+            "auth": "_Md5-ailpgkLkpnHDiVcfA",
+            "userAgent": "PushMeeting/1.0",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert!(body["id"].as_str().expect("an id").starts_with("sub_"));
+
+    // unsubscribe: first removes, second reports nothing removed.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/unsubscribe",
+        Some(&caller),
+        serde_json::json!({ "endpoint": "https://updates.push.services.mozilla.com/wpush/v1/abc123" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(true));
+
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/unsubscribe",
+        Some(&caller),
+        serde_json::json!({ "endpoint": "https://updates.push.services.mozilla.com/wpush/v1/abc123" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(false));
+}
+
+#[tokio::test]
+async fn req_064_subscribe_rejects_private_or_plain_http_endpoints() {
+    let test_app = TestApp::builder()
+        .vapid(boma_testkit::vapid_test_config())
+        .endpoint_safety(std::sync::Arc::new(
+            boma_testkit::ScriptedEndpointSafety::refusing(&[
+                "169.254.169.254",
+                "127.",
+                "192.168.",
+                "10.",
+                "localhost",
+                "metadata.google.internal",
+            ]),
+        ))
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // Plain HTTP is refused before the checker even runs.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/subscribe",
+        Some(&caller),
+        serde_json::json!({
+            "endpoint": "http://updates.push.services.mozilla.com/wpush/v1/abc123",
+            "p256dh": "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg",
+            "auth": "_Md5-ailpgkLkpnHDiVcfA",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // The cloud metadata service is refused.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/subscribe",
+        Some(&caller),
+        serde_json::json!({
+            "endpoint": "https://169.254.169.254/wpush/v1/abc123",
+            "p256dh": "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg",
+            "auth": "_Md5-ailpgkLkpnHDiVcfA",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // A private-looking HTTPS endpoint is refused by the checker.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/subscribe",
+        Some(&caller),
+        serde_json::json!({
+            "endpoint": "https://192.168.1.7/push",
+            "p256dh": "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg",
+            "auth": "_Md5-ailpgkLkpnHDiVcfA",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Credentials in the URL are refused.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/subscribe",
+        Some(&caller),
+        serde_json::json!({
+            "endpoint": "https://user:pass@updates.push.services.mozilla.com/wpush/v1/abc123",
+            "p256dh": "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg",
+            "auth": "_Md5-ailpgkLkpnHDiVcfA",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // A public https endpoint goes through.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/subscribe",
+        Some(&caller),
+        serde_json::json!({
+            "endpoint": "https://updates.push.services.mozilla.com/wpush/v1/abc123",
+            "p256dh": "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg",
+            "auth": "_Md5-ailpgkLkpnHDiVcfA",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}

@@ -274,6 +274,10 @@ pub struct Services {
     /// The Web Push signing material (REQ-064). `None` means pushes are built but inert;
     /// the validated operator configuration, handed at boot.
     pub vapid: Option<crate::push::VapidConfig>,
+    /// The outbound-endpoint checker behind subscription SSRF (REQ-064). `None` accepts any
+    /// endpoint with a syntactic check only (the test harness); a deployment wires the
+    /// DNS-resolving check.
+    pub endpoint_safety: Option<Arc<dyn crate::ports::EndpointSafetyChecker>>,
     /// Whether the one-time invitation link is written to the process output (BOMA_SPACES_PRINT_INVITE_LINK).
     pub print_invite_link: bool,
     /// Whether the one-time recovery link is written to the process output (BOMA_AUTH_PRINT_RESET_LINK).
@@ -346,6 +350,7 @@ impl Services {
             metrics: Arc::new(crate::metrics::Metrics::new()),
             metrics_enabled: false,
             vapid: None,
+            endpoint_safety: None,
             print_recovery_link: false,
             print_invite_link: false,
             slack: None,
@@ -446,6 +451,19 @@ impl Services {
     #[must_use]
     pub fn with_slack(mut self, slack: Option<crate::ports::SlackAppConfig>) -> Self {
         self.slack = slack;
+        self
+    }
+
+    /// Adds the outbound-endpoint checker behind subscriptions (REQ-064).
+    ///
+    /// `None` leaves the check to the type-level deny rules in the wire handler (HTTPS-only,
+    /// no credentials); a deployment should wire the DNS-resolving adapter.
+    #[must_use]
+    pub fn with_endpoint_safety(
+        mut self,
+        endpoint_safety: Option<Arc<dyn crate::ports::EndpointSafetyChecker>>,
+    ) -> Self {
+        self.endpoint_safety = endpoint_safety;
         self
     }
 

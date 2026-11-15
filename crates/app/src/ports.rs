@@ -4494,3 +4494,20 @@ pub trait NotificationStore: Send + Sync {
     /// Returns an error when a store cannot answer.
     async fn note_success(&self, context: &TenantContext, id: &str) -> Result<(), AppError>;
 }
+
+/// Screens an outbound URL a member supplies (REQ-064): refuses private destinations,
+/// credentials, non-HTTPS destinations and metadata endpoints. The server calls it once per
+/// subscription so a member cannot turn the push delivery path into an internal network probe.
+///
+/// # Errors
+///
+/// Returns an error naming the rule that refused the URL.
+#[async_trait]
+pub trait EndpointSafetyChecker: Send + Sync {
+    /// Checks a member-supplied endpoint URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Rule`] with the refusing rule.
+    async fn check(&self, url: &str) -> Result<(), AppError>;
+}
