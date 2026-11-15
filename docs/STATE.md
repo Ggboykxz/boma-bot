@@ -107,6 +107,13 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   - Docs coherence: `spec/03-api-contract.md` groups section extended (additive procedures
     documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
+  - M11.4 audit (`docs/AUDIT.md`, this slice): v0.1.0 verified from the published artifacts —
+    checksums match the release metadata, attestation confirmed, bundle contents verified, and
+    a fresh boot + fresh DB walked the operator path end to end. **Finding H-1 - HIGH**:
+    every documented deployment path started only `serve`, so the run queue never drained —
+    fixed by the new `worker` service in `compose.yaml` plus README/UPGRADING steps and
+    `--help`-honest docs; verified with a live round-trip (`run.execution_started → finished`,
+    41 ms, scripted provider). REQ-049/056 remain deferred; `trace` stays 56/58.
   - M11.4 — **done (2026-11-15)**: release `v0.1.0` published by the repo's own OIDC identity
     (`.github/workflows/release.yml`), run 43755912392 fully green. Assets (all three public,
     checksums verified): `boma-0.1.0-linux-x86_64.tar.gz` (8.9 MB, binary + static export +

@@ -76,5 +76,18 @@ services:
       retries: 3
       start_period: 10s
 
+  worker:
+    # The claim loop: without this process, queued runs stay queued forever — the API serves
+    # traffic but never drains the queue (found by the v0.1.0 release audit).
+    build: .
+    command: ["worker"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   db-data:

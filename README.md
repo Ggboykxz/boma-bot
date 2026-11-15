@@ -67,6 +67,8 @@ Prérequis : `rustup` (le fichier `rust-toolchain.toml` épingle 1.99.1 ; la MSR
 2. Base : `docker compose up -d db`, ou un PostgreSQL local avec `BOMA_DATABASE_URL` pointant dessus.
 3. API en local :
    `cargo run --bin boma -- migrate`, `cargo run --bin boma -- serve`,
+   puis dans un second terminal `cargo run --bin boma -- worker` — c'est le processus qui
+   vide la file des runs (sans lui, tout reste `queued`; constaté à l'audit de release v0.1.0).
    puis `curl 127.0.0.1:3000/health` et `curl 127.0.0.1:3000/ready`.
 4. UI en local (serveur de dev sur 127.0.0.1:3100) :
    `npm --prefix apps/web ci` puis `npm --prefix apps/web run dev`.

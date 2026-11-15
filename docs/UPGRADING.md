@@ -31,6 +31,10 @@ The reference stack boots `db` → `migrate` → `app` with the same image; jobs
 3. `docker compose up -d app` (or `up -d`) — the new binary serves; `migrate` failing blocks it.
 4. Verify: `/healthz`, `/ready` and `/readyz` on the published port (default 3000), e.g.
    `curl -fsS 127.0.0.1:3000/ready | jq .` — expect `{"ok": true, …}`.
+5. **`serve` never drains the queue on its own.** Run the `worker` alongside it — Compose now
+   carries a `worker` service (same image, `boma worker`). If you run Compose yourself, add it;
+   without it, `runs/list` shows everything stuck at `queued` and the application silently never
+   executes a run.
 5. Watch the logs on the first minutes: structured JSON on stdout, one line per decision.
 
 If step 3's migration fails, the new `app` never serves stale schema: Compose waits on it. Fix the
@@ -46,6 +50,10 @@ against a live system that served traffic, and never edit an applied migration f
 4. The UI is already inside the release's web directory; point your reverse proxy at the binary
    (`serve` listens on loopback and serves the static export — ADR-013) or at the web directory
    you dropped beside it. No Node process runs in production.
+5. **Run `boma worker` next to `boma serve`** — the API serves traffic, the worker drains the
+   queue. Two processes, two systemd units; without the second, runs stay `queued` forever.
+   Check: `boma worker --help` for flags; its drain is observable in the JSON logs
+   (`run.execution_started` / `run.finished`).
 
 ## Recovering
 
