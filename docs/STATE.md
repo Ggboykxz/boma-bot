@@ -2,8 +2,8 @@
 
 ## Current milestone
 
-**M8 — complete.** Three slices committed and pushed (REQ-018, REQ-051, REQ-052); CI watched to
-green at every push. ADR-023 records the decisions and the deviations from ADR-012.
+**M8 — complete.** `51575c0` on `dev` (CI run 43659192066, all jobs green). ADR-023 records
+the decisions and the deviations from ADR-012; the deviations are summarized below.
 
 **M-completed plan (in order, nothing skipped, nothing started early).**
 - M5 — Integrations: REQ-032 (connector catalogue + per-space installs), REQ-033 (MCP remote +
@@ -26,9 +26,9 @@ as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay
 Every milestone ships test-first at the API/use-case level, then PG/functional proof, then docs +
 STATE; gates re-run at each push (fmt, clippy -D warnings, cargo test workspace).
 
-**M8 — complete. Committed in this revision (one commit carrying the three requirements);
-REQ-049 stays deferred by its COULD classification. ADR-023 records the decisions and the
-deviations from ADR-012.** Answers the owner's M8 go ("go", "continu").
+**M8 — complete (`51575c0`, CI green). REQ-049 stays deferred by its COULD classification.
+ADR-023 records the decisions and the deviations from ADR-012.** Answers the owner's M8 go
+("go", "continu").
 
 1. **REQ-052 (model catalogue and credentials, MUST) — PARTIAL by decision (ADR-023).** Done:
    `models.catalog` (the golden's four fields: id, name, contextWindow, roles; derived from the
