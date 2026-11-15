@@ -3,7 +3,7 @@
 ## Current milestone
 
 **M11 — complete: v0.1.0 released (2026-11-15).** M10 closed with it. This section also carries the M9 slice log. `docs/PLAN.md` marks M10/M11 done.
-Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `COPILOTKIT/OpenBot` @ `f1905cd`): M12 external agents (AG-UI, ADR-026) → M13 sign-in requests / Recorder → M14 voice (only if you un-defer REQ-049) → M15 release maturity → M16 browser extension. Mobile stays deferred per your call.
+Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKit/OpenBot` @ `f1905cd` — full 21-area capability matrix; you confirmed nothing is neglected): M12 external agents → M13 sign-in requests & Recorder → M14 dictation (voice/call gated on your un-defer) → M15 push + release maturity → M16 scoped auto-approvals → M17 standing instructions → M18 automatic learning (limited; will add REQ-061 on your bless) → M19 enterprise packaging → M20 browser extension → M21 skins (optional) → M22 bot-drawn component drafts (optional, your call). Mobile stays deferred per your call.
 
 - slice 1 — REQ-054 (structured logs + metrics + CSP reports, `909dd52`, CI run 43663121560
   green): JSON logs with `traceparent`/`x-request-id`, route templates never raw paths, W3C
@@ -108,6 +108,10 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   - Docs coherence: `spec/03-api-contract.md` groups section extended (additive procedures
     documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
+  - Improvements analysis v2 (`docs/IMPROVEMENTS.md`, this slice): every OpenBot area mapped
+    against v0.1.0 — both spec floors disclosed and recorded. Spec extended: REQ-059 (external
+    agents, MUST — ADR-026), REQ-060 (sign-in requests & Recorder, MUST) — `spec/EXPORT.md`
+    provenance refreshed per AGENTS; the frozen Rakazo floor (REQ-001..058) is unchanged.
   - Improvements analysis (`docs/IMPROVEMENTS.md`, this slice): OpenBot/`f1905cd` studied deeply
     (MIT template fronts + contracts; closed server images; Intelligence separately licensed).
     Decision record: borrow in spirit — M12 external agents/AG-UI (ADR-026), M13 sign-in requests + Recorder,

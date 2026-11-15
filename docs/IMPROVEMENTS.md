@@ -1,78 +1,95 @@
-# Improvements — catching up to OpenBot, without rebuilding
+# IMPROVEMENTS — the same level as OpenBot, capability by capability
 
-Date: 2026-11-15
-Subject: `github.com/CopilotKit/OpenBot` at `f1905cd` (v1.0.3 area, MIT template)
-Decision record: `ADR-026` (external agents), `docs/STATE.md` (M12–M16 sequencing)
-Method: full read of the target (README, docs/, api/, app/, desktop/, extension/, agent-* , tests/),
-license check, and a capability diff against the shipped Boma Bot v0.1.0. Every "borrow" here is
-**reused in spirit only**: no OpenBot source or assets enter this repository; we reimplement
-against our own spec (`AGENTS.md` — prefer reimplementation; license compatibility).
+Date: 2026-11-15 (v2, complete)
+Subject: `github.com/CopilotKit/OpenBot` at `f1905cd` (v1.0.3 area; MIT template for frontends and
+contracts, CopilotKit-licensed server images). All 21 OpenAPI area files read; all docs/ read;
+exercise of the weak points verified against the recorded source.
+Decision record: `ADR-026` (AG-UI), `docs/STATE.md` (M12–M21 sequencing); nothing of OpenBot enters
+this repository — ideas are reimplemented against our own spec, with provenance acknowledged per
+concept below.
 
-## What OpenBot actually is
+## What OpenBot is, briefly
 
-Per-area REST contract (`api/openapi/`, ~24 domains), generated orval clients, signed desktop
-images, Helm chart, k3d local story. Split into MIT-licensed **frontend templates + API contracts**
-here plus **closed-source server images + managed "Intelligence"** (durable threads, memory,
-automatic learning, governance). If you self-host only the template, you get the shells; the runtime
-is pull-based and CopilotKit-licensed. Built on CopilotKit + AG-UI; 13+ agent harness adapters in
--repo (`agent-ag2`, `agent-mastra`, …).
+MIT-licensed frontends and API contracts; the server runs from published images; a separately
+licensed CopilotKit "Intelligence" carries durable threads, memory, Automatic learning and governance
+on the same premises (local or cluster). Every tool decision passes a gateway (resolve → evaluate
+policy → audit → forward/refuse). A managed multi-organizational front (Slack/Teams, iOS/Android,
+web, desktop) sits over the same API. k3d one-command bring-up.
 
-## Capability matrix vs Boma Bot v0.1.0
+## Capability matrix — every OpenBot area vs Boma Bot v0.1.0 — nothing excluded
 
-| Area | OpenBot | Boma Bot v0.1.0 | Verdict |
+| Area (OpenBot source of truth) | OpenBot offers | Boma Bot v0.1.0 | Verdict / milestone |
 |---|---|---|---|
-| Desktop shell | Tauri v2, signed installers, inert updater, k3d | Electron, unsigned, manual updates (ADR-016) | **Close the gap**: M15 (signed desktop + updater statements) |
-| External agents | AG-UI endpoints; any framework; managed or self-hosted | none | **Borrow**: M12 |
-| Agent harness adapters | 13 in-tree adapters | none | **Borrow concept**: adapters via M12 pipeline |
-| Contract-first REST (OpenAPI) | sources per area, bundle, redocly lint, orval clients | single-file `spec/openapi.yaml` (frozen export spec), hand-written TS client | Keep ours (frozen contract for parity; we rebuild TS client generation in M15 if it pays off); record as ADR |
-| Passwords & Recorder | saved logins, sign-in requests, session recording into the vault | none | **Borrow**: M13 |
-| Automatic learning | Intelligence "Learning" delivers skills to bots | none (manual teach + approval) | **Borrow (limited)**: skill auto-delivery is M13+, not in M12 |
-| Voice / dictation / calls | dictation + voice calls surface APIs | none recorded (REQ-049 deferred by your call) | **Propose**: revisit REQ-049 decision in M14 (needs your un-defer) |
-| Mobile client | Expo/Flutter fronts | none (REQ-056 deferred by you) | Stays deferred per your call |
-| Browser extension | Chrome/Firefox-class extension (background/content/offscreen) | none | **Borrow**: M16 (small, high-signal) |
-| Slack / Teams fronts | connectors built-in | Slack/Telegram ingress (M7) | comparable; keep ours |
-| Helm / Kubernetes | chart + operator docs | plain `compose.yaml` + `docs/UPGRADING.md` | **Borrow shape**: M15 (single-node first) |
-| Enterprise RBAC/SSO/SCIM | full authn/authz stack | equivalent features (M1, M5, M9) | comparable; keep ours |
-| Billing | handled/by Enterprise tier | full self-host purchase flow (M8) | ours wins for self-hosters; keep |
-| Component drafts/publishing | marketplace-ish of bot UI components | rich block library (thread blocks) | ours sufficient; keep |
-| Connections / app directory | apps → bot-grants + shared accounts | bot connectors (M5) | comparable; keep |
-| Managed Intelligence | CopilotKit-only paid service | not applicable (self-host, one binary) | reject (out of scope; we are the alternative) |
+| `bots` | CRUD for bots, import/export, sharing | M1/M2: yes — catalog + export; duplication `bots.duplicate` | comparable; keep |
+| `accounts` | people; onboarding; standing instructions; API keys; sessions; linked accounts; IdPs | M5/M9: profile; sign-in; SSO capability config (unverified runtime), admin SCIM | M17 standing instructions; M15/SSO proof; OIDC runtime covered below |
+| `admin-settings` | deployment/org knobs, capabilities, network policies, model usage, computer actions, setup checklist | M9 admin surfaces; M8 model usage report; M5 MCP allow-list | comparable; keep (extend where natural) |
+| `approvals` | approval settings, reviewer guidance, boundaries, what-if, shared accounts | REQ-017: cards everywhere, exactly-once effects, grants table | M16: scoped auto-approvals + what-if previews |
+| `apps` | app directory; install apps per bot/admin; shared accounts; per-app approval rules | M5 connectors catalogue + per-space install; admin review | comparable; keep; M16 covers approval-rules side |
+| `audit-events` | audit vocabulary, export, security events | M9 JSONL export + security events | comparable; keep |
+| `bot-grants` | share grants (which bot may use which app); requests to administrators | M11.3b delegate.bot (room-local); no cross-workspace grants | M16 scope: grants across spaces (documented decision, ADR later) |
+| `browsers` | Bots have browsers; **people get their own shared OpenBot browser with tabs, recording and narration** | M4: bot-only computer panel; REQ-029 takeover | M17: a person's browser pane (reuse takeover machinery) |
+| `components` | charts/cards bots draw; drafts + publishing; which bots may draw each; data functions readable | REQ-007/017: question/approval/answer block kinds only | M15 decide: adopt bot-drawn component drafting if it earns its keep |
+| `computers` | screen, files, control, admin list | M4: complete (doctor, takeover, idle release, conformance suite) | comparable; keep |
+| `connections` | per-person app connections + OAuth consent; shared app accounts; per-action approval | M5 connectors, M11.3b handoffs | comparable; keep; M16 covers approval rules |
+| `conversations` | members/messages/reactions/dictation; **voice** calls; tasks; conversation join tokens; **product events** incl. what people saw/copied | M1 reactions/mentions; M7/M9; tasks via board; no dictation/voice/either analytics | M15: dictation + events; M14: voice (gated); M12: join tokens if needed for extension |
+| `learning` | Automatic learning (spaces contribute; skills delivered on subscription model) | REQ-035 skills + REQ-022 memory — manual teach only | M18: Automatic learning (approval-gated, local, no license text) |
+| `memory` | person-scoped facts + read in apps | M3 memory (append-only, shared+Bot scopes); apps can read memory via MCP tools | comparable; keep |
+| `model-connections` | vault, catalogue, per-conversation model choice | REQ-052 catalogue + BYOK (M8); per-bot model prefs | comparable; keep |
+| `notifications` | phones with push; Slack/Teams destinations; bot→outside limits per bot; caps | Slack/Telegram ingress (M7); no push; REQ-048 fronts partly shipped | M15: push devices + destinations + caps |
+| `passwords-and-recorder` | sign-in requests; saved logins; browser-connected recording | none | M13: sign-in requests + Recorder (our name: credentials suite) |
+| `schedules` | routines, check-ins, goals, follow-ups | REQ-023/024 routines + REQ-050 GitHub wakes | comparable; keep |
+| `skills` | named instruction packs | REQ-035 skills (teach + pickup) | comparable; keep |
+| **Desktop** | Tauri: signed installers (cosign/notary), k3d bring-up, inert updater | Electron 45, unsigned, ADR-016 | M15: desktop release criteria (auth ↔ owner Apple/Windows identity) |
+| **Browser extension** | MV3 (background/content/offscreen) control + observe | none | M20: extension (sign-in, thread read, approvals, takeover) |
+| **Mobile** | iOS/Android | REQ-056 deferred (your call) | stays deferred, noted |
+| **Skin/branding** | white-label-able skins & brand config | no theming of this kind | M21 (optional): skins/brand, not prioritized |
+| **Learning governance** | Admin → Learning settings, sharing choices | none | covered by M18 |
+| **Kubernetes** | helm chart, k3d bootstrap | plain compose | M15: k3d-style single-node chart |
 
-## The improvement program — M12 through M16
+## Decision record (nothing neglected, nothing silently absorbed)
 
-Ordered by *value at the lowest risk* to the v0.1.0 base you just shipped. Every slice lands
-behind its own ADR + CI green + `trace` (which now goes *up*, to full coverage of the new req ids).
+**Borrow (as new milestones):** AG-UI external agents (M12), sign-in requests + Recorder (M13),
+dictation, push devices + caps + Slack/Teams as destinations (M15), scoped auto-approval rules and
+what-if previews (M16), standing instructions (M17), automatic learning limited (M18), enterprise
+packaging + desktop release maturity (M19), extension (M20), optional skins (M21), bot-drawn
+component drafts (+ publishing) — evaluate at M15: with current blocks it is plausible the answer is
+"not yet / never"; if it enters, it is M22 and ADR'd then.
 
-1. **M12 — External agents (AG-UI)** — a bot may now be backed by *any* AG-UI endpoint (the
-   operator's Bedrock, Claude Agent SDK, ADK, Mastra — anything with an AG-UI server). Our run
-   state machine feeds the AG-UI transport; Approvals flow through existing cards (REQ-017);
-   the remote agent owns its thread context; our memory/skills/routines stay ours.
-   Spec addition REQ-059 (the only new REQ id we take on).
-2. **M13 — Sign-in requests and the Recorder** — bots ask people for sign-ins where no tool
-   exists; the person approves on the desktop; a credential is sealed into the vault exactly like
-   a bot secret; replay happens inside the computer through the same takeover-exclusive control.
-   Spec addition REQ-060.
-3. **M14 — Voice and dictation** — dictation into the composer (already in the browser stack),
-   and voice call signalling over WebRTC behind the feature gate; only after you un-defer REQ-049.
-   Blocked on your word.
-4. **M15 — Release maturity** — signed desktop when you hand over an Apple/Windows identity,
-   otherwise a portable AppImage + updater manifest that keeps the same UX honest; helm chart for
-   the single-node case; trace to 58/58 if you un-defer voice/mobile, else remain 56/58 by record.
-5. **M16 — Browser extension** — control/observe the Bots you're talking to from any tab.
-   Scoped small: sign-in, thread read, approval answering, takeover.
+**Keep ours as better-in-this-house (no change):** the API contract (our frozen spec vs their
+OpenAPI-blessed contract — parity rules make our contract the pact for Rakazo's migration; touching
+it is DEV-worthy), our test discipline (golden-replay, axe, RTL), our single-binary deployment,
+self-hosted purchase flow.
 
-Mobile stays off this program per your call (M14+); REQ-049 stays deferred until you say otherwise.
+**Reject (explicit, for cause):** Managed Intelligence anything (CopilotKit-license text — we
+cannot and will not repackage licensing we don't own); their client bundle, their artwork, their
+brand names ("coworkers", "OpenBot"), their OpenAPI-contract of record (ours wins for this program);
+the licensing model of AG-UI is fine, but we reuse the *protocol*, nothing else.
+
+## The program
+
+| # | Milestone | REQ ids | Size | Notes |
+|---|---|---|---|---|
+| M12 | External agents (AG-UI) | REQ-059 (new, MUST) | M | ADR-026; parity for external agents first |
+| M13 | Sign-in requests & Recorder | REQ-060 (new, MUST) | M | credentials into our vault; replay through takeover-exclusive computers |
+| M14 | Dictation + voice calls | REQ-049 (un-defer, your call) | M | dictation ships first; voice/call needs your un-defer |
+| M15 | Push notifications + desktop scope | — | M | Web Push, notification policy per bot (REQ-048 shape), fewer than M20 saturation concerns |
+| M16 | Scoped auto-approvals + what-if | — (ADR later) | M | rules engine against our existing card/effect machinery |
+| M17 | Standing instructions + personal browser | — | M | per-user, per-bot persistent guidance; person-browser pane later in M; defer browser pane if window closes |
+| M18 | Automatic learning (limited) | REQ-061 (new if you bless) | L | approval-gated skills, local corpus, no license text |
+| M19 | Release maturity & enterprise packaging | — | M | k3d helm, desktop signing, trace path to 58 if you un-defer |
+| M20 | Browser extension | — | M | control/observe |
+| M21 | Skins / white-label (optional) | — | S | only if you want multi-tenant white-label |
+| M22 | Bot-drawn component drafts (optional) | — | L | decide at M15 checkpoint |
+
+Mobile remains deferred per your word; REQ-049 stays deferred until you un-defer it.
 
 ## Governance
 
-Improvements extend the spec, they do not fork it. Each milestone ships:
-a new migration *never edited*, REQs with tests carrying their id in the name, an ADR per decision,
-and a STATE.md record. The frozen M0–M11 contract remains the floor; everything else extends it.
+Every milestone ships: migration-never-edited migrations, REQ-id tests, ADR per decision,
+IMPROVEMENTS/PLAN/STATE record, trace back up, release replay. The frozen M0–M11 floor never
+weakens; improvements extend it.
 
 ## OpenBot licensing red lines
 
-- No OpenBot code, assets (images, icons, SVG artwork), or wording copy enters this repository.
-- The MIT template's *ideas* are re-implemented against our own contracts; every borrowed concept gets
-  its ADR with the concept named (AG-UI/AIC). If a future milestone needs a dependency, it goes into
-  `docs/DEPENDENCIES.md` with license, version, and reason.
-- "coworkers", brand-teal palette, and artwork are out of scope.
+No code/assets/wording of OpenBot in this repo; MIT ideas reimplemented; provenance per concept
+recorded; any new dependency in `docs/DEPENDENCIES.md`.

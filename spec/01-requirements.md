@@ -477,3 +477,34 @@ and deployment settings; none of it is reachable by ordinary members.
 - Given a plugin submission, when an admin approves or rejects it, then the state changes and the
   submitter is notified.
 - Rationale: operating without SSH into the database.
+
+## Improvement-program extensions (2026-11-15, maintainer-decision)
+
+The program in docs/IMPROVEMENTS.md adds requirements extending the frozen Rakazo-derived spec;
+the frozen floor is unchanged.
+
+### REQ-059 — External agents over standard agent protocols (MUST)
+A bot may be connected to an externally hosted agent speaking a documented agent protocol, so
+operators with existing agent stacks can attach them as coworkers without re-implementing their
+executor.
+- Given a bot connected to a reachable agent endpoint, when a person messages it, then the agent
+  receives the thread (thread id preserved) and its streamed answer appears attributed to it in
+  the room within the run lifecycle.
+- Given the endpoint unreachable or the protocol malformed, when the run executes, then the run
+  fails with a legible reason and nothing is fabricated into the room.
+- Given a write-class effect, when the remote agent asks to perform it, then the existing approval
+  gate asks the person exactly as for internal tools, and the approval is relayed to the agent.
+- Rationale: operators invest in their own agent stacks; a workspace that only admits its own
+  runtime excludes them.
+
+### REQ-060 — Sign-in requests and the recording browser (MUST)
+A bot may ask a person for a sign-in to a site; the person approves and signs in on a recording
+browser; credentials are sealed into the space's vault and replayed through a computer the person
+controls.
+- Given a site's sign-in is not yet in the vault, when a bot asks, then a sign-in request appears
+  for the person with the target; nothing is stored until they grant it.
+- Given a credential is in the vault, when the same bot needs it later, then reuse is governed by
+  a grant for that bot — the secret never renders as plaintext to any client.
+- Given a person takes over a computer, when they sign in there, then the session is reuse-taken
+  into the vault only through that person's explicit grant.
+- Rationale: most real work happens behind logins; a bot that cannot ask has no path forward.

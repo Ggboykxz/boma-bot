@@ -152,11 +152,17 @@ Sizes: S ≤ 1 week, M ≤ 3 weeks, L ≤ 6 weeks of single-maintainer work.
 | M9 | Operate | REQ-044, 045, 054, 058 | Export/import/delete, audit JSONL, security events, SCIM, structured logs + metrics, admin screens | M |
 | M10 | UI complete + desktop | REQ-055 (+ every UI golden) | All screens and states from `spec/08-ui-ux.md`, 7 UI goldens, axe zero critical/serious, RTL, Electron shell (owner veto 2026-11-15, spec-REQ-055 wording) | L |
 | M11 | Harden and release | REQ-010, 011, 018, 026… (regression across all) | All 9 defects fixed with tests, budgets measured, ADRs complete, signed release + upgrade guide. Broken into bounded slices: **M11.1 groups foundation** (groups + memberships + shared thread, `groups.create`, the `group-create` golden; done, CI green `43724891455`), **M11.2 mention routing** (a message addressed to N bots runs exactly those N; done, CI green `43744074897`), **M11.3b bot-to-bot handoffs** (`delegate.bot`, approval-card convention, one hop; done — REQ-010 complete), **M11.3 the `/app/g/:groupId` screen and the "New group" rail action** (done — `groups.get|list|messages` with bot attribution, attributed transcript, rail create form), **M11.4 regression + signed release** (done, 2026-11-15: v0.1.0 published, run 43755912392 green — server bundle + unsigned desktop pack + Sigstore keyless attestations; M10 and M11 close here) | M |
-| M12 | External agents (AG-UI) | REQ-059 (new) | Bots backed by any AG-UI endpoint; runs execute remotely; approvals flow through cards; REQ-059 tests green; no leaked semantics | M |
-| M13 | Sign-in requests and Recorder | REQ-060 (new) | Bots ask a person for a sign-in when no tool exists; person signs in on the desktop; credential sealed in the vault; replay through the takeover-exclusive computer | M |
-| M14 | Voice and calls (proposed) | REQ-049 (un-defer, on owner decision) | Dictation into the composer + call signalling behind the feature gate; only starts after the owner un-defers REQ-049 | M |
-| M15 | Release maturity and enterprise polish | — | Signed desktop if the owner provides an Apple/Windows identity; k3d/Helm local story; restore REQ-049/056 from deferred if re-planned | L |
-| M16 | Browser extension | — | Sign-in, thread read, approval answering, takeover | M |
+| M12 | External agents (AG-UI) | REQ-059 (new, MUST) | Bots backed by any AG-UI endpoint; approvals flow through cards; unreachable executors fail the run visibly and nothing is fabricated | M |
+| M13 | Sign-in requests & Recorder | REQ-060 (new, MUST) | Ask/grant/sign-in flow; credential sealed in vault; replay through takeover-exclusive computer | M |
+| M14 | Dictation + voice and calls | REQ-049 (un-defer, on owner decision) | Dictation ships in the composer; calls need your un-defer | M |
+| M15 | Push notifications + desktop status | — | Web Push + destinations + per-bot caps; desktop release criteria (signed if you provide an identity) | M |
+| M16 | Scoped auto-approvals + what-if | — | rules engine vs existing cards; what-if previews of approval decisions | M |
+| M17 | Standing instructions + personal browser (optional later in M) | — | per-user/per-bot persistent guidance; person-browser pane if it fits the window | M |
+| M18 | Automatic learning (limited) | REQ-061 (new, on owner bless) | approval-gated skills, local corpus, no license text; success = delivery of useful skills | L |
+| M19 | Release maturity & enterprise packaging | — | k3d/helm single-node story; desktop pack unchanged unsigned until identity is yours | M |
+| M20 | Browser extension | — | sign-in, thread read, approval answering, takeover | M |
+| M21 | Skins / white-label (optional) | — | only on your word; kept honest, no brand-relocation scope creep | S |
+| M22 | Bot-drawn component drafts (optional) | — | draft/publish workflow; decided at M15 checkpoint if enabled | L |
 | — | Deferred | REQ-049 (COULD, voice), REQ-056 (SHOULD, mobile) | Recorded in `docs/STATE.md` with reason; trace_check ORPHAN explained | — |
 
 Every milestone ends with: fmt + clippy clean, tests green, the REQ ids in test names, and a STATE.md

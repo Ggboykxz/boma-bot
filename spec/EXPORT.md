@@ -59,3 +59,9 @@
 | openapi.yaml | 07a3d7c395518b347e0a2397eadb6b5d063dcbaff0a4bee7b34f1ac3c86002f4 | 15925 |
 
 Verify later with: `sha256sum -c` against this table.
+
+### Provenance updates (rebuild / improvement program)
+
+| date (UTC) | file | previous sha256 | new sha256 | bytes | why |
+|---|---|---|---|---|---|
+| 2026-11-15T21:00:00Z | 01-requirements.md | 15c313efd5eb6084f68c3c06265ad531b80dfa345341b9a8d2eac41f80cf8f4c | 562e41d35069137a03aea7ce55459ab6fb9e261a29a8361ea1112e495aafadb3 | 29681 | Improvement program (`docs/IMPROVEMENTS.md`, owner-approved): adds REQ-059 (external agents) and REQ-060 (sign-in requests and Recorder). The frozen Rakazo floor (REQ-001..058) is unchanged. |
