@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch: {}
 
 permissions: {}
 
@@ -18,6 +19,7 @@ jobs:
     permissions:
       contents: write # create the GitHub release and upload assets
       id-token: write # keyless provenance attestation (Sigstore/Rekor)
+      attestations: write # persist the attestation on the repository (REST requirement)
     steps:
       - name: Check out the tagged tree
         uses: actions/checkout@v4
