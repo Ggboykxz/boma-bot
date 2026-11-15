@@ -508,3 +508,19 @@ controls.
 - Given a person takes over a computer, when they sign in there, then the session is reuse-taken
   into the vault only through that person's explicit grant.
 - Rationale: most real work happens behind logins; a bot that cannot ask has no path forward.
+
+### REQ-061 — Local CLI agents as durable teammates (MUST)
+A deployment may attach local command-line agent runtimes (installed on the machine running the
+server) as bots; each runs in an isolated per-run workspace and is surfaced through the same
+run lifecycle as in-process agents (REQ-012) and the same approval gateway (REQ-017).
+- Given a CLI executor installed and enabled, when a person messages its bot, then the executor
+  gets its own empty workspace, the run executes with the thread's context
+  (memory, skills, and prior messages), and its answer is attributed to the bot in the room.
+- Given the executor is missing on the machine, when the run is claimed, then the run becomes
+  failed with a legible reason instead of attempting a partially functional turn.
+- Given a write-class effect, when the remote executor asks to perform it, then the existing
+  approval gate handles it exactly as for internal tools, and the approval is relayed.
+- Given a crashed executor, when the process is lost mid-run, then the run requeues or fails
+  legibly by the existing rules, never silently vanishes.
+- Rationale: operators already run Codex, Claude, OpenCode, Cursor, Cline and other CLI agents;
+  a workspace that admits only its own runtime excludes them.

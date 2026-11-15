@@ -163,6 +163,11 @@ Sizes: S ≤ 1 week, M ≤ 3 weeks, L ≤ 6 weeks of single-maintainer work.
 | M20 | Browser extension | — | sign-in, thread read, approval answering, takeover | M |
 | M21 | Skins / white-label (optional) | — | only on your word; kept honest, no brand-relocation scope creep | S |
 | M22 | Bot-drawn component drafts (optional) | — | draft/publish workflow; decided at M15 checkpoint if enabled | L |
+| M23 | Local CLI agents via ACP (agent interop phase 2) | REQ-061 (new, MUST) | ACP executors (Codex, Claude Code, OpenCode, Cursor, Cline, …) attached as bots; isolated per-run workspace; approvals via the existing gate; unreachable executors fail the run visibly | L |
+| M24 | Context-window compaction | — (extends REQ-021) | automatic compaction at 100K–1M window thresholds (esp. Claude); capacity-aware, user-legible, lossless tool history elision | M |
+| M25 | Pause/resume & delegation control surface | — | pause/resume/cancel queued sends; Stop/Resume/Reassign/Archive/Restore delegation controls in rooms | M |
+| M26 | Discord + WhatsApp fronts | REQ-048 extend | front registry extended; parity with Slack/Telegram ingress; owners configure the front (flag/secret) | M |
+| M27 | Embedded browser pane (optional) | — | full CDP browser in the desktop client; computer-takeover machinery reused | L |
 | — | Deferred | REQ-049 (COULD, voice), REQ-056 (SHOULD, mobile) | Recorded in `docs/STATE.md` with reason; trace_check ORPHAN explained | — |
 
 Every milestone ends with: fmt + clippy clean, tests green, the REQ ids in test names, and a STATE.md

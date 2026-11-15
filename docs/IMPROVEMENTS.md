@@ -93,3 +93,62 @@ weakens; improvements extend it.
 
 No code/assets/wording of OpenBot in this repo; MIT ideas reimplemented; provenance per concept
 recorded; any new dependency in `docs/DEPENDENCIES.md`.
+
+---
+
+## Target B — `nightly-labs/openbot` (2026-11-15, analysis)
+
+Same name, different product. Analysis reference: HEAD `fe54864`. License is **PolyForm
+Noncommercial 1.0.0** — nothing of it enters this repository; every idea below is reimplemented
+from scratch, and each goes behind its own ADR before code ships.
+
+### What it is
+
+Privacy-first, local-first desktop workspace for persistent AI teammates. Electron + SolidJS +
+Effect; release cadence ~daily (0.71.0). CLI agents run as local subprocesses in their own
+workspaces: **Codex App Server, Claude Code, Grok CLI, OpenCode, Gemini, Cursor CLI, Cline,
+Kimi, Devin CLI, GitHub Copilot CLI, Mistral Vibe, Hermes Agent** — wired through **ACP (Agent
+Client Protocol)**. Web-like feel, desktop-native; native mobile (Expo-based, shipped), Slack /
+Telegram / Discord fronts as business integrations, community marketplace with 207 apps as of the
+last visible CHANGELOG entry (monday.com, Miro, Zapier, Datadog, Webflow, Exa…), WhatsApp
+front, Cloudflare Workers account service (optional).
+
+Architecture in one line: **the person owns the machine; the agent runs on the machine; no server
+is required**. Posture is default-`danger-full-access`; safety is narrative (warnings) rather than
+mandatory gating; Boma Bot keeps its approval gates and takes none of the permissive defaults.
+
+### Parity matrix vs Boma Bot v0.1.0 (nothing excluded)
+
+| Area | NightlyLabs OpenBot | Boma Bot | Verdict / milestone |
+|---|---|---|---|
+| 12+ CLI agents | core design; ACP M-ready | none (server-side providers only) | **M23**: ACP-flavored local agents, per-agent workspaces (reuse M12 agent provider abstraction) |
+| Per-agent workspaces | full first-class | nope | same milestone (workspaces parity via computers-per-bot) |
+| Context compaction | Claude compacts at chosen size; 100K–1M windows | none (REQ-021 legible failure only) | **M24**: window-aware compaction, automatic |
+| Agent-to-agent messaging + delegation UI (Stop/Resume/Reassign/Archive/Restore) | native channel view | M11 delegations; Slack/Telegram; no Reassign controls | **M25**: delegation controls + messaging phase 2 |
+| Discord / WhatsApp / archive channels | first-class integrations | Telegram/Slack ingress | **M26**: extend front_registry interface to discord/whatsapp |
+| Embedded browser pane | persistent CDP browser with agents driving | computer takeover panel | **M27**: embedded browser in Boma Bot desktop (later; optional) |
+| Community marketplace | 207 apps in-app | REQ-034 plugin/skill catalogue but narrow connector set | pathway through REQ-034 extend if adopted on your word |
+| Crash-safe queue with pause/resume | persistent FIFO + pause/resume/cancel + crash recovery | ours durable but no pause/resume | relative parity candidate; folds into M25 |
+| Mobile app | native Expo build, in production | none (REQ-056 deferred) | stays deferred per your call |
+| Social channels | Slack/Telegram/Discord/WhatsApp/Teams-class | Slack/Telegram ingress | **M26** covers fronts; Teams stays optional |
+| Daily release cadence | ~daily releases on `main` | on CI per push | keep ours (one release per logical milestone) |
+
+Deliberately **not** borrowed: `danger-full-access` defaults; their telemetry approach ledger;
+the OpenBot-local-only architecture as-is (our client-server binary remains the spine); their
+marketplace of 3rd-party app credentials — we keep operator-owned providers.
+
+### Program amendments (all prior rows stand; this completes them)
+
+| # | Milestone | REQ ids | Size | Notes |
+|---|---|---|---|---|
+| M23 | Local CLI agents via ACP (phase 2 of agent interop) | REQ-061 (new, MUST) | L | agent-spawn, isolated workspace per run, ACP flavor; M12 M13 ordering first |
+| M24 | Context-window compaction | — (extends REQ-021) | M | automatic compaction at 100K–1M thresholds; lossless tool-message elision policy; user-legible |
+| M25 | Pause/resume cancellation + Reassign control surface in rooms | — | M | pause flips pending runs to paused (REQ extension); re-assign bot-to-owner redelegation across same room |
+| M26 | Discord + WhatsApp fronts | REQ-048 extend | M | parity of ingress with front registry; one seam, repeated for each front |
+| M27 | Embedded desktop browser (optional) | — | L | Electron CDP pane; computer-takeover machinery reused |
+
+Mobile stays deferred; REQ-049 stays deferred until you un-defer it.
+
+License rules: identical to Target A — MIT ideas / AGPL code never enters; every borrowed concept
+lands behind its ADR with provenance named (AG-UI, ACP, Dhall-free front registry, crash-safe-queue
+design).

@@ -109,6 +109,12 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
   - Improvements analysis v2 (`docs/IMPROVEMENTS.md`, this slice): every OpenBot area mapped
+  - Target B — `nightly-labs/openbot` (LICENSE PolyForm Noncommercial; ideas only, never code):
+    added to the program. `src/backend` has ~220 files incl. ACP flavors for 12+ CLIs; apps ship
+    on mac/windows/linux/mobile/slack/telegram/discord; Apps marketplace (207 entries) visible.
+    M23 acquires the ACP-flavor local-agent path; M24 compaction at window edges; M25 pauses
+    and re-assigns; M26 adds Discord and WhatsApp fronts; M27 optional embedded browser pane.
+    Mobile stays deferred; REQ-061 authored (and via EXPORT refresh / trace check bumped to 5).
     against v0.1.0 — both spec floors disclosed and recorded. Spec extended: REQ-059 (external
     agents, MUST — ADR-026), REQ-060 (sign-in requests & Recorder, MUST) — `spec/EXPORT.md`
     provenance refreshed per AGENTS; the frozen Rakazo floor (REQ-001..058) is unchanged.
