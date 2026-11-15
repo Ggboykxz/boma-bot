@@ -56,9 +56,14 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   catalogue). **Complete.**
 - M9 — Operate: REQ-044 (export/import/delete), REQ-045 (audit JSONL, security events, SCIM),
   REQ-054 (structured logs + metrics + CSP reports), REQ-058 (admin surfaces).
-- M10 — UI complete + desktop: REQ-055 (all screens from `spec/08-ui-ux.md`, 7 UI goldens, axe,
-  RTL, Electron shell — owner veto 2026-11-15 on the proposed Tauri (ADR-016), plus REQ-011's
-  remaining pieces of the strict list).
+- M10 — UI complete + desktop: REQ-055. **In flight, owner veto 2026-11-15 on the proposed
+  Tauri (ADR-016)**: all screens from `spec/08-ui-ux.md` are built (sign-in/up/recovery, invite,
+  onboarding, `/app/artifacts` + detail, `/integrations/setup`, `/app/board` flag-gated, `/p/<token>`,
+  admin access/plugins, activity, shared not-found screen, computer panel), all 7 UI goldens are
+  implemented with zero pending, axe zero critical/serious everywhere incl. RTL, Electron shell
+  serves the static export. Caveats needing M11: `/app/g/:groupId` (group chats) and `/app/x/:linkId`
+  (a pre-M10 navigation row whose semantics were never defined; the shared-page flow settled at
+  `/p/<token>`) — stale rows on the owner's side; see the report to the owner.
 - M11 — Harden and release: regression across the workspace, all defects closed, budgets measured,
   ADRs complete, upgrade guide, signed release notes.
 
@@ -977,11 +982,12 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
   no system fonts, and Chromium dies with `SkFontMgr_FontConfigInterface Not implemented` the first
   time it renders a Hebrew (or any non-Latin) glyph — which is why every Hebrew test crashed before
   it could fail an assertion. CI (ubuntu-24.04) has system fonts and does not need it.
-- **The later UI goldens stay pending** (`spec/golden/ui/`): `REQ-026-computer-panel` (M10, the
-  panel; M4 shipped the RPC, not the screen), `REQ-037-shared-page`,
-  `REQ-037-shared-page-invalid` (M6). `REQ-007-pending-card` and `REQ-009-unread-divider` are
-  implemented and replayed. Each pending fixture carries its milestone; the runner skips it
-  explicitly.
+- **Every UI golden is implemented as of M10** (`spec/golden/ui/`): `REQ-026-computer-panel` and
+  both `REQ-037-shared-page*` flipped to `implemented`; `REQ-007-pending-card` and
+  `REQ-009-unread-divider` remain implemented. Golden replay reports zero pending. The known
+  synthetic API fixtures (`artifact-create`, `artifact-versions`, `models-catalog`) stay
+  explicitly pending with pinned reasons — synthetic captures, not spec misses; their contracts
+  replay at the RPC and conformance level.
 
 - **The Compose stack is built and probed in CI** (job `compose`, added with the M0–M4 audit):
   `docker compose up -d --build` then `/health`, `/ready`, `/healthz`, `/readyz`. This box cannot
@@ -992,6 +998,33 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
   owner's veto on Tauri (ADR-016). Mobile (REQ-056) stays deferred per ADR-016.
 - **opencode must be restarted** for the BoardUI skill and the always-on rules to load: MCP tools
   and skills are bound at session start.
+
+## M10 — the screens, the kills and the chains in one place
+
+Recorded going into the owner report; per-slice DEC-18/DEC-19 follow.
+
+- **Computer panel probes two rates** — one `computer.status` poll per 5 s and a frame round per
+  2.5 s while the computer is on. The statuses `queued | running | interrupted` are shown;
+  `stopped` hides the panel; a missing backend answers the panel `false` without a screen
+  (`503` → `COMPUTERS_UNAVAILABLE` handled client-side).
+- **The panel sits above the transcript** so the REQ-026 golden's first-button contract is met
+  (the takeover button is the first reachable control) and it works on any thread, not just
+  runner threads.
+- **`computer.status` gained `takeoverByUser`/`takeoverAt`** (optional, skipped when absent) — a
+  read-only hold path; the frozen contract never mutated. Taking or releasing still goes
+  through the exclusive `takeover`/`release` RPCs.
+- **The Slack OAuth callback's landing is `/integrations/setup`** — the declared spec route;
+  the old `/settings/messaging` redirect target never existed.
+- **Slack callback location and `/integrations/setup`** wire the OAuth round-trip end to end
+  (`messaging.installUrl` → Slack → callback → setup page).
+- **`cargo fmt` conformance was re-checked per gate** after two CI failures on `cargo fmt
+  --check` (9878c30, 7c6151e) — CI remains the authority; local fmt drift is folded into the
+  same commit that pushes.
+- **Electron packs in CI** (`desktop` job): `npm ci`, typecheck, build, lint, smoke,
+  `electron-builder --dir` on ubuntu-24.04. `BOMA_DESKTOP_SIGNED` stays off until the owner
+  provisions the signed feed (ADR-016).
+- **TRACEABILITY holds at 55/58** — missing: REQ-010 (M11), REQ-049 (COULD, deferred),
+  REQ-056 (mobile, deferred per ADR-016).
 
 ## Deviations
 
