@@ -1,4 +1,8 @@
 # rebuild-workspace : reconstruire le logiciel analysé, en Rust et en mieux
+
+[![ci](https://github.com/Ggboykxz/boma-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Ggboykxz/boma-bot/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Ggboykxz/boma-bot)](https://github.com/Ggboykxz/boma-bot/releases)
+[![license](https://img.shields.io/github/license/Ggboykxz/boma-bot)](LICENSE)
 Uniquement pour un logiciel que tu possèdes ou que tu es autorisé à reproduire ou remplacer. La spec est le contrat ; l'original reste une référence disponible. Ce n'est pas un avis juridique : vérifie licences, CLUF et droits sur les assets avant de publier quoi que ce soit.
 
 ## Le produit
