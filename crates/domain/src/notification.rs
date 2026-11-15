@@ -129,8 +129,35 @@ pub enum NotificationFailureOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{NotificationKind, NotificationPolicy};
-    use crate::BotId;
+    use super::{NotificationDestinationKind, NotificationDestination, NotificationKind, NotificationPolicy};
+    use crate::{BotId, SpaceId, UserId};
+
+    #[test]
+    fn req_065_destination_kinds_round_trip_their_str() {
+        assert_eq!(NotificationDestinationKind::SlackWebhook.as_str(), "slack_webhook");
+        assert_eq!(NotificationDestinationKind::TeamsWebhook.as_str(), "teams_webhook");
+        assert_eq!(
+            NotificationDestinationKind::SlackWebhook.webhook_prefix(),
+            Some("https://hooks.slack.com/"),
+        );
+        assert_eq!(NotificationDestinationKind::TeamsWebhook.webhook_prefix(), None);
+    }
+
+    #[test]
+    fn req_065_destinations_in_domain_are_label_and_kind_only() {
+        let destination = NotificationDestination {
+            id: "dest_1".to_owned(),
+            space_id: SpaceId::new("space_golden".to_owned()).expect("the id"),
+            kind: NotificationDestinationKind::SlackWebhook,
+            label: "#crew".to_owned(),
+            created_by: UserId::new("user_owner".to_owned()).expect("the id"),
+            created_at: "2026-11-15T00:00:00Z".to_owned(),
+        };
+        let serialized = format!("{destination:?}");
+        assert!(!serialized.contains("hooks.slack.com"), "no webhook value in the stored shape");
+        assert!(!serialized.contains("ciphertext"), "no ciphertext field in the public shape");
+        assert!(!serialized.contains("nonce"), "no nonce field in the public shape");
+    }
 
     #[test]
     fn req_064_notification_kinds_are_waiting_and_completed() {
@@ -148,4 +175,81 @@ mod tests {
         assert!(!policy.notify_completed);
         assert_eq!(policy.daily_cap, 20);
     }
+}
+
+/// A Slack incoming webhook channel.
+/// A Microsoft Teams incoming webhook channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationDestinationKind {
+    /// Slack incoming webhook (`https://hooks.slack.com/services/...`).
+    SlackWebhook,
+    /// Teams incoming webhook (any https endpoint the webhook URL points at, by policy).
+    TeamsWebhook,
+}
+
+impl NotificationDestinationKind {
+    /// The wire/DB value.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::SlackWebhook => "slack_webhook",
+            Self::TeamsWebhook => "teams_webhook",
+        }
+    }
+
+    /// The shape the webhook URL must match; `None` means any https webhook URL is acceptable.
+    #[must_use]
+    pub const fn webhook_prefix(&self) -> Option<&'static str> {
+        match self {
+            Self::SlackWebhook => Some("https://hooks.slack.com/"),
+            Self::TeamsWebhook => None,
+        }
+    }
+}
+
+/// A destination, as stored and as returned over RPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationDestination {
+    /// The id of the destination.
+    pub id: String,
+    /// The space it belongs to; destinations are space-wide.
+    pub space_id: SpaceId,
+    /// The kind of incoming webhook it is.
+    pub kind: NotificationDestinationKind,
+    /// A human label (`#product-releases`).
+    pub label: String,
+    /// Who created it.
+    pub created_by: UserId,
+    /// When it was created.
+    pub created_at: String,
+}
+
+/// A destination as supplied at create time; the webhook is transient in memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewNotificationDestination {
+    /// The id; minted by the app.
+    pub id: String,
+    /// The space it is created in.
+    pub space_id: SpaceId,
+    /// The kind of incoming webhook it is.
+    pub kind: NotificationDestinationKind,
+    /// A human label.
+    pub label: String,
+    /// The raw webhook URL — sealed on write, never returned by any other path. No `secrecy`
+    /// dependency in the domain's own rules; the adapter seals this string on the way in and
+    /// never returns it, not even via a getter.
+    pub webhook: String,
+    /// The creator.
+    pub created_by: UserId,
+    /// When it was created.
+    pub created_at: String,
+}
+
+/// The per-(space, member, bot) destination flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestinationFlags {
+    /// Whether workspace Slack destinations receive this member's pushes for this bot.
+    pub slack_webhook: bool,
+    /// Whether workspace Teams destinations receive this member's pushes for this bot.
+    pub teams_webhook: bool,
 }
