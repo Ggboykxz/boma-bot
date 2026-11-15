@@ -81,6 +81,14 @@ pub fn router(state: AppState) -> Router {
             "/api/csp-report",
             post(public::csp_report).route_layer(DefaultBodyLimit::max(17 * 1024)),
         )
+        .route(
+            "/api/v1/me/exports/{id}",
+            get(public::account_export_download),
+        )
+        .route(
+            "/api/v1/me/account/import",
+            post(public::account_import).route_layer(DefaultBodyLimit::max(33 * 1024 * 1024)),
+        )
         // Directory sync (REQ-045): SCIM 2.0 /Users behind one bearer, all-or-nothing.
         .route(
             "/api/auth/scim/v2/ServiceProviderConfig",

@@ -75,6 +75,8 @@ pub struct Stores {
     pub models: Arc<dyn ModelStore>,
     /// The spending limit, the payments and the subscription (REQ-018, REQ-051).
     pub billing: Arc<dyn BillingStore>,
+    /// The ruled parts of one account export (REQ-044).
+    pub account_export: Arc<dyn crate::ports::AccountExportStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -141,6 +143,7 @@ impl Stores {
         screen_capabilities: Arc<dyn ScreenCapabilityStore>,
         models: Arc<dyn ModelStore>,
         billing: Arc<dyn BillingStore>,
+        account_export: Arc<dyn crate::ports::AccountExportStore>,
     ) -> Self {
         Self {
             accounts,
@@ -169,6 +172,7 @@ impl Stores {
             messaging,
             models,
             billing,
+            account_export,
             tickets,
             effects,
             tools,

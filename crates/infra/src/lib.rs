@@ -54,6 +54,7 @@ pub use openai::{OpenAiCompatibleAdapter, OpenAiConfig};
 pub use plugin::GitHubPluginFetcher;
 pub use provider::ScriptedProvider;
 pub use secret_box::{SecretBox, SecretBoxError};
+pub use stores::account_export::PostgresAccountExportStore;
 pub use stores::accounts::PostgresAccountStore;
 pub use stores::artifacts::PostgresArtifactStore;
 pub use stores::audit::PostgresAuditStore;

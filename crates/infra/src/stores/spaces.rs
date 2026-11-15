@@ -32,6 +32,55 @@ impl PostgresSpaceStore {
 
 #[async_trait::async_trait]
 impl SpaceStore for PostgresSpaceStore {
+    async fn spaces_of(&self, user_id: &UserId) -> Result<Vec<Space>, AppError> {
+        let rows = tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::AccountExport,
+            |conn| {
+                let user_id = user_id.clone();
+                Box::pin(async move {
+                    sqlx::query_as::<_, SpaceRow>(
+                        "SELECT id, organization_id, name, is_default
+                           FROM spaces
+                          WHERE id IN (SELECT space_id FROM space_members WHERE user_id = $1)
+                          ORDER BY created_at",
+                    )
+                    .bind(user_id.as_str())
+                    .fetch_all(&mut *conn)
+                    .await
+                    .map_err(tenant::unavailable)
+                })
+            },
+        )
+        .await?;
+        rows.into_iter().map(rows::space).collect()
+    }
+
+    async fn member_ids_of(&self, space_id: &SpaceId) -> Result<Vec<UserId>, AppError> {
+        let space_id = space_id.as_str().to_owned();
+        let ids = tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::AccountExport,
+            |conn| {
+                let space_id = space_id.clone();
+                Box::pin(async move {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT user_id FROM space_members WHERE space_id = $1",
+                    )
+                    .bind(&space_id)
+                    .fetch_all(&mut *conn)
+                    .await
+                    .map_err(tenant::unavailable)
+                })
+            },
+        )
+        .await?;
+        ids.into_iter()
+            .map(UserId::new)
+            .collect::<Result<Vec<UserId>, _>>()
+            .map_err(|_| AppError::Unavailable)
+    }
+
     async fn create(
         &self,
         space: boma_app::ports::NewSpace,

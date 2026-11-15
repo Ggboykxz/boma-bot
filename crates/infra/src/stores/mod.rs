@@ -3,6 +3,7 @@
 //! Every adapter that reads or writes tenant data goes through
 //! [`crate::tenant`], so the database always knows which tenant the query acts in (REQ-043).
 
+pub mod account_export;
 pub mod accounts;
 pub mod artifacts;
 pub mod audit;

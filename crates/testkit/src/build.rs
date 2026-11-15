@@ -566,6 +566,7 @@ impl TestAppBuilder {
             Arc::new(database.screen_capabilities()),
             Arc::new(database.models()),
             Arc::new(database.billing()),
+            Arc::new(crate::memory::MemoryAccountExportStore::new(&database)),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,

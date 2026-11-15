@@ -126,6 +126,7 @@ fn state_with_database(
                 std::sync::Arc::new(boma_testkit::MemoryScreenCapabilityStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryModelStore::new(database)),
                 std::sync::Arc::new(boma_testkit::MemoryBillingStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryAccountExportStore::new(database)),
             ),
             boma_app::Services::new(
                 std::sync::Arc::new(boma_testkit::MemoryEventPublisher::default()),

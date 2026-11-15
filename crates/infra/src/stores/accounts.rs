@@ -195,6 +195,46 @@ impl AccountStore for PostgresAccountStore {
         .await
     }
 
+    async fn delete_account(&self, user_id: &UserId, _now: &str) -> Result<(), AppError> {
+        let user_id = user_id.as_str().to_owned();
+        tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::AccountExport,
+            |conn| {
+                Box::pin(async move {
+                    // Every organization for which the caller is the sole org member is deleted;
+                    // the spaces follow, and every row they own cascades through foreign keys.
+                    sqlx::query(
+                        "DELETE FROM organizations
+                           WHERE id IN (
+                             SELECT om.organization_id
+                               FROM organization_members om
+                              WHERE om.user_id = $1
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM organization_members om2
+                                     WHERE om2.organization_id = om.organization_id
+                                       AND om2.user_id <> $1
+                                )
+                           )",
+                    )
+                    .bind(&user_id)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(tenant::unavailable)?;
+                    // Then the person only has: rename to NULL for audit events keeping them.
+                    // The person's own row and their sessions disappear; everything else falls.
+                    sqlx::query("DELETE FROM users WHERE id = $1")
+                        .bind(&user_id)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(tenant::unavailable)?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
     async fn scim_set_deactivated(
         &self,
         user_id: &UserId,

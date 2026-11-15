@@ -13,7 +13,10 @@ use crate::{
 ///
 /// The shape is deliberately simple: a local part, an `@`, a domain with at least one dot.
 /// Anything stricter belongs to the deployment's configuration, not to the domain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct Email(String);
 
 impl Email {
@@ -169,7 +172,7 @@ impl Space {
 }
 
 /// A person.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct User {
     /// The person's id.
     pub id: UserId,

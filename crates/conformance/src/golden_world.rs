@@ -89,6 +89,7 @@ pub fn created_ids(fixture: &str) -> Vec<String> {
         "space-create" => &["spc_new_golden"],
         "bot-create" => &["bot_golden", "thr_golden"],
         "space-invite" => &["inv_golden"],
+        "export-start" => &["exp_golden"],
         _ => &[],
     };
     ids.iter().map(|id| (*id).to_owned()).collect()
@@ -169,6 +170,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
             | "plugin-submission"
             | "plugin-submission-invalid"
             | "shared-page-invalid"
+            | "export-start"
     );
     if !needs_world {
         return None;
@@ -198,6 +200,7 @@ pub async fn world_for(fixture: &str) -> Option<GoldenWorld> {
         "bot-create"
         | "space-create"
         | "space-invite"
+        | "export-start"
         | "plugin-submission"
         | "plugin-submission-invalid"
         | "shared-page-invalid" => {}

@@ -24,14 +24,16 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AnswerReply, ArtifactCreateReply, ArtifactGetReply, ArtifactListSpaceReply,
-        ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply, ArtifactView,
-        AuditEventView, AuditExportReply, BillingCheckoutReply, BillingStatusReply, BoardsGetReply,
-        BotReply, BotsListReply, CancelReply, CatalogModelView, CatalogProviderView,
-        ComputerOpenScreenReply, ComputerProviderInfo, ComputerProviderReply,
-        ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
-        ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
-        ConversationsReply, HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply,
+        AccountDeleteReply, AccountDeleteRequest, AnswerReply, ArtifactCreateReply,
+        ArtifactGetReply, ArtifactListSpaceReply, ArtifactRemoveReply, ArtifactVersionView,
+        ArtifactVersionsReply, ArtifactView, AuditEventView, AuditExportReply,
+        BillingCheckoutReply, BillingStatusReply, BoardsGetReply, BotReply, BotsListReply,
+        CancelReply, CatalogModelView, CatalogProviderView, ComputerOpenScreenReply,
+        ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
+        ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
+        ConnectionsRemoveReply, ConnectorView, ConversationView, ConversationsReply,
+        ExportCountsView, ExportDownloadReply, ExportIdRequest, ExportStartReply,
+        ExportStatusReply, HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply,
         InstallGenericReply, InstallTelegramReply, InstallUrlReply, InstallationsReply,
         InvitationReply, MailPolicyReply, MailPolicyView, MarketplaceInstallReply,
         MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
@@ -95,6 +97,10 @@ pub mod namespaces {
     pub const AUDIT: &str = "audit";
     /// Security: the recent security events of the space (REQ-045).
     pub const SECURITY: &str = "security";
+    /// Export: the account archive (REQ-044).
+    pub const EXPORT: &str = "export";
+    /// Account: the account lifecycle (REQ-044).
+    pub const ACCOUNT: &str = "account";
 }
 
 /// Every procedure this deployment serves.
@@ -193,6 +199,10 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BILLING, "limit.set"),
         (namespaces::AUDIT, "export"),
         (namespaces::SECURITY, "events.list"),
+        (namespaces::EXPORT, "start"),
+        (namespaces::EXPORT, "status"),
+        (namespaces::EXPORT, "download"),
+        (namespaces::ACCOUNT, "delete"),
     ]
 }
 
@@ -537,6 +547,18 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::SECURITY, "events.list") => security_events_list(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::EXPORT, "start") => export_start(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::EXPORT, "status") => export_status(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::EXPORT, "download") => export_download(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ACCOUNT, "delete") => account_delete(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -3218,5 +3240,85 @@ async fn security_events_list(
                 created_at: event.created_at,
             })
             .collect(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M9 — account export and deletion (REQ-044)
+// ---------------------------------------------------------------------------
+
+/// `export.start` — mints an id, marks pending; the archive renders on `export.status|download`.
+///
+/// The golden `export-start` pins the shape and the id minting (`exp_…`), not the fact that the
+/// archive exists: archives are rendered on demand inside the member's session.
+async fn export_start(state: AppState, auth: AuthContext) -> Result<ExportStartReply, ApiError> {
+    let outcome =
+        boma_app::account_export::account_export_start(state.app(), &auth.actor.context).await?;
+    Ok(ExportStartReply {
+        export_id: outcome.export_id,
+        status: outcome.status,
+    })
+}
+
+/// `export.status` — counts, readiness, and where to pick the bytes up.
+async fn export_status(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ExportStatusReply, ApiError> {
+    let request: ExportIdRequest = parse(&body)?;
+    let outcome = boma_app::account_export::account_export_status(
+        state.app(),
+        &auth.actor.context,
+        &request.export_id,
+    )
+    .await?;
+    Ok(ExportStatusReply {
+        export_id: outcome.export_id,
+        status: outcome.status,
+        counts: ExportCountsView {
+            bots: outcome.counts.bots,
+            threads: outcome.counts.threads,
+            messages: outcome.counts.messages,
+            memory: outcome.counts.memory,
+            routines: outcome.counts.routines,
+            artifacts: outcome.counts.artifacts,
+        },
+        download_url: outcome.download_url,
+    })
+}
+
+/// `export.download` — the URL of the cookie-gated download route.
+async fn export_download(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ExportDownloadReply, ApiError> {
+    let request: ExportIdRequest = parse(&body)?;
+    let outcome = boma_app::account_export::account_export_status(
+        state.app(),
+        &auth.actor.context,
+        &request.export_id,
+    )
+    .await?;
+    Ok(ExportDownloadReply {
+        download_url: outcome.download_url,
+    })
+}
+
+/// `account.delete` — the person is gone once the word `delete` is spelled exactly.
+async fn account_delete(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AccountDeleteReply, ApiError> {
+    let request: AccountDeleteRequest = parse(&body)?;
+    if !boma_app::account_export::confirmation_is_literal(&request.confirmation) {
+        return Err(ApiError::bad_request());
+    }
+    let outcome =
+        boma_app::account_export::account_delete(state.app(), &auth.actor.context).await?;
+    Ok(AccountDeleteReply {
+        status: outcome.status,
     })
 }

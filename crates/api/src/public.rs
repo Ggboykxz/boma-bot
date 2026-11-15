@@ -1354,6 +1354,116 @@ fn decode_percent(raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Authenticate via the same session cookie the RPC surface uses; principal travels
+/// through the caller's default space.
+async fn account_context(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<(boma_app::App, boma_domain::TenantContext), ApiError> {
+    let auth = state.authenticate(headers).await?;
+    Ok((state.app().clone(), auth.actor.context))
+}
+
+/// `GET /api/v1/me/exports/{id}.zip` — the bytes of one archive (REQ-044).
+///
+/// Cookie-gated; the bytes never leave the member's session. The archive carries a `version: 1`
+/// manifest — that is the contract the importer re-checks.
+pub async fn account_export_download(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let (app, context) = match account_context(&state, &headers).await {
+        Ok(pair) => pair,
+        Err(failure) => return failure.into_response(),
+    };
+    match boma_app::account_export::account_export_download(&app, &context, &id).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (HeaderName::from_static("content-type"), "application/zip"),
+                (
+                    HeaderName::from_static("content-disposition"),
+                    &format!("attachment; filename={}.zip", id.replace('/', "_")),
+                ),
+                (HeaderName::from_static("cache-control"), "no-store"),
+                (HeaderName::from_static("x-content-type-options"), "nosniff"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(boma_app::AppError::NotFound) => (
+            StatusCode::NOT_FOUND,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error":"Not found."}"#,
+        )
+            .into_response(),
+        Err(failure) => ApiError::from(failure).into_response(),
+    }
+}
+
+/// `POST /api/v1/me/account/import` — review-then-import of an archive (REQ-044).
+///
+/// Cookie-gated; body cap 32 MiB fits one archive under the zip budget. The per-section report
+/// names exactly which zip paths were refused; the wording intentionally does not hint at the
+/// archive owner's identity.
+pub async fn account_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let (app, context) = match account_context(&state, &headers).await {
+        Ok(pair) => pair,
+        Err(failure) => return failure.into_response(),
+    };
+    if body.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error":"The body must be the account export archive."}"#,
+        )
+            .into_response();
+    }
+    match boma_app::account_export::account_import(&app, &context, &body).await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            serde_json::json!({
+                "version": 1,
+                "counts": {
+                    "bots": outcome.counts.bots,
+                    "threads": outcome.counts.threads,
+                    "messages": outcome.counts.messages,
+                    "memory": outcome.counts.memory,
+                    "routines": outcome.counts.routines,
+                    "artifacts": outcome.counts.artifacts,
+                },
+                "refused": outcome.refused,
+            })
+            .to_string(),
+        )
+            .into_response(),
+        Err(_failure) => (
+            StatusCode::BAD_REQUEST,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error":"The archive is not usable as an account export."}"#,
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{host_of, summarize_violation};

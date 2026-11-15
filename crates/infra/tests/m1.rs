@@ -111,6 +111,7 @@ fn app_with_scripts(
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
         ),
         boma_app::Services::new(
             publisher,
@@ -2332,6 +2333,7 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                     boma_infra::SecretBox::ephemeral(),
                 )),
                 Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
             ),
             boma_app::Services::new(
                 publisher,
@@ -2865,6 +2867,7 @@ async fn req_048_a_messaging_install_and_ingress_round_trip_through_postgres() {
                 boma_infra::SecretBox::ephemeral(),
             )),
             Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
         ),
         boma_app::Services::new(
             publisher,

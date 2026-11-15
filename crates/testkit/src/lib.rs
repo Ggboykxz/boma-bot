@@ -37,11 +37,11 @@ pub mod scripts;
 
 pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
-    MemoryAccountStore, MemoryArtifactContentStore, MemoryArtifactStore, MemoryAuditStore,
-    MemoryBillingStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryConnectorStore,
-    MemoryDatabase, MemoryEffectStore, MemoryEventPublisher, MemoryEventStore,
-    MemoryInvitationStore, MemoryMailStore, MemoryMcpServerStore, MemoryMemoryStore,
-    MemoryMessageStore, MemoryMessagingStore, MemoryModelStore, MemoryPageStore,
+    MemoryAccountExportStore, MemoryAccountStore, MemoryArtifactContentStore, MemoryArtifactStore,
+    MemoryAuditStore, MemoryBillingStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore,
+    MemoryConnectorStore, MemoryDatabase, MemoryEffectStore, MemoryEventPublisher,
+    MemoryEventStore, MemoryInvitationStore, MemoryMailStore, MemoryMcpServerStore,
+    MemoryMemoryStore, MemoryMessageStore, MemoryMessagingStore, MemoryModelStore, MemoryPageStore,
     MemoryPendingToolCallStore, MemoryPluginInstallStore, MemoryPluginSubmissionStore,
     MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
     MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,

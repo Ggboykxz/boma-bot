@@ -323,6 +323,18 @@ pub trait AccountStore: Send + Sync {
         deactivated_at: Option<&str>,
         now: &str,
     ) -> Result<(), AppError>;
+
+    /// Irreversibly removes the account.
+    ///
+    /// Every organization of which this person is the sole member is deleted — along with its
+    /// spaces and every row those spaces own (bots, threads, messages, memory, routines,
+    /// artifacts, computers and everything else). The person row is removed afterward. Other
+    /// people's rows cascade with it through the same foreign keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn delete_account(&self, user_id: &UserId, now: &str) -> Result<(), AppError>;
 }
 
 /// Stores and reads people.
@@ -418,6 +430,23 @@ pub trait SpaceStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn default_for(&self, user_id: &UserId) -> Result<Option<Space>, AppError>;
+
+    /// Every space the caller belongs to, with membership roles resolved.
+    ///
+    /// Used by the account delete (REQ-044): the person may only leave when they are the sole
+    /// member of every space they belong to. System-scoped; the caller is acting for itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn spaces_of(&self, user_id: &UserId) -> Result<Vec<Space>, AppError>;
+
+    /// The member ids of one space, memberships only (no invited rows).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn member_ids_of(&self, space_id: &SpaceId) -> Result<Vec<UserId>, AppError>;
 }
 
 /// One audit row read back, for the admin export (REQ-045).
@@ -439,6 +468,111 @@ pub struct AuditEventView {
     pub metadata: serde_json::Value,
     /// When it happened.
     pub created_at: String,
+}
+
+/// One artifact row exported for the archive, metadata only; the bytes are out-of-band.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArtifactMeta {
+    /// The artifact's row id.
+    pub id: String,
+    /// The structured name the uploader chose.
+    pub name: String,
+    /// The declared mime.
+    pub declared_mime: String,
+    /// The sniffed mime.
+    pub mime_type: String,
+    /// The byte size.
+    pub size: i64,
+    /// The content key (`sha256:<hex>`). The bytes are out-of-band.
+    pub storage_key: String,
+    /// The hash of the bytes, same content-addressed value as the storage key.
+    pub hash: String,
+    /// The id of the root artifact of the family.
+    pub root_artifact_id: String,
+    /// The version within the family.
+    pub version: i64,
+    /// When the row was created.
+    pub created_at: String,
+}
+
+/// Everything one account owns, assembled for the archive.
+///
+/// Bots owned by the person, their threads, their messages, their bot memory, their routines,
+/// their artifacts. Shared rows owned by others stay private; there is no precedent that could
+/// leak them.
+#[derive(Debug, Clone)]
+pub struct ExportBundle {
+    /// The person's row, with no password.
+    pub profile: boma_domain::User,
+    /// The bots they own, any space.
+    pub bots: Vec<boma_domain::Bot>,
+    /// The threads of those bots.
+    pub threads: Vec<boma_domain::Thread>,
+    /// The messages of those threads, in thread order.
+    pub messages: Vec<boma_domain::Message>,
+    /// The bot-scoped memory revisions of those bots.
+    pub bot_memory: Vec<boma_domain::MemoryDocument>,
+    /// The routines they own, any space.
+    pub routines: Vec<Routine>,
+    /// The artifacts they uploaded, any space.
+    pub artifacts: Vec<ArtifactMeta>,
+}
+
+/// What an export record says about itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportRow {
+    /// The export row id.
+    pub id: String,
+    /// The person the export belongs to.
+    pub user_id: String,
+    /// `pending` (created, not rendered yet) or `ready`.
+    pub status: String,
+    /// The size of the rendered zip, when rendered.
+    pub payload_bytes: i64,
+    /// Entry paths that were refused for being outside the allowed caps.
+    pub skipped: Vec<String>,
+    /// When it was made.
+    pub created_at: String,
+}
+
+/// The ruled-in parts of one account export (REQ-044).
+#[async_trait]
+pub trait AccountExportStore: Send + Sync {
+    /// Assembles everything the person owns, in one query pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn bundle(&self, user_id: &UserId) -> Result<ExportBundle, AppError>;
+
+    /// Creates a fresh `pending` export row.
+    ///
+    /// `created_at` comes from the app's clock so the archive is reproducible.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn create(&self, id: &str, user_id: &UserId, created_at: &str) -> Result<(), AppError>;
+
+    /// The export row, if and only if it belongs to this person.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn find(&self, id: &str, user_id: &UserId) -> Result<Option<ExportRow>, AppError>;
+
+    /// Marks an export ready with how many bytes it actually carries and what was refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn mark_ready(
+        &self,
+        id: &str,
+        payload_bytes: i64,
+        skipped: Vec<String>,
+        now: &str,
+    ) -> Result<(), AppError>;
 }
 
 /// Stores and reads bots.
@@ -997,7 +1131,7 @@ pub trait MemoryStore: Send + Sync {
 }
 
 /// A routine, as the app carries it (REQ-023).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Routine {
     /// The routine's id.
     pub id: boma_domain::RoutineId,

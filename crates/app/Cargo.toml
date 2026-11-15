@@ -25,3 +25,5 @@ tracing = { workspace = true }
 boma-domain = { workspace = true }
 serde_json.workspace = true
 secrecy = "0.10.3"
+zip = "9.5.1"
+serde = { workspace = true, features = ["derive"] }

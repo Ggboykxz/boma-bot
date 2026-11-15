@@ -40,9 +40,8 @@
       "reason": null
     },
     "export-start": {
-      "status": "pending",
-      "req": "REQ-044",
-      "reason": "M9 - there is no account data to export before the domain tables exist"
+      "status": "implemented",
+      "req": "REQ-044"
     },
     "group-create": {
       "status": "pending",

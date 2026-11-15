@@ -1477,6 +1477,80 @@ pub struct SecurityEventsReply {
     pub events: Vec<AuditEventView>,
 }
 
+/// Per-section counts for one account archive, as the client sees them (REQ-044).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportCountsView {
+    /// The number of bots.
+    pub bots: u64,
+    /// The number of threads.
+    pub threads: u64,
+    /// The number of messages.
+    pub messages: u64,
+    /// The number of bot-scoped memory documents.
+    pub memory: u64,
+    /// The number of routines.
+    pub routines: u64,
+    /// The number of artifacts included.
+    pub artifacts: u64,
+}
+
+/// The reply of `export.start` (REQ-044).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStartReply {
+    /// The export id.
+    pub export_id: String,
+    /// `pending` right now; the zip renders when the client asks for it (or polls status).
+    pub status: String,
+}
+
+/// The reply of `export.status` (REQ-044).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStatusReply {
+    /// The export id.
+    pub export_id: String,
+    /// `pending` for a fresh request, `ready` for one a previous call rendered.
+    pub status: String,
+    /// The counts of each section.
+    pub counts: ExportCountsView,
+    /// Where the browser can pick the archive up.
+    pub download_url: String,
+}
+
+/// The body of `export.status` and `export.download`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportIdRequest {
+    /// The export id returned by `export.start`.
+    pub export_id: String,
+}
+
+/// The reply of `export.download` (REQ-044).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportDownloadReply {
+    /// The route that carries the zip archive.
+    pub download_url: String,
+}
+
+/// The body of `account.delete` (REQ-044). The word is deliberate; the server refuses anything else.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountDeleteRequest {
+    /// The literal confirmation: `delete` (case-insensitive).
+    pub confirmation: String,
+}
+
+/// The reply of `account.delete` (REQ-044).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDeleteReply {
+    /// Always `deleted` on success.
+    pub status: String,
+}
+
 #[cfg(test)]
 mod tests {
     use boma_domain::{Block, MessageId, MessageRole, RunId, ThreadId};

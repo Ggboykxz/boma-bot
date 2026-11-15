@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 // The variants the deployment ships, plus the constant that enumerates them. An extra
 // reason means: add the variant and this allow-list together, or the change does not pass.
-const KNOWN: [&str; 8] = [
+const KNOWN: [&str; 9] = [
     "Boot",
     "Authentication",
     "WebhookDelivery",
@@ -20,6 +20,7 @@ const KNOWN: [&str; 8] = [
     "DataMigration",
     "SharedPageRead",
     "ScimDirectorySync",
+    "AccountExport",
     "ALL",
 ];
 

@@ -512,6 +512,8 @@ struct State {
     spaces: Vec<SpaceRow>,
     /// Who belongs to which tenant.
     memberships: Vec<MembershipRow>,
+    /// The export rows (REQ-044).
+    account_exports: Vec<AccountExportRow>,
     /// The bots.
     bots: Vec<BotRow>,
     /// The conversations, with the sequences they allocate.
@@ -605,6 +607,102 @@ struct State {
 }
 
 impl State {
+    /// Removes every row that belongs to one space.
+    ///
+    /// Best effort at fake level: every tenant-scoped row is dropped except oauth/mcp helper rows,
+    /// which are joined through the bot ids they hang off. Order matters only for dependent
+    /// filters (pages -> page_versions, bots -> messages/secrets/mail_rules).
+    fn purge_space(&mut self, space_id: &SpaceId) {
+        let bot_ids_raw: Vec<String> = self
+            .bots
+            .iter()
+            .filter(|row| row.bot.space_id == *space_id)
+            .map(|row| row.bot.id.as_str().to_owned())
+            .collect();
+        let bot_ids: std::collections::HashSet<String> = bot_ids_raw.into_iter().collect();
+        let run_ids: std::collections::HashSet<RunId> = self
+            .runs
+            .iter()
+            .filter(|row| row.run.space_id == *space_id)
+            .map(|row| row.run.id.clone())
+            .collect();
+        let ticket_ids_before: Vec<String> = self
+            .tickets
+            .iter()
+            .filter(|row| row.space_id == *space_id)
+            .map(|row| row.id.clone())
+            .collect();
+
+        self.bots.retain(|row| row.bot.space_id != *space_id);
+        self.threads.retain(|row| row.thread.space_id != *space_id);
+        self.messages.retain(|row| row.space_id != *space_id);
+        self.events.retain(|row| row.space_id != *space_id);
+        self.cards.retain(|row| row.space_id != *space_id);
+        self.pending_tool_calls
+            .retain(|row| row.space_id != *space_id);
+        self.bot_secrets
+            .retain(|row| !bot_ids.contains(row.bot_id.as_str()));
+        self.mail_rules
+            .retain(|row| !bot_ids.contains(row.bot_id.as_str()));
+        self.held_mail
+            .retain(|row| !bot_ids.contains(row.bot_id.as_str()));
+        self.skills.retain(|row| row.space_id != *space_id);
+        let server_ids_before: Vec<String> = self
+            .mcp_servers
+            .iter()
+            .filter(|row| row.space_id == *space_id)
+            .map(|row| row.id.clone())
+            .collect();
+        self.mcp_servers.retain(|row| row.space_id != *space_id);
+        self.connector_installs
+            .retain(|row| row.space_id != *space_id);
+        self.plugin_installs.retain(|row| row.space_id != *space_id);
+        self.artifacts.retain(|row| row.space_id != *space_id);
+        self.pages.retain(|row| row.space_id != *space_id);
+        self.page_versions
+            .retain(|row| self.pages.iter().any(|page| page.id == row.page_id));
+        self.model_credentials
+            .retain(|row| row.space_id != *space_id);
+        self.spending_limits.retain(|row| row.space_id != *space_id);
+        self.purchase_payments
+            .retain(|row| row.space_id != *space_id);
+        self.subscriptions.retain(|row| row.space_id != *space_id);
+        self.messaging_installations
+            .retain(|row| row.installation.space_id != space_id.as_str());
+        self.messaging_install_states
+            .retain(|row| row.space_id != *space_id);
+        self.tickets.retain(|row| row.space_id != *space_id);
+        self.ticket_comments
+            .retain(|row| !ticket_ids_before.iter().any(|id| id == &row.ticket_id));
+        self.board_seq.remove(space_id);
+        self.oauth_sessions
+            .retain(|row| !server_ids_before.contains(&row.server_id));
+        self.mcp_server_tools.retain(|row| {
+            self.mcp_servers
+                .iter()
+                .any(|server| server.id == row.server_id)
+        });
+        self.audit_events
+            .retain(|row| row.space_id.as_deref() != Some(space_id.as_str()));
+        self.reactions.retain(|row| row.space_id != *space_id);
+        self.read_states.retain(|row| row.space_id != *space_id);
+        self.snoozes.retain(|row| row.space_id != *space_id);
+        self.screen_capabilities
+            .retain(|row| row.space_id != *space_id);
+        self.memory_documents
+            .retain(|row| row.space_id != *space_id);
+        self.computers
+            .retain(|row| row.computer.space_id != *space_id);
+        self.routines
+            .retain(|row| row.routine.space_id != *space_id);
+        self.routine_runs.retain(|row| row.space_id != *space_id);
+        self.effects
+            .retain(|row| !run_ids.contains(&row.effect.run_id));
+        self.tool_installs.retain(|row| row.space_id != *space_id);
+        self.spaces.retain(|row| row.space.id != *space_id);
+        self.runs.retain(|row| row.run.space_id != *space_id);
+    }
+
     /// The thread an identifier names.
     fn thread(&self, id: &ThreadId) -> Option<&ThreadRow> {
         self.threads.iter().find(|row| row.thread.id == *id)
@@ -1238,6 +1336,38 @@ impl AccountStore for MemoryAccountStore {
         Ok(())
     }
 
+    async fn delete_account(&self, user_id: &UserId, _now: &str) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let spaces: Vec<boma_domain::SpaceId> = state
+            .memberships
+            .iter()
+            .filter(|row| row.user_id == *user_id)
+            .map(|row| row.space_id.clone())
+            .collect();
+        for space_id in &spaces {
+            let members: usize = state
+                .memberships
+                .iter()
+                .filter(|row| &row.space_id == space_id)
+                .count();
+            if members > 1 {
+                continue;
+            }
+            state.purge_space(space_id);
+        }
+        // Account-level rows: sessions are cascaded with the person.
+        state.users.retain(|row| row.user.id != *user_id);
+        state.sessions.retain(|row| row.session.user_id != *user_id);
+        state.memberships.retain(|row| row.user_id != *user_id);
+        state
+            .user_model_preferences
+            .retain(|row| row.user_id != *user_id);
+        state
+            .account_exports
+            .retain(|row| row.user_id != user_id.as_str());
+        Ok(())
+    }
+
     async fn scim_set_deactivated(
         &self,
         user_id: &UserId,
@@ -1404,6 +1534,34 @@ impl Default for MemorySpaceStore {
 
 #[async_trait::async_trait]
 impl SpaceStore for MemorySpaceStore {
+    async fn spaces_of(&self, user_id: &UserId) -> Result<Vec<Space>, AppError> {
+        let state = read(&self.state);
+        let mut seen = std::collections::HashSet::new();
+        let mut spaces = Vec::new();
+        for row in &state.memberships {
+            if row.user_id != *user_id {
+                continue;
+            }
+            if !seen.insert(row.space_id.clone()) {
+                continue;
+            }
+            if let Some(found) = state.spaces.iter().find(|s| s.space.id == row.space_id) {
+                spaces.push(found.space.clone());
+            }
+        }
+        Ok(spaces)
+    }
+
+    async fn member_ids_of(&self, space_id: &SpaceId) -> Result<Vec<UserId>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .memberships
+            .iter()
+            .filter(|row| &row.space_id == space_id)
+            .map(|row| row.user_id.clone())
+            .collect())
+    }
+
     async fn create(&self, space: NewSpace, owner: &UserId) -> Result<Space, AppError> {
         let mut state = write(&self.state);
         if state.spaces.iter().any(|row| row.space.id == space.id) {
@@ -7613,6 +7771,183 @@ impl MemoryBillingStore {
                 .collect(),
             TenantContext::System { .. } => Vec::new(),
         }
+    }
+}
+
+/// One export row, as the fake stores hold it.
+#[derive(Debug, Clone)]
+pub struct AccountExportRow {
+    /// The export row id.
+    pub id: String,
+    /// The person.
+    pub user_id: String,
+    /// `pending` or `ready`.
+    pub status: String,
+    /// Size of the rendered zip.
+    pub payload_bytes: i64,
+    /// Entry paths refused for being out of caps.
+    pub skipped: Vec<String>,
+    /// When it was made.
+    pub created_at: String,
+}
+
+/// The in-memory export store: reads rows via the shared state.
+#[derive(Debug, Default)]
+pub struct MemoryAccountExportStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryAccountExportStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::AccountExportStore for MemoryAccountExportStore {
+    async fn bundle(
+        &self,
+        user_id: &boma_domain::UserId,
+    ) -> Result<boma_app::ports::ExportBundle, AppError> {
+        let state = read(&self.state);
+        let Some(user_row) = state.users.iter().find(|row| row.user.id == *user_id) else {
+            return Err(AppError::NotFound);
+        };
+        let profile = user_row.user.clone();
+        let bots: Vec<boma_domain::Bot> = state
+            .bots
+            .iter()
+            .filter(|row| row.bot.user_id == *user_id)
+            .map(|row| row.bot.clone())
+            .collect();
+        let bot_ids: std::collections::HashSet<String> =
+            bots.iter().map(|bot| bot.id.as_str().to_owned()).collect();
+        let threads: Vec<boma_domain::Thread> = state
+            .threads
+            .iter()
+            .filter(|row| bot_ids.contains(row.thread.bot_id.as_str()))
+            .map(|row| row.thread.clone())
+            .collect();
+        let thread_ids: std::collections::HashSet<String> = threads
+            .iter()
+            .map(|thread| thread.id.as_str().to_owned())
+            .collect();
+        let mut messages: Vec<boma_domain::Message> = state
+            .messages
+            .iter()
+            .filter(|row| thread_ids.contains(row.message.thread_id.as_str()))
+            .map(|row| row.message.clone())
+            .collect();
+        messages.sort_by(|left, right| {
+            (left.thread_id.as_str(), left.seq).cmp(&(right.thread_id.as_str(), right.seq))
+        });
+        let bot_memory: Vec<boma_domain::MemoryDocument> = state
+            .memory_documents
+            .iter()
+            .filter(|row| {
+                row.bot_id
+                    .as_ref()
+                    .is_some_and(|bot_id| bot_ids.contains(bot_id.as_str()))
+            })
+            .map(|row| boma_domain::MemoryDocument {
+                space_id: row.space_id.clone(),
+                bot_id: row.bot_id.clone(),
+                path: row.path.clone(),
+                content: row.content.clone(),
+                revision: row.revision,
+                updated_at: row.updated_at.clone(),
+            })
+            .collect();
+        let routines: Vec<boma_app::ports::Routine> = state
+            .routines
+            .iter()
+            .filter(|row| row.routine.user_id == *user_id)
+            .map(|row| row.routine.clone())
+            .collect();
+        let artifacts: Vec<boma_app::ports::ArtifactMeta> = state
+            .artifacts
+            .iter()
+            .filter(|row| row.user_id == *user_id)
+            .map(|row| boma_app::ports::ArtifactMeta {
+                id: row.id.clone(),
+                name: row.name.clone(),
+                declared_mime: row.declared_mime.clone(),
+                mime_type: row.mime_type.clone(),
+                size: i64::try_from(row.size).unwrap_or(i64::MAX),
+                hash: row.hash.clone(),
+                storage_key: row.storage_key.clone(),
+                root_artifact_id: row.root_artifact_id.clone(),
+                version: i64::from(row.version),
+                created_at: row.created_at.clone(),
+            })
+            .collect();
+        Ok(boma_app::ports::ExportBundle {
+            profile,
+            bots,
+            threads,
+            messages,
+            bot_memory,
+            routines,
+            artifacts,
+        })
+    }
+
+    async fn create(
+        &self,
+        id: &str,
+        user_id: &boma_domain::UserId,
+        created_at: &str,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        state.account_exports.push(AccountExportRow {
+            id: id.to_owned(),
+            user_id: user_id.as_str().to_owned(),
+            status: "pending".to_owned(),
+            payload_bytes: 0,
+            skipped: Vec::new(),
+            created_at: created_at.to_owned(),
+        });
+        Ok(())
+    }
+
+    async fn find(
+        &self,
+        id: &str,
+        user_id: &boma_domain::UserId,
+    ) -> Result<Option<boma_app::ports::ExportRow>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .account_exports
+            .iter()
+            .find(|row| row.id == id && row.user_id == user_id.as_str())
+            .map(|row| boma_app::ports::ExportRow {
+                id: row.id.clone(),
+                user_id: row.user_id.clone(),
+                status: row.status.clone(),
+                payload_bytes: row.payload_bytes,
+                skipped: row.skipped.clone(),
+                created_at: row.created_at.clone(),
+            }))
+    }
+
+    async fn mark_ready(
+        &self,
+        id: &str,
+        payload_bytes: i64,
+        skipped: Vec<String>,
+        _now: &str,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        if let Some(row) = state.account_exports.iter_mut().find(|row| row.id == id) {
+            "ready".clone_into(&mut row.status);
+            row.payload_bytes = payload_bytes;
+            row.skipped = skipped;
+        }
+        Ok(())
     }
 }
 

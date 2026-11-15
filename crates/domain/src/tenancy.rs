@@ -31,11 +31,13 @@ pub enum SystemReason {
     SharedPageRead,
     /// A SCIM-provisioning request from an enterprise directory (REQ-045).
     ScimDirectorySync,
+    /// An account whose data is leaving (or being deleted) on the owner's behalf (REQ-044).
+    AccountExport,
 }
 
 impl SystemReason {
     /// Every reason, in the order the product declares them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Boot,
         Self::Authentication,
         Self::WebhookDelivery,
@@ -43,6 +45,7 @@ impl SystemReason {
         Self::DataMigration,
         Self::SharedPageRead,
         Self::ScimDirectorySync,
+        Self::AccountExport,
     ];
 
     /// The wire value, used in the audit log.
@@ -56,6 +59,7 @@ impl SystemReason {
             Self::DataMigration => "data_migration",
             Self::SharedPageRead => "shared_page_read",
             Self::ScimDirectorySync => "scim_directory_sync",
+            Self::AccountExport => "account_export",
         }
     }
 
@@ -73,6 +77,7 @@ impl SystemReason {
             "data_migration" => Ok(Self::DataMigration),
             "shared_page_read" => Ok(Self::SharedPageRead),
             "scim_directory_sync" => Ok(Self::ScimDirectorySync),
+            "account_export" => Ok(Self::AccountExport),
             other => Err(DomainError::UnknownSystemReason(other.to_owned())),
         }
     }
