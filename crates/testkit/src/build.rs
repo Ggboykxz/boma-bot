@@ -8608,7 +8608,8 @@ mod group_routing_tests {
             .iter()
             .filter(|message| {
                 message.role == boma_domain::MessageRole::Bot
-                    && message.bot_id.as_ref().map(boma_domain::BotId::as_str) == Some(writer.as_str())
+                    && message.bot_id.as_ref().map(boma_domain::BotId::as_str)
+                        == Some(writer.as_str())
             })
             .flat_map(|message| message.blocks.iter())
             .filter_map(boma_domain::Block::as_text)
@@ -8658,7 +8659,8 @@ mod group_routing_tests {
             .iter()
             .filter(|message| {
                 message.role == boma_domain::MessageRole::Bot
-                    && message.bot_id.as_ref().map(boma_domain::BotId::as_str) == Some(analyst.as_str())
+                    && message.bot_id.as_ref().map(boma_domain::BotId::as_str)
+                        == Some(analyst.as_str())
             })
             .flat_map(|message| message.blocks.iter())
             .filter_map(boma_domain::Block::as_text)
