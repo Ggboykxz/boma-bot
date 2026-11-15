@@ -38,7 +38,8 @@ use crate::{
         ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
         ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
         ExportStartReply, ExportStatusReply, ExternalAgentConnectedReply,
-        ExternalAgentDisconnectedReply, GroupBotView, GroupGetReply, GroupListView,
+        ExternalAgentDisconnectedReply, ExternalAgentStatusReply, GroupBotView, GroupGetReply,
+        GroupListView,
         GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply, HeldDropReply,
         HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply, InstallTelegramReply,
         InstallUrlReply, InstallationsReply, InvitationAcceptReply, InvitationAcceptRequest,
@@ -140,6 +141,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BOTS, "connectExternal"),
         (namespaces::BOTS, "disconnectExternal"),
         (namespaces::BOTS, "signIns"),
+        (namespaces::BOTS, "externalAgentStatus"),
         (namespaces::SPACES, "create"),
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
@@ -355,6 +357,9 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "signIns") => bots_sign_ins(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "externalAgentStatus") => bots_external_agent_status(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::SPACES, "create") => spaces_create(state, auth, body)
@@ -3835,5 +3840,37 @@ async fn bots_sign_ins(
                 created_at: request.created_at,
             })
             .collect(),
+    })
+}
+
+
+// ---------------------------------------------------------------------------
+// M12.2 — external agent status
+// ---------------------------------------------------------------------------
+
+/// The body of `bots.externalAgentStatus`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotsExternalAgentStatusRequest {
+    /// The bot to ask about.
+    bot_id: String,
+}
+
+/// `bots.externalAgentStatus` — whether the bot points at an external executor, and if so, which.
+///
+/// The reply carries the connection state and the executor's address; the secret never appears.
+async fn bots_external_agent_status(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ExternalAgentStatusReply, ApiError> {
+    let request: BotsExternalAgentStatusRequest = parse(&body)?;
+    let outcome = usecases::external_agent_status(state.app(), &auth.actor.context, &request.bot_id).await?;
+    Ok(ExternalAgentStatusReply {
+        connected: outcome.connected,
+        base_url: outcome.base_url,
+        agent_name: outcome.agent_name,
+        secret_name: outcome.secret_name,
+        connected_at: outcome.connected_at,
     })
 }

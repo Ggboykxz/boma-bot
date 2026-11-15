@@ -8,6 +8,7 @@ import { Button } from "@/components/base/buttons/button";
 import { MessageBlocks } from "@/components/thread/message-blocks";
 import { ThreadComposer } from "@/components/thread/thread-composer";
 import { ComputerPanel } from "@/components/thread/computer-panel";
+import { ExternalAgentPanel } from "@/components/thread/external-agent-panel";
 import {
   botsGet,
   botsList,
@@ -330,6 +331,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
           >
             {snoozed ? t("thread.unsnooze") : t("thread.snooze")}
           </button>
+          <ExternalAgentPanel botId={botId} />
         </div>
       </header>
 

@@ -2071,3 +2071,44 @@ pub struct SignInRequestedReply {
     /// The site origin.
     pub origin: String,
 }
+
+
+/// The reply of `bots.externalAgentStatus`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentStatusReply {
+    /// Whether the bot points at an external executor.
+    pub connected: bool,
+    /// The address the bot points at, when it does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// The agent name the executor was told to run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    /// The secret name carrying the bearer, when one is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_name: Option<String>,
+    /// When the connection was saved, when it exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connected_at: Option<String>,
+}
+
+/// The reply for `bots.externalAgentStatus`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentStatusView {
+    /// Whether the bot points at an external executor.
+    pub connected: bool,
+    /// The address the bot points at, when it does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// The agent name configured for the executor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    /// The secret name carrying the bearer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_name: Option<String>,
+    /// When the connection was saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connected_at: Option<String>,
+}

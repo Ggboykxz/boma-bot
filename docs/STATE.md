@@ -110,6 +110,11 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
   - Improvements analysis v2 (`docs/IMPROVEMENTS.md`, this slice): every OpenBot area mapped
   - M13.1 (this slice, `001d956` after amendment `marker`) — sign-in requests land: a bot can ask a person to sign into a site as a write-class effect (`signin.site` tool); the existing approval gate asks the person; the answer records/pending or granted in `signin_requests` via `SignInStore` (PG + RLS; migrated with `0055_signin_requests.sql`). RPC: `bots.requestSignIn`, `bots.signIns`. Tests: `req_060_bot_asks_for_signin_and_person_grants_in_one_shot` (wire approval → request recorded → grant resolves once, second resolve refused).
+  - M12.2 (this slice) — external agents are clickable: thread header now carries an inline
+    panel (inline form for base URL + agent name + secret name) calling
+    `/rpc/bots/externalAgentStatus`, `bots.connectExternal`, `botsDisconnectExternal`;
+    attached and disconnected flows covered by `tests/external-agent-panel.spec.ts`.
+    `REQ-059` spec amended separately.
   - M12.1 (this slice, `001d956`) — external agents over AG-UI are wired, end to end: a TCP stub
     AG-UI executor receives the run and answers in the room attributed to its bot; the approval
     gate relays post-approval effects exactly once through the existing rail; REQ-059 added to

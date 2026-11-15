@@ -9076,6 +9076,64 @@ pub async fn get_group(
 // M12.1 — external agents (REQ-059)
 // ---------------------------------------------------------------------------
 
+/// The status of an external executor for a bot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalAgentStatusOutcome {
+    /// Whether the bot points at an executor.
+    pub connected: bool,
+    /// The executor address, when connected.
+    pub base_url: Option<String>,
+    /// The agent name, when connected.
+    pub agent_name: Option<String>,
+    /// The secret name holding the bearer, when set.
+    pub secret_name: Option<String>,
+    /// When the connection was saved.
+    pub connected_at: Option<String>,
+}
+
+/// The external executor attached to a bot, when any.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the bot does not exist or is archived.
+pub async fn external_agent_status(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<ExternalAgentStatusOutcome, AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let connection = app
+        .stores
+        .external_agents
+        .find(context, &bot_id)
+        .await?;
+    Ok(match connection {
+        Some(connection) => ExternalAgentStatusOutcome {
+            connected: true,
+            base_url: Some(connection.base_url),
+            agent_name: connection.agent_name,
+            secret_name: connection.secret_name,
+            connected_at: Some(connection.updated_at),
+        },
+        None => ExternalAgentStatusOutcome {
+            connected: false,
+            base_url: None,
+            agent_name: None,
+            secret_name: None,
+            connected_at: None,
+        },
+    })
+}
+
 /// The outcome of connecting a bot to an external agent executor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConnected {

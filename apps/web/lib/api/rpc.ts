@@ -1407,3 +1407,52 @@ export async function groupsMessages(
     ...(typeof reply.nextCursor === "string" ? { nextCursor: reply.nextCursor } : {}),
   };
 }
+
+
+// ---------------------------------------------------------------------------
+// M12.2 — external agents UI (REQ-059)
+// ---------------------------------------------------------------------------
+
+export interface ExternalAgentStatus {
+  connected: boolean;
+  baseUrl?: string;
+  agentName?: string;
+  secretName?: string;
+  connectedAt?: string;
+}
+
+export async function botsExternalAgentStatus(
+  request: { botId: string },
+  signal?: AbortSignal,
+): Promise<ExternalAgentStatus> {
+  return call<ExternalAgentStatus>("bots", "externalAgentStatus", request, signal);
+}
+
+export interface BotsConnectExternalRequest {
+  botId: string;
+  baseUrl: string;
+  agentName?: string;
+  secretName?: string;
+}
+
+export interface BotsConnectExternalReply {
+  botId: string;
+  baseUrl: string;
+  agentName: string | null;
+  secretName: string | null;
+  connectedAt: string;
+}
+
+export async function botsConnectExternal(
+  request: BotsConnectExternalRequest,
+  signal?: AbortSignal,
+): Promise<BotsConnectExternalReply> {
+  return call<BotsConnectExternalReply>("bots", "connectExternal", request, signal);
+}
+
+export async function botsDisconnectExternal(
+  request: { botId: string },
+  signal?: AbortSignal,
+): Promise<{ botId: string; disconnected: boolean }> {
+  return call<{ botId: string; disconnected: boolean }>("bots", "disconnectExternal", request, signal);
+}
