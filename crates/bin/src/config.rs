@@ -273,7 +273,9 @@ impl Config {
             "BOMA_SESSION_TTL_SECONDS",
             HttpConfig::DEFAULT_SESSION_TTL_SECONDS,
         )?)?
-        .with_secure_cookies(optional_parsed(&env, "BOMA_SECURE_COOKIES", true)?);
+        .with_secure_cookies(optional_parsed(&env, "BOMA_SECURE_COOKIES", true)?)
+        .with_web_root(optional(&env, "BOMA_WEB_ROOT"))
+        .validate_web_root()?;
 
         let format = match optional(&env, "BOMA_LOG_FORMAT").as_deref() {
             None | Some("pretty") => LogFormat::Pretty,

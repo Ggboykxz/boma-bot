@@ -38,6 +38,14 @@ pub enum HttpConfigError {
         /// Largest accepted value.
         max: i64,
     },
+    /// `BOMA_WEB_ROOT` does not point at a directory with an `index.html`.
+    #[error("`{name}` {reason}")]
+    Invalid {
+        /// Name of the setting, as it appears in the environment.
+        name: String,
+        /// Why it was refused.
+        reason: String,
+    },
 }
 
 /// How the HTTP server behaves.
@@ -53,6 +61,9 @@ pub struct HttpConfig {
     trusted_proxies: Vec<IpAddr>,
     session_ttl_seconds: i64,
     secure_cookies: bool,
+    /// The directory that carries the static web export, when this surface serves it
+    /// (REQ-055, ADR-013). `None` means the surface answers only the API.
+    web_root: Option<String>,
 }
 
 impl HttpConfig {
@@ -112,7 +123,42 @@ impl HttpConfig {
             trusted_proxies,
             session_ttl_seconds: Self::DEFAULT_SESSION_TTL_SECONDS,
             secure_cookies: true,
+            web_root: None,
         })
+    }
+
+    /// The directory of the static web export the surface serves, when it serves it.
+    #[must_use]
+    pub fn web_root(&self) -> Option<&str> {
+        self.web_root.as_deref()
+    }
+
+    /// Attaches the static web root the surface serves (REQ-055).
+    #[must_use]
+    pub fn with_web_root(mut self, web_root: Option<String>) -> Self {
+        self.web_root = web_root;
+        self
+    }
+
+    /// Refuses a root that does not hold an export; a deployment that points at a missing
+    /// directory is a startup error, never a silent 404-only shell.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpConfigError::Invalid { name, .. }`] when the root does not exist, is not a
+    /// directory, or does not contain an `index.html`.
+    pub fn validate_web_root(self) -> Result<Self, HttpConfigError> {
+        if let Some(root) = &self.web_root {
+            let path = std::path::Path::new(root.as_str());
+            if !path.is_dir() || !path.join("index.html").is_file() {
+                return Err(HttpConfigError::Invalid {
+                    name: "BOMA_WEB_ROOT".to_owned(),
+                    reason: "must point at the static export directory (index.html present)"
+                        .to_owned(),
+                });
+            }
+        }
+        Ok(self)
     }
 
     /// Sets how long a session lives.

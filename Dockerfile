@@ -3,6 +3,14 @@
 # Two stages: the Rust toolchain builds, a slim image runs. The web export is a build-time
 # dependency only; nothing JavaScript runs in production (ADR-013).
 
+# The web export compiles ahead of the Rust toolchain so its layer is cacheable on its own.
+FROM node:22-bookworm-slim AS web
+WORKDIR /web
+COPY apps/web/package.json apps/web/package-lock.json ./
+RUN npm ci
+COPY apps/web ./
+RUN npm run build
+
 FROM rust:1.99.1-bookworm AS builder
 WORKDIR /src
 
@@ -25,6 +33,8 @@ RUN apt-get update \
  && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin boma
 
 COPY --from=builder /src/target/release/boma /usr/local/bin/boma
+COPY --from=web /web/out /usr/local/share/boma-web
+ENV BOMA_WEB_ROOT=/usr/local/share/boma-web
 
 USER 10001:10001
 EXPOSE 3000

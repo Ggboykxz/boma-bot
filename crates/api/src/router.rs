@@ -2,8 +2,10 @@
 
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
-    http::{HeaderValue, StatusCode, header},
+    body::Body,
+    extract::{DefaultBodyLimit, State},
+    http::{HeaderValue, Method, Request, StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use tower_http::{set_header::SetResponseHeaderLayer, timeout::TimeoutLayer};
@@ -108,7 +110,7 @@ pub fn router(state: AppState) -> Router {
             get(pages::page_runtime_js),
         )
         .merge(rpc::router())
-        .fallback(not_found)
+        .fallback(web_fallback)
         .with_state(state)
         .layer(DefaultBodyLimit::max(http.body_limit_bytes()))
         .layer(TimeoutLayer::with_status_code(
@@ -133,7 +135,139 @@ pub fn router(state: AppState) -> Router {
         ))
 }
 
-async fn not_found() -> ApiError {
+/// The static-adjacent fallback (REQ-055).
+///
+/// The API's rule is that every unknown path answers the stable `404` JSON of REQ-040. A
+/// deployment with `BOMA_WEB_ROOT` pointing at the static export widens it in one place only:
+///
+/// - `GET`/`HEAD` to an unknown path resolves against the export directory (directory URLs map
+///   to `<dir>/index.html`), serving the export's file with its own type, or `404.html` with a
+///   `404` status when the export carries one;
+/// - `/api`, `/rpc`, `/internal`, the probes and the metrics route are never resolved against
+///   the export: an unknown API path gets the JSON `404` it always got;
+/// - any other method, or any accept that is not HTML, keeps the JSON `404`;
+/// - with no `BOMA_WEB_ROOT`, the fallback is the JSON `404` it has always been.
+fn resolve_static(root: &str, path: &str) -> Option<std::path::PathBuf> {
+    let relative = path.trim_start_matches('/');
+    if relative
+        .split('/')
+        .any(|segment| segment.contains('.') || segment.contains('\\'))
+    {
+        return None;
+    }
+    // `/` and `/app/` are the export's directory-style URLs; they resolve to `<dir>/index.html`.
+    let segments: Vec<&str> = relative
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let mut base = std::path::PathBuf::from(root);
+    for segment in segments {
+        if segment.is_empty() {
+            continue;
+        }
+        base.push(segment);
+    }
+    if base.is_file() {
+        return Some(base);
+    }
+    let index = base.join("index.html");
+    if index.is_file() {
+        return Some(index);
+    }
+    None
+}
+
+fn deny_list(path: &str) -> bool {
+    path == "/api"
+        || path.starts_with("/api/")
+        || path == "/rpc"
+        || path.starts_with("/rpc/")
+        || path == "/internal"
+        || path.starts_with("/internal/")
+        || path == "/health"
+        || path == "/healthz"
+        || path == "/ready"
+        || path == "/readyz"
+        || path == "/metrics"
+}
+
+fn content_type(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+    {
+        "html" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "json" | "map" => "application/json; charset=utf-8",
+        "txt" => "text/plain; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        _ => "application/octet-stream",
+    }
+}
+
+async fn web_fallback(State(state): State<AppState>, request: Request<Body>) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let accepts_html = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/html") || value.contains("*/*"));
+
+    let html_request = (method == Method::GET || method == Method::HEAD) && !deny_list(&path);
+    if html_request && let Some(root) = state.http().web_root() {
+        if let Some(file) = resolve_static(root, &path)
+            && let Ok(body) = tokio::fs::read(&file).await
+        {
+            if method == Method::HEAD {
+                return (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, content_type(&file)),
+                        (header::CONTENT_LENGTH, &body.len().to_string()),
+                        (header::CACHE_CONTROL, "no-cache"),
+                    ],
+                )
+                    .into_response();
+            }
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, content_type(&file)),
+                    (header::CACHE_CONTROL, "no-cache"),
+                ],
+                body,
+            )
+                .into_response();
+        }
+        if accepts_html {
+            let not_found_page = std::path::PathBuf::from(root).join("404.html");
+            if let Ok(body) = tokio::fs::read(&not_found_page).await {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [
+                        (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                        (header::CACHE_CONTROL, "no-store"),
+                    ],
+                    body,
+                )
+                    .into_response();
+            }
+        }
+    }
+    not_found().into_response()
+}
+
+fn not_found() -> ApiError {
     ApiError::not_found()
 }
 

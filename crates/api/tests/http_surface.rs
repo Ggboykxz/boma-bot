@@ -821,3 +821,196 @@ async fn req_045_a_directory_provisions_an_enabled_user_and_deprovisions_it() {
         "a scim.deprovisioned event is recorded"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M10 — the static web export at the deployment origin (REQ-055)
+// ---------------------------------------------------------------------------
+
+fn export_fixture() -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("boma_web_export_{:x}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("app")).expect("the fixture directory is writable");
+    std::fs::write(
+        root.join("index.html"),
+        "<!doctype html><title>Boma Bot</title>shell",
+    )
+    .expect("index.html writes");
+    std::fs::write(
+        root.join("app").join("index.html"),
+        "<!doctype html><title>Boma Bot</title>app-shell",
+    )
+    .expect("app/index.html writes");
+    std::fs::write(
+        root.join("404.html"),
+        "<!doctype html><title>Not found</title><h1>Not found</h1>",
+    )
+    .expect("404.html writes");
+    std::fs::write(root.join("secret.txt"), "should not be reachable?")
+        .expect("fixture file writes");
+    root
+}
+
+fn state_with_web_root(healthy: bool) -> (AppState, std::path::PathBuf) {
+    let root = export_fixture();
+    let http = HttpConfig::new(
+        SocketAddr::from(([127, 0, 0, 1], 3000)),
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        64 * 1024,
+        Vec::new(),
+    )
+    .expect("the fixture configuration is valid")
+    .with_web_root(Some(root.to_str().expect("the root is utf-8").to_owned()))
+    .validate_web_root()
+    .expect("the fixture root validates");
+    let state = AppState::new(
+        Readiness::new(vec![Arc::new(Probe { healthy })]),
+        capabilities(),
+        auth_capabilities(),
+        http,
+        boma_app::App::new(
+            boma_app::Stores::new(
+                std::sync::Arc::new(boma_testkit::MemoryAccountStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryUserStore::default()),
+                std::sync::Arc::new(boma_testkit::MemorySessionStore::default()),
+                std::sync::Arc::new(boma_testkit::MemorySpaceStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryBotStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryThreadStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryMessageStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryRunStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryEventStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryInvitationStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryCardStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryPendingToolCallStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryEffectStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryToolStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryRateLimitStore::default()),
+                std::sync::Arc::new(boma_testkit::MemorySecretStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryPluginSubmissionStore::default()),
+                std::sync::Arc::new(boma_testkit::MemorySkillStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryMcpServerStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryAuditStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryConnectorStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryPluginInstallStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryArtifactStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryPageStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryTicketStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryMailStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryMessagingStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryReactionStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryReadStateStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryRosterStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryMemoryStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryRoutineStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryComputerStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryScreenCapabilityStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryModelStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryBillingStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryAccountExportStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryAdminStore::new(
+                    &boma_testkit::MemoryDatabase::new(),
+                )),
+            ),
+            boma_app::Services::new(
+                std::sync::Arc::new(boma_testkit::MemoryEventPublisher::default()),
+                std::sync::Arc::new(boma_testkit::FixedHasher),
+                std::sync::Arc::new(boma_testkit::ScriptedTokens::default()),
+                std::sync::Arc::new(boma_testkit::ScriptedIds::counter()),
+                std::sync::Arc::new(boma_testkit::ScriptedClock::fixed("2026-01-01T00:00:00Z")),
+                boma_domain::model::DeploymentModels {
+                    reachable: vec!["anthropic/claude-sonnet".to_owned()],
+                    default: "anthropic/claude-sonnet".to_owned(),
+                },
+                std::sync::Arc::new(boma_testkit::ScriptedMcpTransport::new()),
+                std::sync::Arc::new(boma_testkit::ScriptedPluginFetcher::new()),
+                std::sync::Arc::new(boma_testkit::ScriptedOAuthClient::new()),
+                std::sync::Arc::new(boma_testkit::MemoryArtifactContentStore::default()),
+                std::sync::Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
+                std::sync::Arc::new(boma_testkit::ScriptedModelTransport::new()),
+            ),
+        ),
+    );
+    (state, root)
+}
+
+async fn get_accept(state: AppState, path: &str, accept: &str) -> Response {
+    let mut builder = Request::builder().method("GET").uri(path);
+    if !accept.is_empty() {
+        builder = builder.header(header::ACCEPT, accept);
+    }
+    let request = builder.body(Body::empty()).expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+#[tokio::test]
+async fn req_055_the_export_serves_directory_index_pages_at_the_origin() {
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(state.clone(), "/", "text/html").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = get_accept(state, "/app/", "text/html").await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn req_055_an_unknown_api_path_keeps_the_json_404_even_with_the_export_next_to_it() {
+    let (state, _) = state_with_web_root(true);
+    let response = get_accept(state, "/api/unknown/thing", "text/html").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        content_type.starts_with("application/json"),
+        "{content_type}"
+    );
+}
+
+#[tokio::test]
+async fn req_055_an_unknown_html_page_answers_404_with_the_exports_not_found_page() {
+    let (state, _) = state_with_web_root(true);
+    let response = get_accept(
+        state,
+        "/this-page-does-not-exist",
+        "text/html,application/xhtml+xml,*/*;q=0.8",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(content_type.starts_with("text/html"), "{content_type}");
+}
+
+#[tokio::test]
+async fn req_055_an_unknown_accept_keeps_the_json_404() {
+    let (state, _) = state_with_web_root(true);
+    let response = get_accept(state, "/api/nope", "application/ld+json").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn req_055_a_root_without_an_index_html_is_refused_at_construction() {
+    let bogus = std::env::temp_dir().join(format!("boma_bogus_root_{:x}", std::process::id()));
+    std::fs::create_dir_all(&bogus).expect("the fixture directory is writable");
+    let http = HttpConfig::new(
+        SocketAddr::from(([127, 0, 0, 1], 3000)),
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        64 * 1024,
+        Vec::new(),
+    )
+    .expect("the fixture configuration is valid")
+    .with_web_root(Some(bogus.to_str().expect("utf-8").to_owned()))
+    .validate_web_root();
+    assert!(http.is_err(), "a root without an index.html is refused");
+    let _ = std::fs::remove_dir_all(&bogus);
+}

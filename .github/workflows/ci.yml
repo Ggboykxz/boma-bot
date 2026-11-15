@@ -179,6 +179,20 @@ jobs:
             docker compose logs app
             exit 1
           fi
+          # REQ-055: the static export ships inside the image at BOMA_WEB_ROOT (ADR-013,
+          # ADR-018); the probe below is the observable one for the web surface.
+          for path in / /app/ /this-page-does-not-exist; do
+            code=$(curl --silent --output /tmp/boma-web.html --write-out '%{http_code}' "http://127.0.0.1:3000${path}")
+            echo "/${path#/} -> $code"
+            head -c 60 /tmp/boma-web.html
+            echo
+            [ "$code" = "200" ] || [ "$code" = "404" ]
+            if [ "$path" = "/this-page-does-not-exist" ]; then
+              grep -q 'Page not' /tmp/boma-web.html || exit 1
+            else
+              grep -q '<title>Boma Bot</title>' /tmp/boma-web.html || exit 1
+            fi
+          done
 
       - name: stop the stack and its volume
         if: always()
