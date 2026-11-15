@@ -15,11 +15,7 @@ export function generateStaticParams(): Array<{ slugToken: string }> {
   return [{ slugToken: "token_golden" }, { slugToken: "token_unknown" }];
 }
 
-export default async function SharedPage({
-  params,
-}: {
-  params: Promise<{ slugToken: string }>;
-}) {
-  const { slugToken } = await params;
-  return <SharedPageScreen token={slugToken} />;
+export default function SharedPage() {
+  // The screen reads the token from the location (ADR-013): one shell serves every share link.
+  return <SharedPageScreen />;
 }

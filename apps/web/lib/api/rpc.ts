@@ -922,3 +922,84 @@ export async function invitationPreview(
   }
   return (await response.json()) as InvitationPublicPreview;
 }
+
+
+// ---------------------------------------------------------------------------
+// M10 — artifacts (REQ-036, spec §8.5)
+// ---------------------------------------------------------------------------
+
+/** The artifact as the API exposes it (REQ-036). */
+export interface ArtifactView {
+  id: string;
+  botId?: string;
+  groupId?: string;
+  runId?: string;
+  name: string;
+  description: string;
+  declaredMime: string;
+  mimeType: string;
+  size: number;
+  hash: string;
+  rootArtifactId: string;
+  version: number;
+  createdAt: string;
+}
+
+/** The reply of `artifacts.listSpace`. */
+export interface ArtifactListSpaceReply {
+  artifacts: ArtifactView[];
+}
+
+/** The reply of `artifacts.get` / `artifacts.getById`. */
+export interface ArtifactGetReply {
+  artifact: ArtifactView;
+  contentBase64: string;
+}
+
+/** One version of a family (REQ-036). */
+export interface ArtifactVersionView {
+  id: string;
+  version: number;
+  rootArtifactId: string;
+}
+
+/** The reply of `artifacts.listVersions`. */
+export interface ArtifactVersionsReply {
+  versions: ArtifactVersionView[];
+}
+
+/** The reply of `artifacts.remove`. */
+export interface ArtifactRemoveReply {
+  removed: number;
+}
+
+/** `artifacts.listSpace` — the latest version of every family in the space. */
+export function artifactsListSpace(
+  signal?: AbortSignal,
+): Promise<ArtifactListSpaceReply> {
+  return call<ArtifactListSpaceReply>("artifacts", "listSpace", {}, signal);
+}
+
+/** `artifacts.get` — the bytes; `version` pins a specific one, undefined is the latest. */
+export function artifactsGet(
+  request: { artifactId: string; version?: number },
+  signal?: AbortSignal,
+): Promise<ArtifactGetReply> {
+  return call<ArtifactGetReply>("artifacts", "get", request, signal);
+}
+
+/** `artifacts.listVersions` — the family, newest first. */
+export function artifactsListVersions(
+  request: { artifactId: string },
+  signal?: AbortSignal,
+): Promise<ArtifactVersionsReply> {
+  return call<ArtifactVersionsReply>("artifacts", "listVersions", request, signal);
+}
+
+/** `artifacts.remove` — the family, every version, gone for the whole space. */
+export function artifactsRemove(
+  request: { artifactId: string },
+  signal?: AbortSignal,
+): Promise<ArtifactRemoveReply> {
+  return call<ArtifactRemoveReply>("artifacts", "remove", request, signal);
+}

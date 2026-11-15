@@ -827,8 +827,12 @@ async fn req_045_a_directory_provisions_an_enabled_user_and_deprovisions_it() {
 // M10 — the static web export at the deployment origin (REQ-055)
 // ---------------------------------------------------------------------------
 
+static EXPORT_FIXTURE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn export_fixture() -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!("boma_web_export_{:x}", std::process::id()));
+    // Each test gets its own export: parallel tests would otherwise race on the directory.
+    let unique = EXPORT_FIXTURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("boma_web_export_{:x}_{unique}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("app")).expect("the fixture directory is writable");
     std::fs::write(
@@ -846,6 +850,20 @@ fn export_fixture() -> std::path::PathBuf {
         "<!doctype html><title>Not found</title><h1>Not found</h1>",
     )
     .expect("404.html writes");
+    std::fs::create_dir_all(root.join("app").join("artifacts").join("artifact_golden"))
+        .expect("artifact detail dir writes");
+    std::fs::write(
+        root.join("app").join("artifacts").join("artifact_golden").join("index.html"),
+        "<!doctype html><title>Boma Bot</title>artifact-detail-shell",
+    )
+    .expect("artifact detail shell writes");
+    std::fs::create_dir_all(root.join("p").join("token_unknown"))
+        .expect("shared page dir writes");
+    std::fs::write(
+        root.join("p").join("token_unknown").join("index.html"),
+        "<!doctype html><title>Boma Bot</title>shared-page-shell",
+    )
+    .expect("shared page shell writes");
     std::fs::write(root.join("secret.txt"), "should not be reachable?")
         .expect("fixture file writes");
     root
@@ -1017,4 +1035,55 @@ fn req_055_a_root_without_an_index_html_is_refused_at_construction() {
     .validate_web_root();
     assert!(http.is_err(), "a root without an index.html is refused");
     let _ = std::fs::remove_dir_all(&bogus);
+}
+
+#[tokio::test]
+async fn req_055_an_arbitrary_bot_link_under_app_serves_the_app_shell() {
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(state, "/app/bot_that_does_not_exist/", "text/html").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(content_type.starts_with("text/html"), "{content_type}");
+}
+
+#[tokio::test]
+async fn req_055_an_arbitrary_artifact_link_serves_the_detail_shell() {
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(state.clone(), "/app/artifacts/some-artifact-id/", "text/html").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body reads")
+        .to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).expect("the shell is utf-8");
+    assert!(body.contains("artifact-detail-shell"), "{body}");
+}
+
+#[tokio::test]
+async fn req_055_an_arbitrary_share_link_serves_the_shared_page_shell() {
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(state, "/p/some-share-token/", "text/html").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body reads")
+        .to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).expect("the shell is utf-8");
+    assert!(body.contains("shared-page-shell"), "{body}");
+}
+
+#[tokio::test]
+async fn req_055_an_unknown_top_level_page_keeps_the_exports_404() {
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(state, "/this-page-does-not-exist", "text/html").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

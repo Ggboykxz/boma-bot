@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+
+import { locSubscribe, match } from "@/lib/loc";
 
 /**
  * The blocks a page may carry (mirror of the backend's `PageBlock`; the validator is the
@@ -133,12 +135,19 @@ function Block({ block }: { block: SharedPageBlock }) {
 /**
  * The public screen for a shared page. The request reaches the API without a session; a 404
  * from the token path and a missing page share the same document, always.
+ *
+ * The token is read from the URL (ADR-013): the export carries one shell for the `/p/` subtree,
+ * so no pre-rendered page knows which token it was opened with.
  */
-export function SharedPageScreen({ token }: { token: string }) {
+export function SharedPageScreen() {
+  const token = useSyncExternalStore(locSubscribe, () => pathToken(), () => null);
   const [phase, setPhase] = useState<Phase>("loading");
   const [page, setPage] = useState<SharedPage | null>(null);
 
   useEffect(() => {
+    if (token === null) {
+      return;
+    }
     const controller = new AbortController();
     fetch(`/api/v1/pages/shared/${encodeURIComponent(token)}`, {
       headers: { accept: "application/json" },
@@ -202,4 +211,10 @@ export function SharedPageScreen({ token }: { token: string }) {
       </article>
     </main>
   );
+}
+
+
+/** The token segment of `/p/<token>`, read from the location. */
+function pathToken(): string | null {
+  return match("/p/", window.location.pathname);
 }

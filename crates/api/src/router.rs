@@ -189,6 +189,26 @@ fn resolve_static(root: &str, path: &str) -> Option<std::path::PathBuf> {
     None
 }
 
+/// The app-prefix fallbacks of ADR-013.
+///
+/// The static export carries one shell per screen family; the screens read the URL at runtime,
+/// so an arbitrary deep link under the prefix must land on the same shell rather than the
+/// `404.html`. The first prefix that matches `path` wins; `app` is listed last so the
+/// artifacts detail subtree is matched before the generic application shell.
+const PREFIX_FALLBACKS: &[(&str, &str)] = &[
+    ("/app/artifacts/", "app/artifacts/artifact_golden/index.html"),
+    ("/p/", "p/token_unknown/index.html"),
+    ("/app/", "app/index.html"),
+];
+
+fn resolve_prefix_fallback(root: &str, path: &str) -> Option<std::path::PathBuf> {
+    PREFIX_FALLBACKS
+        .iter()
+        .find(|(prefix, _)| path.starts_with(prefix))
+        .map(|(_, fallback)| std::path::PathBuf::from(root).join(fallback))
+        .filter(|candidate| candidate.is_file())
+}
+
 fn deny_list(path: &str) -> bool {
     path == "/api"
         || path.starts_with("/api/")
@@ -237,7 +257,9 @@ async fn web_fallback(State(state): State<AppState>, request: Request<Body>) -> 
 
     let html_request = (method == Method::GET || method == Method::HEAD) && !deny_list(&path);
     if html_request && let Some(root) = state.http().web_root() {
-        if let Some(file) = resolve_static(root, &path)
+        let resolved = resolve_static(root, &path)
+            .or_else(|| resolve_prefix_fallback(root, &path));
+        if let Some(file) = resolved
             && let Ok(body) = tokio::fs::read(&file).await
         {
             if method == Method::HEAD {
