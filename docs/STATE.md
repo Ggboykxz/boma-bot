@@ -33,8 +33,9 @@
   written RPC client extension, catalogue strings (en/fr/he), Playwright specs ×3, both routes
   added to the axe gate.
 
-**CI after the failure:** run 43670039866 covers `b3896ec` (web + admin); the rust job re-runs
-the full workspace from scratch (fresh PG inside the job).
+**CI after the failure:** run 43670840598 on `06747f6` is fully green (rust — fmt, clippy,
+test with coverage, deny, trace; web — build, typecheck, lint, playwright, golden, axe;
+compose — build, migrate, serve, health). M9 is on `dev` at `06747f6`.
 
 **ADRs:** ADR-024 (`docs/adr/024-operate.md`) records the milestone decisions (export zip
 shape, on-demand rendering, flat sections, refusal rules, SCIM off-a-switch, metrics flag,
