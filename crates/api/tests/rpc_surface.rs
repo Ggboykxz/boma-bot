@@ -4230,7 +4230,10 @@ async fn req_044_the_download_route_serves_a_zip_to_the_session_that_owns_it() {
         .to_bytes();
     assert_eq!(&bytes[..4], b"PK\x03\x04", "the body is a zip archive");
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("manifest.json"), "the manifest is in the archive");
+    assert!(
+        text.contains("manifest.json"),
+        "the manifest is in the archive"
+    );
 
     // A stranger without the session is refused.
     let request = Request::builder()
