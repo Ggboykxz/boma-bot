@@ -87,6 +87,8 @@ pub struct Stores {
     pub external_agents: Arc<dyn crate::ports::ExternalAgentStore>,
     /// The sign-in requests of the improvement program (REQ-060).
     pub signin_requests: Arc<dyn crate::ports::SignInStore>,
+    /// The Web Push subscriptions and per-bot policy (REQ-064).
+    pub notifications: Arc<dyn crate::ports::NotificationStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -159,6 +161,7 @@ impl Stores {
         groups: Arc<dyn crate::ports::GroupStore>,
         external_agents: Arc<dyn crate::ports::ExternalAgentStore>,
         signin_requests: Arc<dyn crate::ports::SignInStore>,
+        notifications: Arc<dyn crate::ports::NotificationStore>,
     ) -> Self {
         Self {
             accounts,
@@ -193,6 +196,7 @@ impl Stores {
             groups,
             external_agents,
             signin_requests,
+            notifications,
             tickets,
             effects,
             tools,

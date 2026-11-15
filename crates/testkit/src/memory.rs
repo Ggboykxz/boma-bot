@@ -8847,3 +8847,228 @@ impl boma_app::ports::SignInStore for MemorySignInStore {
         Ok(req.clone())
     }
 }
+
+type PolicyKey = (String, String, String);
+
+type SendRow = (String, String, String, String, String);
+
+/// The Web Push store of the improvement program (REQ-064), in-memory.
+#[derive(Clone)]
+pub struct MemoryNotificationStore {
+    subscriptions: Arc<
+        RwLock<
+            std::collections::HashMap<String, boma_domain::notification::NotificationSubscription>,
+        >,
+    >,
+    policies: Arc<
+        RwLock<std::collections::HashMap<PolicyKey, boma_domain::notification::NotificationPolicy>>,
+    >,
+    sends: Arc<RwLock<Vec<SendRow>>>,
+    sends_count_day: String,
+}
+
+impl MemoryNotificationStore {
+    /// Builds the store on an empty database.
+    #[must_use]
+    pub fn new(_database: &MemoryDatabase) -> Self {
+        Self {
+            subscriptions: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            policies: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            sends: Arc::new(RwLock::new(Vec::new())),
+            sends_count_day: String::new(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::NotificationStore for MemoryNotificationStore {
+    async fn subscribe(
+        &self,
+        subscription: boma_domain::notification::NewNotificationSubscription,
+    ) -> Result<boma_domain::notification::NotificationSubscription, AppError> {
+        let mut subscriptions = self
+            .subscriptions
+            .write()
+            .map_err(|_| AppError::Unavailable)?;
+        let subscription = boma_domain::notification::NotificationSubscription {
+            id: subscription.id,
+            space_id: subscription.space_id,
+            user_id: subscription.user_id,
+            endpoint: subscription.endpoint,
+            p256dh: subscription.p256dh,
+            auth: subscription.auth,
+            user_agent: subscription.user_agent,
+            fail_count: 0,
+            created_at: subscription.created_at.clone(),
+            updated_at: subscription.created_at,
+        };
+        subscriptions.insert(subscription.id.clone(), subscription.clone());
+        Ok(subscription)
+    }
+
+    async fn unsubscribe(
+        &self,
+        context: &boma_domain::TenantContext,
+        endpoint: &str,
+    ) -> Result<bool, AppError> {
+        let _space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut subscriptions = self
+            .subscriptions
+            .write()
+            .map_err(|_| AppError::Unavailable)?;
+        let before = subscriptions.len();
+        subscriptions.retain(|_, entry| entry.endpoint != endpoint);
+        Ok(subscriptions.len() != before)
+    }
+
+    async fn list(
+        &self,
+        context: &boma_domain::TenantContext,
+    ) -> Result<Vec<boma_domain::notification::NotificationSubscription>, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let subscriptions = self
+            .subscriptions
+            .read()
+            .map_err(|_| AppError::Unavailable)?;
+        let mut v: Vec<_> = subscriptions
+            .values()
+            .filter(|entry| entry.space_id == space)
+            .cloned()
+            .collect();
+        v.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(v)
+    }
+
+    async fn get_policy(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<boma_domain::notification::NotificationPolicy, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+        let key = (
+            space.as_str().to_owned(),
+            user.as_str().to_owned(),
+            bot_id.as_str().to_owned(),
+        );
+        let policies = self.policies.read().map_err(|_| AppError::Unavailable)?;
+        Ok(policies.get(&key).cloned().unwrap_or_else(|| {
+            boma_domain::notification::NotificationPolicy::defaults(
+                bot_id.clone(),
+                "2026-01-01T00:00:00Z",
+            )
+        }))
+    }
+
+    async fn set_policy(
+        &self,
+        context: &boma_domain::TenantContext,
+        patch: boma_domain::notification::SetNotificationPolicy,
+    ) -> Result<boma_domain::notification::NotificationPolicy, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+        let key = (
+            space.as_str().to_owned(),
+            user.as_str().to_owned(),
+            patch.bot_id.as_str().to_owned(),
+        );
+        let mut policies = self.policies.write().map_err(|_| AppError::Unavailable)?;
+        let mut policy = policies.get(&key).cloned().unwrap_or_else(|| {
+            boma_domain::notification::NotificationPolicy::defaults(
+                patch.bot_id.clone(),
+                "2026-01-01T00:00:00Z",
+            )
+        });
+        if let Some(value) = patch.notify_waiting {
+            policy.notify_waiting = value;
+        }
+        if let Some(value) = patch.notify_completed {
+            policy.notify_completed = value;
+        }
+        if let Some(value) = patch.daily_cap {
+            policy.daily_cap = value;
+        }
+        "2026-01-01T00:00:00Z".clone_into(&mut policy.updated_at);
+        policies.insert(key, policy.clone());
+        Ok(policy)
+    }
+
+    async fn record_send(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &str,
+        bot_id: &boma_domain::BotId,
+        kind: boma_domain::notification::NotificationKind,
+    ) -> Result<(), AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut sends = self.sends.write().map_err(|_| AppError::Unavailable)?;
+        sends.push((
+            id.to_owned(),
+            space.as_str().to_owned(),
+            user.as_str().to_owned(),
+            bot_id.as_str().to_owned(),
+            kind.as_str().to_owned(),
+        ));
+        Ok(())
+    }
+
+    async fn count_today(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<u64, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+        let sends = self.sends.read().map_err(|_| AppError::Unavailable)?;
+        Ok(sends
+            .iter()
+            .filter(|(_id, s, u, b, sent_at)| {
+                s == &space.as_str().to_owned()
+                    && u == &user.as_str().to_owned()
+                    && b == &bot_id.as_str().to_owned()
+                    && sent_at.starts_with(self.sends_count_day.as_str())
+            })
+            .count() as u64)
+    }
+
+    async fn note_failure(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &str,
+        permanent: bool,
+    ) -> Result<boma_domain::notification::NotificationFailureOutcome, AppError> {
+        let _space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut subscriptions = self
+            .subscriptions
+            .write()
+            .map_err(|_| AppError::Unavailable)?;
+        let Some(subscription) = subscriptions.get_mut(id) else {
+            return Ok(boma_domain::notification::NotificationFailureOutcome::Ok);
+        };
+        subscription.fail_count = subscription.fail_count.saturating_add(1);
+        let count = subscription.fail_count;
+        if permanent && count >= 3 {
+            subscriptions.remove(id);
+            return Ok(boma_domain::notification::NotificationFailureOutcome::Deleted);
+        }
+        Ok(boma_domain::notification::NotificationFailureOutcome::Recorded(count))
+    }
+
+    async fn note_success(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &str,
+    ) -> Result<(), AppError> {
+        let _space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut subscriptions = self
+            .subscriptions
+            .write()
+            .map_err(|_| AppError::Unavailable)?;
+        if let Some(subscription) = subscriptions.get_mut(id) {
+            subscription.fail_count = 0;
+            "2026-01-01T00:00:00Z".clone_into(&mut subscription.updated_at);
+        }
+        Ok(())
+    }
+}

@@ -26,6 +26,7 @@ pub mod memory;
 pub mod messages;
 pub mod messaging;
 pub mod models;
+pub mod notifications;
 pub mod pages;
 pub mod password_resets;
 pub mod pending_tool_calls;

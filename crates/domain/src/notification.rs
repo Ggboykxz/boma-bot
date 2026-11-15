@@ -140,7 +140,10 @@ mod tests {
 
     #[test]
     fn req_064_a_missing_policy_row_behaves_as_the_documented_default() {
-        let policy = NotificationPolicy::defaults(BotId::new("bot_golden".to_owned()).expect("id"), "2026-11-15T00:00:00Z");
+        let policy = NotificationPolicy::defaults(
+            BotId::new("bot_golden".to_owned()).expect("id"),
+            "2026-11-15T00:00:00Z",
+        );
         assert!(policy.notify_waiting);
         assert!(!policy.notify_completed);
         assert_eq!(policy.daily_cap, 20);

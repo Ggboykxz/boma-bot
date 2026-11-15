@@ -4396,3 +4396,101 @@ pub trait SignInStore: Send + Sync {
         resolved_by: &UserId,
     ) -> Result<boma_domain::signin::SignInRequest, AppError>;
 }
+
+/// The Web Push subscriptions and per-bot policy of the improvement program (REQ-064).
+#[async_trait]
+pub trait NotificationStore: Send + Sync {
+    /// Create or replace the subscription for `(space, user, endpoint)`. Upsert, never dupe.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn subscribe(
+        &self,
+        subscription: boma_domain::notification::NewNotificationSubscription,
+    ) -> Result<boma_domain::notification::NotificationSubscription, AppError>;
+
+    /// Drop the (space, member, endpoint) subscription. Idempotent delete.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn unsubscribe(&self, context: &TenantContext, endpoint: &str) -> Result<bool, AppError>;
+
+    /// The member's subscriptions, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn list(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_domain::notification::NotificationSubscription>, AppError>;
+
+    /// The policy for `(space, member, bot)`, or the documented default when missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn get_policy(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<boma_domain::notification::NotificationPolicy, AppError>;
+
+    /// Create or replace the policy for `(space, member, bot)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn set_policy(
+        &self,
+        context: &TenantContext,
+        patch: boma_domain::notification::SetNotificationPolicy,
+    ) -> Result<boma_domain::notification::NotificationPolicy, AppError>;
+
+    /// Record one push that was sent. Used for the daily cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn record_send(
+        &self,
+        context: &TenantContext,
+        id: &str,
+        bot_id: &boma_domain::BotId,
+        kind: boma_domain::notification::NotificationKind,
+    ) -> Result<(), AppError>;
+
+    /// The number of pushes recorded for `(space, member, bot)` today, UTC.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn count_today(
+        &self,
+        context: &TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<u64, AppError>;
+
+    /// Record a failed delivery. `permanent` marks 404/410/401/403; permanent failures bump
+    /// the counter and delete the row at the third. Transient failures bump too; the caller
+    /// resets with [`Self::note_success`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn note_failure(
+        &self,
+        context: &TenantContext,
+        id: &str,
+        permanent: bool,
+    ) -> Result<boma_domain::notification::NotificationFailureOutcome, AppError>;
+
+    /// Reset the consecutive-failure counter after a successful delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn note_success(&self, context: &TenantContext, id: &str) -> Result<(), AppError>;
+}

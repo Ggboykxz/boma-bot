@@ -12,13 +12,13 @@ use boma_infra::{
     PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresExternalAgentStore,
     PostgresGroupStore, PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore,
     PostgresMemoryStore, PostgresMessageStore, PostgresMessagingStore, PostgresModelStore,
-    PostgresPageStore, PostgresPasswordResetStore, PostgresPendingToolCallStore,
-    PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
-    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
-    PostgresSignInStore, PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore,
-    PostgresTicketStore, PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock,
-    TokenGenerator,
+    PostgresNotificationStore, PostgresPageStore, PostgresPasswordResetStore,
+    PostgresPendingToolCallStore, PostgresPluginInstallStore, PostgresPluginSubmissionStore,
+    PostgresRateLimitStore, PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore,
+    PostgresRoutineStore, PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore,
+    PostgresSessionStore, PostgresSignInStore, PostgresSkillStore, PostgresSpaceStore,
+    PostgresThreadStore, PostgresTicketStore, PostgresToolStore, PostgresUserStore,
+    ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -199,6 +199,7 @@ fn build_app(
             Arc::new(PostgresGroupStore::new(pool.clone())),
             Arc::new(PostgresExternalAgentStore::new(pool.clone())),
             Arc::new(PostgresSignInStore::new(pool.clone())),
+            Arc::new(PostgresNotificationStore::new(pool.clone())),
         ),
         {
             let services = Services::new(

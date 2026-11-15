@@ -572,6 +572,7 @@ impl TestAppBuilder {
             Arc::new(crate::memory::MemoryGroupStore::new(&database)),
             Arc::new(crate::memory::MemoryExternalAgentStore::new(&database)),
             Arc::new(crate::memory::MemorySignInStore::new(&database)),
+            Arc::new(crate::memory::MemoryNotificationStore::new(&database)),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -8884,6 +8885,140 @@ mod group_routing_tests {
 // ---------------------------------------------------------------------------
 // M12.1 — external agents (REQ-059)
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod notification_tests {
+    use super::TestApp;
+
+    #[tokio::test]
+    async fn req_064_dead_endpoints_expire_after_three_permanent_failures() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        let subscription = test
+            .app()
+            .stores
+            .notifications
+            .subscribe(boma_domain::notification::NewNotificationSubscription {
+                id: "sub-1".to_owned(),
+                space_id: space_id.clone(),
+                user_id: owner.clone(),
+                endpoint: "https://updates.push.services.mozilla.com/push/a".to_owned(),
+                p256dh: "a-key".to_owned(),
+                auth: "an-auth".to_owned(),
+                user_agent: Some("WebKit".to_owned()),
+                created_at: "2026-11-15T00:00:00Z".to_owned(),
+            })
+            .await
+            .expect("the subscription is stored");
+        assert_eq!(subscription.fail_count, 0);
+
+        // Transient failures bump but never delete.
+        for expected in [1, 2] {
+            test.app()
+                .stores
+                .notifications
+                .note_failure(&context, &subscription.id, false)
+                .await
+                .expect("transient failures are recorded");
+            let listed = test
+                .app()
+                .stores
+                .notifications
+                .list(&context)
+                .await
+                .expect("the list answers");
+            assert_eq!(listed[0].fail_count, expected);
+        }
+        // A success resets the counter.
+        test.app()
+            .stores
+            .notifications
+            .note_success(&context, &subscription.id)
+            .await
+            .expect("success resets the counter");
+        let listed = test
+            .app()
+            .stores
+            .notifications
+            .list(&context)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed[0].fail_count, 0);
+
+        // Three permanent failures delete the row, whatever the counter said before.
+        for _ in 0..3 {
+            test.app()
+                .stores
+                .notifications
+                .note_failure(&context, &subscription.id, true)
+                .await
+                .expect("permanent failures are recorded");
+        }
+        let listed = test
+            .app()
+            .stores
+            .notifications
+            .list(&context)
+            .await
+            .expect("the list answers");
+        assert!(listed.is_empty(), "three permanent failures delete the row");
+    }
+
+    #[tokio::test]
+    async fn req_064_count_today_counts_only_todays_rows() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the bot exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        for _ in 0..2 {
+            test.app()
+                .stores
+                .notifications
+                .record_send(
+                    &context,
+                    &format!(
+                        "log-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .expect("time")
+                            .as_nanos()
+                    ),
+                    &bot,
+                    boma_domain::notification::NotificationKind::Waiting,
+                )
+                .await
+                .expect("sends are recorded");
+        }
+        let count = test
+            .app()
+            .stores
+            .notifications
+            .count_today(&context, &bot)
+            .await
+            .expect("the counter answers");
+        assert_eq!(count, 2);
+    }
+}
 
 #[cfg(test)]
 mod external_agent_tests {
