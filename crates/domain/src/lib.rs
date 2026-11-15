@@ -33,6 +33,7 @@ pub mod page;
 pub mod plugin;
 pub mod routine;
 pub mod run;
+pub mod notification;
 pub mod signin;
 pub mod skill;
 pub mod tenancy;
