@@ -1133,3 +1133,77 @@ export function modelsConnect(
 ): Promise<{ provider: string; connected: boolean }> {
   return call<{ provider: string; connected: boolean }>("models", "connect", request, signal);
 }
+
+
+// ---------------------------------------------------------------------------
+// M10 — board (REQ-038, spec §8.6)
+// ---------------------------------------------------------------------------
+
+/** The ticket as the API exposes it (REQ-038). */
+export interface TicketView {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  state: string;
+  assigneeBotId?: string | null;
+  commentCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The reply of `boards.get`. */
+export interface BoardsGetReply {
+  tickets: TicketView[];
+}
+
+/** The reply of `tickets.create` / `tickets.move`. */
+export interface TicketReply {
+  ticket: TicketView;
+}
+
+/** One comment as the API exposes it (REQ-038). */
+export interface TicketCommentView {
+  id: string;
+  ticketId: string;
+  authorKind: string;
+  authorId: string;
+  body: string;
+  createdAt: string;
+}
+
+/** The reply of `tickets.comment`. */
+export interface TicketCommentReply {
+  comment: TicketCommentView;
+}
+
+/** `boards.get` — every ticket of the space, in key order. */
+export function boardsGet(
+  signal?: AbortSignal,
+): Promise<BoardsGetReply> {
+  return call<BoardsGetReply>("boards", "get", {}, signal);
+}
+
+/** `tickets.create`. */
+export function ticketsCreate(
+  request: { title: string; description?: string; assigneeBotId?: string },
+  signal?: AbortSignal,
+): Promise<TicketReply> {
+  return call<TicketReply>("tickets", "create", request, signal);
+}
+
+/** `tickets.move` — the ticket lands in another column. */
+export function ticketsMove(
+  request: { ticketId: string; state: string },
+  signal?: AbortSignal,
+): Promise<TicketReply> {
+  return call<TicketReply>("tickets", "move", request, signal);
+}
+
+/** `tickets.comment` — append a comment; the counter bumps atomically. */
+export function ticketsComment(
+  request: { ticketId: string; body: string },
+  signal?: AbortSignal,
+): Promise<TicketCommentReply> {
+  return call<TicketCommentReply>("tickets", "comment", request, signal);
+}
