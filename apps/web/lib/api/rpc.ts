@@ -1207,3 +1207,100 @@ export function ticketsComment(
 ): Promise<TicketCommentReply> {
   return call<TicketCommentReply>("tickets", "comment", request, signal);
 }
+
+
+// ---------------------------------------------------------------------------
+// M10 — computers (REQ-026..030; spec §8.4 thread panel)
+// ---------------------------------------------------------------------------
+
+export interface ComputerStatusReply {
+  status: string;
+  provider: string;
+  startedAt?: string | null;
+  screenGeneration?: number | null;
+  takeoverByUser?: string | null;
+  takeoverAt?: string | null;
+}
+
+export interface ComputerTakeoverReply {
+  status: string;
+  provider: string;
+  takeoverByUser?: string | null;
+  takeoverAt?: string | null;
+}
+
+export interface ComputerOpenScreenReply {
+  capability: string;
+  screenGeneration: number;
+}
+
+/** `computer.status` — where this bot's computer is. Never an error for "none". */
+export function computerStatus(
+  request: { botId: string },
+  signal?: AbortSignal,
+): Promise<ComputerStatusReply> {
+  return call<ComputerStatusReply>("computer", "status", request, signal);
+}
+
+/** `computer.takeover` — the member takes input on behalf of anyone else. */
+export function computerTakeover(
+  request: { botId: string },
+  signal?: AbortSignal,
+): Promise<ComputerTakeoverReply> {
+  return call<ComputerTakeoverReply>("computer", "takeover", request, signal);
+}
+
+/** `computer.release` — lets go of the screen for everyone. */
+export function computerRelease(
+  request: { botId: string },
+  signal?: AbortSignal,
+): Promise<ComputerTakeoverReply> {
+  return call<ComputerTakeoverReply>("computer", "release", request, signal);
+}
+
+/** `computer.openScreen` — mints the one-time bearer for the frame round. */
+export function computerOpenScreen(
+  request: { botId: string },
+  signal?: AbortSignal,
+): Promise<ComputerOpenScreenReply> {
+  return call<ComputerOpenScreenReply>("computer", "openScreen", request, signal);
+}
+
+/** The `path` field the frame round posts; the server names the only target. */
+const SCREEN_TARGET_PATH = "/screen";
+
+/**
+ * `POST /api/internal/screen-target` — opens the screen a capability names.
+ *
+ * The transport is contractual: `text/event-stream` with a `meta` event and one `frame`
+ * event (`pngBase64`). The caller gets the frame bytes; no session cookie ever travels.
+ */
+export async function computerOpenScreenFrame(
+  capability: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const response = await fetch(`${apiBase()}/api/internal/screen-target`, {
+    method: "POST",
+    credentials: "omit",
+    headers: {
+      authorization: `Bearer ${capability}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ path: SCREEN_TARGET_PATH }),
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const text = await response.text();
+  const frame = /event: frame\r?\ndata: ([^\n]+)\r?\n/.exec(text);
+  if (!frame?.[1]) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(frame[1]) as { screenGeneration?: number; pngBase64?: string };
+    return typeof parsed.pngBase64 === "string" ? `data:image/png;base64,${parsed.pngBase64}` : null;
+  } catch {
+    return null;
+  }
+}

@@ -169,9 +169,9 @@
    "reason": null
   },
   "REQ-026-computer-panel": {
-   "status": "pending",
+   "status": "implemented",
    "req": "REQ-026",
-   "reason": "M4 - the computer panel lands with the computer milestone"
+   "reason": null
   },
   "REQ-037-shared-page": {
    "status": "implemented",

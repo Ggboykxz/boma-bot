@@ -406,6 +406,53 @@ const SEED_CARD_MESSAGE = {
 };
 
 const SEEDS: Record<string, (page: Page) => Promise<void>> = {
+  /** A bot's running computer, with a different member holding the screen (REQ-026). */
+  "computer-held-by-another-member": async (page) => {
+    await seedRpc(page, {
+      answers: {
+        "bots/get": SEED_BOT,
+        "threads/messages": { messages: [] },
+        "threads/head": {
+          threadId: "thr_golden",
+          lastSeq: 0,
+          unreadCount: 0,
+          snoozedUntil: null,
+          readAt: null,
+        },
+        "computer/status": {
+          status: "running",
+          provider: "docker",
+          startedAt: "2026-01-01T00:00:00Z",
+          screenGeneration: 7,
+          takeoverByUser: "usr_someone_else",
+          takeoverAt: "2026-01-01T00:01:00Z",
+        },
+        "computer/openScreen": {
+          capability: "screen_capability_golden",
+          screenGeneration: 7,
+        },
+      },
+    });
+    // One frame of the running screen — a 1x1 PNG.
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+      0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00,
+      0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+      0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]).toString("base64");
+    await page.route("**/api/internal/screen-target", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream",
+          "cache-control": "no-store",
+        },
+        body: `event: meta\ndata: {"screenGeneration": 7}\n\nevent: frame\ndata: {"screenGeneration": 7, "pngBase64": "${png}"}\n\n`,
+      });
+    });
+  },
+
   /** A shared page that exists, with no session (REQ-037). */
   "shared-page-valid": async (page) => {
     await page.route("**/api/v1/pages/shared/token_golden", async (route) => {

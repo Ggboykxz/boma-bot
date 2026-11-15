@@ -1423,6 +1423,8 @@ async fn computer_status(
             ),
             started_at: None,
             screen_generation: None,
+            takeover_by_user: None,
+            takeover_at: None,
         },
         |computer| ComputerStatusReply::for_computer(&computer),
     ))

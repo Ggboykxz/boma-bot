@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/base/buttons/button";
 import { MessageBlocks } from "@/components/thread/message-blocks";
 import { ThreadComposer } from "@/components/thread/thread-composer";
+import { ComputerPanel } from "@/components/thread/computer-panel";
 import {
   botsGet,
   botsList,
@@ -304,6 +305,8 @@ export function ThreadScreen({ botId }: { botId: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <ComputerPanel botId={botId} />
+
       <header className="flex flex-col gap-2">
         <Link
           href="/app/"

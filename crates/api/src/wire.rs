@@ -356,6 +356,12 @@ pub struct ComputerStatusReply {
     /// The generation of the screen backend; bumps on restart and invalidates old capabilities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screen_generation: Option<u64>,
+    /// Who holds the screen, when someone does (REQ-029). Additive to the contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takeover_by_user: Option<String>,
+    /// When the hold began, when one is in effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub takeover_at: Option<String>,
 }
 
 impl ComputerTakeoverReply {
@@ -384,6 +390,11 @@ impl ComputerStatusReply {
             provider: computer.provider.clone(),
             started_at: running.then(|| computer.started_at.clone()).flatten(),
             screen_generation: running.then_some(computer.screen_generation),
+            takeover_by_user: computer
+                .takeover_by_user
+                .as_ref()
+                .map(|id| id.as_str().to_owned()),
+            takeover_at: computer.takeover_at.clone(),
         }
     }
 }
