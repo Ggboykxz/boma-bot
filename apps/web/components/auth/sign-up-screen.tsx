@@ -24,7 +24,7 @@ export function SignUpScreen() {
   const t = useTranslation();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const next = searchParams.get("next") ?? "/app/";
+  const next = searchParams.get("next") ?? "/onboarding/1/";
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [reloadToken, setReloadToken] = useState(0);

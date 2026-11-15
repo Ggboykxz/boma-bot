@@ -1079,3 +1079,57 @@ export function messagingList(
 ): Promise<InstallationsReply> {
   return call<InstallationsReply>("messaging", "list", {}, signal);
 }
+
+
+// ---------------------------------------------------------------------------
+// M10 — models (REQ-052; onboarding step 3)
+// ---------------------------------------------------------------------------
+
+export interface CatalogModelView {
+  id: string;
+  name: string;
+  contextWindow: number;
+  roles: string[];
+}
+
+export interface CatalogProviderView {
+  id: string;
+  name: string;
+  models: CatalogModelView[];
+}
+
+export interface ModelsCatalogReply {
+  providers: CatalogProviderView[];
+}
+
+export interface ModelCredentialView {
+  provider: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface ModelCredentialsReply {
+  credentials: ModelCredentialView[];
+}
+
+/** `models.catalog` — the providers this deployment reaches. */
+export function modelsCatalog(
+  signal?: AbortSignal,
+): Promise<ModelsCatalogReply> {
+  return call<ModelsCatalogReply>("models", "catalog", {}, signal);
+}
+
+/** `models.credentials` — the providers connected on this space; keys are never listed. */
+export function modelsCredentials(
+  signal?: AbortSignal,
+): Promise<ModelCredentialsReply> {
+  return call<ModelCredentialsReply>("models", "credentials", {}, signal);
+}
+
+/** `models.connect` — validate a key against the provider, then seal it for the space. */
+export function modelsConnect(
+  request: { provider: string; apiKey: string },
+  signal?: AbortSignal,
+): Promise<{ provider: string; connected: boolean }> {
+  return call<{ provider: string; connected: boolean }>("models", "connect", request, signal);
+}
