@@ -196,7 +196,10 @@ fn resolve_static(root: &str, path: &str) -> Option<std::path::PathBuf> {
 /// `404.html`. The first prefix that matches `path` wins; `app` is listed last so the
 /// artifacts detail subtree is matched before the generic application shell.
 const PREFIX_FALLBACKS: &[(&str, &str)] = &[
-    ("/app/artifacts/", "app/artifacts/artifact_golden/index.html"),
+    (
+        "/app/artifacts/",
+        "app/artifacts/artifact_golden/index.html",
+    ),
     ("/p/", "p/token_unknown/index.html"),
     ("/app/", "app/index.html"),
 ];
@@ -257,8 +260,7 @@ async fn web_fallback(State(state): State<AppState>, request: Request<Body>) -> 
 
     let html_request = (method == Method::GET || method == Method::HEAD) && !deny_list(&path);
     if html_request && let Some(root) = state.http().web_root() {
-        let resolved = resolve_static(root, &path)
-            .or_else(|| resolve_prefix_fallback(root, &path));
+        let resolved = resolve_static(root, &path).or_else(|| resolve_prefix_fallback(root, &path));
         if let Some(file) = resolved
             && let Ok(body) = tokio::fs::read(&file).await
         {

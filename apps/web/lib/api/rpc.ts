@@ -1003,3 +1003,79 @@ export function artifactsRemove(
 ): Promise<ArtifactRemoveReply> {
   return call<ArtifactRemoveReply>("artifacts", "remove", request, signal);
 }
+
+
+// ---------------------------------------------------------------------------
+// M10 — integrations (REQ-032, REQ-034, REQ-048; spec §8.7)
+// ---------------------------------------------------------------------------
+
+/** The catalogue entry as the API exposes it (REQ-032). */
+export interface ConnectorView {
+  connectorId: string;
+  name: string;
+  description: string;
+  authKind: string;
+  installed: boolean;
+}
+
+/** The reply of `connections.list`. */
+export interface ConnectionsListReply {
+  connections: ConnectorView[];
+}
+
+/** One plugin skipped part, named with its reason (REQ-034). */
+export interface PluginInstallView {
+  name: string;
+  source: string;
+  resolvedSha?: string | null;
+  skillCount: number;
+  mcpServerCount: number;
+  skipped: Array<Record<string, unknown>>;
+  createdAt: string;
+}
+
+/** The reply of `marketplace.list`. */
+export interface MarketplaceListReply {
+  connectors: ConnectorView[];
+  installedPlugins: PluginInstallView[];
+}
+
+/** One messaging installation, as the API exposes it (REQ-048). */
+export interface MessagingInstallation {
+  id: string;
+  platform: string;
+  botId: string;
+  workspaceId: string;
+  workspaceName: string;
+  replyUrl?: string | null;
+  allowPrivate: boolean;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The reply of `messaging.list`. */
+export interface InstallationsReply {
+  installations: MessagingInstallation[];
+}
+
+/** `connections.list` — the catalogue with this space's install state. */
+export function connectionsList(
+  signal?: AbortSignal,
+): Promise<ConnectionsListReply> {
+  return call<ConnectionsListReply>("connections", "list", {}, signal);
+}
+
+/** `marketplace.list` — the catalogue and what this space installed, skipped parts included. */
+export function marketplaceList(
+  signal?: AbortSignal,
+): Promise<MarketplaceListReply> {
+  return call<MarketplaceListReply>("marketplace", "list", {}, signal);
+}
+
+/** `messaging.list` — the messaging installations of the caller's space. */
+export function messagingList(
+  signal?: AbortSignal,
+): Promise<InstallationsReply> {
+  return call<InstallationsReply>("messaging", "list", {}, signal);
+}

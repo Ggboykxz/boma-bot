@@ -832,7 +832,8 @@ static EXPORT_FIXTURE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic:
 fn export_fixture() -> std::path::PathBuf {
     // Each test gets its own export: parallel tests would otherwise race on the directory.
     let unique = EXPORT_FIXTURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!("boma_web_export_{:x}_{unique}", std::process::id()));
+    let root =
+        std::env::temp_dir().join(format!("boma_web_export_{:x}_{unique}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("app")).expect("the fixture directory is writable");
     std::fs::write(
@@ -853,12 +854,14 @@ fn export_fixture() -> std::path::PathBuf {
     std::fs::create_dir_all(root.join("app").join("artifacts").join("artifact_golden"))
         .expect("artifact detail dir writes");
     std::fs::write(
-        root.join("app").join("artifacts").join("artifact_golden").join("index.html"),
+        root.join("app")
+            .join("artifacts")
+            .join("artifact_golden")
+            .join("index.html"),
         "<!doctype html><title>Boma Bot</title>artifact-detail-shell",
     )
     .expect("artifact detail shell writes");
-    std::fs::create_dir_all(root.join("p").join("token_unknown"))
-        .expect("shared page dir writes");
+    std::fs::create_dir_all(root.join("p").join("token_unknown")).expect("shared page dir writes");
     std::fs::write(
         root.join("p").join("token_unknown").join("index.html"),
         "<!doctype html><title>Boma Bot</title>shared-page-shell",
@@ -1054,7 +1057,12 @@ async fn req_055_an_arbitrary_bot_link_under_app_serves_the_app_shell() {
 #[tokio::test]
 async fn req_055_an_arbitrary_artifact_link_serves_the_detail_shell() {
     let (state, _root) = state_with_web_root(true);
-    let response = get_accept(state.clone(), "/app/artifacts/some-artifact-id/", "text/html").await;
+    let response = get_accept(
+        state.clone(),
+        "/app/artifacts/some-artifact-id/",
+        "text/html",
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response
         .into_body()

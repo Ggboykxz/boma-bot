@@ -632,7 +632,7 @@ pub async fn messaging_slack_callback(
             [
                 (
                     HeaderName::from_static("location"),
-                    "/settings/messaging?installed=slack",
+                    "/integrations/setup?installed=slack",
                 ),
                 (HeaderName::from_static("cache-control"), "no-store"),
             ],
