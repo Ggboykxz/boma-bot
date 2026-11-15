@@ -3,17 +3,14 @@
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::{HeaderName, HeaderValue, Request, StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     routing::{get, post},
 };
-use tower_http::{
-    request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
-    set_header::SetResponseHeaderLayer,
-    timeout::TimeoutLayer,
-    trace::TraceLayer,
-};
+use tower_http::{set_header::SetResponseHeaderLayer, timeout::TimeoutLayer};
 
-use crate::{authroutes, error::ApiError, health, pages, public, rpc, screen, state::AppState};
+use crate::{
+    authroutes, correlation, error::ApiError, health, pages, public, rpc, screen, state::AppState,
+};
 
 /// Builds the HTTP surface.
 ///
@@ -22,7 +19,7 @@ use crate::{authroutes, error::ApiError, health, pages, public, rpc, screen, sta
 /// generated document, and the contract test asserts that (docs/STATE.md records the deviation).
 pub fn router(state: AppState) -> Router {
     let http = state.http().clone();
-    let request_id_header = HeaderName::from_static("x-request-id");
+    let middleware_state = state.clone();
 
     Router::new()
         .route("/health", get(health::liveness))
@@ -30,6 +27,7 @@ pub fn router(state: AppState) -> Router {
         .route("/ready", get(health::readiness))
         .route("/readyz", get(health::readiness))
         .route("/internal/health", get(health::internal_health))
+        .route("/metrics", get(health::metrics))
         .route("/api/auth/capabilities", get(health::auth_capabilities))
         .route(
             "/api/auth/sign-up",
@@ -79,6 +77,10 @@ pub fn router(state: AppState) -> Router {
             post(public::billing_webhook).route_layer(DefaultBodyLimit::max(65 * 1024)),
         )
         .route(
+            "/api/csp-report",
+            post(public::csp_report).route_layer(DefaultBodyLimit::max(17 * 1024)),
+        )
+        .route(
             "/api/v1/assets/page-runtime.js",
             get(pages::page_runtime_js),
         )
@@ -102,24 +104,14 @@ pub fn router(state: AppState) -> Router {
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ))
-        .layer(PropagateRequestIdLayer::new(request_id_header.clone()))
-        .layer(SetRequestIdLayer::new(request_id_header, RequestIdFactory))
-        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            middleware_state,
+            correlation::log_http,
+        ))
 }
 
 async fn not_found() -> ApiError {
     ApiError::not_found()
-}
-
-/// Mints a request id when the caller did not supply one.
-#[derive(Debug, Clone, Copy, Default)]
-struct RequestIdFactory;
-
-impl MakeRequestId for RequestIdFactory {
-    fn make_request_id<B>(&mut self, _request: &Request<B>) -> Option<RequestId> {
-        let value = HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).ok()?;
-        Some(RequestId::new(value))
-    }
 }
 
 #[cfg(test)]

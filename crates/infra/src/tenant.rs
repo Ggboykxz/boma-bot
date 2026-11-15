@@ -151,7 +151,7 @@ where
 /// the caller never looks at it again.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn unavailable(error: sqlx::Error) -> AppError {
-    tracing::debug!(error = %error, "the database refused a query");
+    tracing::warn!(error = %error, "the database refused a query");
     AppError::Unavailable
 }
 

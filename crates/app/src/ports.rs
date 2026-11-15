@@ -1844,8 +1844,9 @@ pub trait PluginSubmissionStore: Send + Sync {
 pub struct NewAuditEvent {
     /// The event's id.
     pub id: String,
-    /// The space the event belongs to.
-    pub space_id: boma_domain::SpaceId,
+    /// The space the event belongs to; `None` for a deployment-scoped event (sign-in failure,
+    /// CSP report, account deletion antirier), which only the operator's own eyes see.
+    pub space_id: Option<boma_domain::SpaceId>,
     /// The member who caused it, when there was one.
     pub actor_user_id: Option<boma_domain::UserId>,
     /// What happened.

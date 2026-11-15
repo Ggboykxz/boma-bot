@@ -60,6 +60,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         config.billing.enabled,
         config.billing.provider(),
         config.billing.webhook_secret.clone(),
+        config.metrics,
     )?;
     let state = AppState::new(
         readiness,
@@ -95,6 +96,7 @@ fn secrets_vault() -> anyhow::Result<boma_infra::SecretBox> {
 
 #[allow(clippy::too_many_arguments)] // the deployment shape, in order
 #[allow(clippy::too_many_lines)] // the wiring is the point
+#[allow(clippy::fn_params_excessive_bools)] // one bool per operator flag, like everything else here
 fn build_app(
     database: &Postgres,
     computer: Option<Arc<dyn ComputerRuntime>>,
@@ -108,6 +110,7 @@ fn build_app(
     config_billing: bool,
     config_billing_provider: Option<std::sync::Arc<dyn boma_app::ports::BillingProvider>>,
     config_billing_webhook_secret: Option<String>,
+    config_metrics: bool,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -215,7 +218,8 @@ fn build_app(
                 config_billing,
                 config_billing_provider,
                 config_billing_webhook_secret.map(secrecy::SecretString::from),
-            );
+            )
+            .with_metrics(config_metrics);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -255,6 +259,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         config.billing.enabled,
         config.billing.provider(),
         config.billing.webhook_secret.clone(),
+        config.metrics,
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

@@ -185,6 +185,9 @@ impl Stores {
 
 /// The services: everything that is not a store.
 #[derive(Clone)]
+// The settings one deployment carries, as bools, intentionally: each flag is one operator
+// knob, not a state machine. The spec treats flags as first-class (board, messaging, billing).
+#[allow(clippy::struct_excessive_bools)]
 pub struct Services {
     /// Hands events to the live subscribers.
     pub publisher: Arc<dyn EventPublisher>,
@@ -232,6 +235,11 @@ pub struct Services {
     /// Whether the messaging surface exists (`BOMA_MESSAGING`). Off by default: without the
     /// flag the messaging routes and procedures answer 404, signed in or not.
     pub messaging_enabled: bool,
+    /// The counters the process keeps; exposed at `/metrics` when the deployment enables it.
+    pub metrics: Arc<crate::metrics::Metrics>,
+    /// Whether `GET /metrics` answers (BOMA_METRICS). Off by default; the endpoint is absent,
+    /// not degraded, when the flag is absent (REQ-054).
+    pub metrics_enabled: bool,
     /// The public base URL this deployment is reached at, for webhooks members must paste into
     /// a platform (REQ-048). A loopback default for development; set it in every deployment
     /// that installs a messaging platform.
@@ -291,6 +299,8 @@ impl Services {
             billing_provider: None,
             billing_webhook_secret: None,
             billing_enabled: false,
+            metrics: Arc::new(crate::metrics::Metrics::new()),
+            metrics_enabled: false,
             slack: None,
             messaging_enabled: false,
             public_base_url: "http://127.0.0.1:3000".to_owned(),
@@ -340,6 +350,13 @@ impl Services {
         settings: Option<crate::ports::EmailInboundSettings>,
     ) -> Self {
         self.email_inbound = settings;
+        self
+    }
+
+    /// Builds the services with the metrics endpoint exposed (REQ-054).
+    #[must_use]
+    pub fn with_metrics(mut self, enabled: bool) -> Self {
+        self.metrics_enabled = enabled;
         self
     }
 

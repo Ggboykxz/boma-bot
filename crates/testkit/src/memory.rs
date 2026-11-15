@@ -4764,8 +4764,8 @@ struct AuditEventRow {
     #[allow(dead_code)]
     // written for shape-parity with the PG table; never read back by tests yet
     id: String,
-    /// The space the event belongs to.
-    space_id: SpaceId,
+    /// The space the event belongs to; `None` for deployment-scoped events.
+    space_id: Option<String>,
     /// The member who caused it, when there was one.
     actor_user_id: Option<UserId>,
     /// What happened.
@@ -5138,8 +5138,8 @@ impl boma_app::ports::McpServerStore for MemoryMcpServerStore {
 /// One audit event the fake records (D-05).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedAuditEvent {
-    /// The space the event belongs to.
-    pub space_id: SpaceId,
+    /// The space the event belongs to; `None` for deployment-scoped events.
+    pub space_id: Option<String>,
     /// The member who caused it, when there was one.
     pub actor_user_id: Option<UserId>,
     /// What happened.
@@ -5195,7 +5195,11 @@ impl boma_app::ports::AuditStore for MemoryAuditStore {
         let mut state = write(&self.state);
         state.audit_events.push(AuditEventRow {
             id: event.id,
-            space_id: event.space_id,
+            space_id: event
+                .space_id
+                .as_ref()
+                .map(boma_domain::SpaceId::as_str)
+                .map(str::to_owned),
             actor_user_id: event.actor_user_id,
             kind: event.kind.as_str().to_owned(),
             target: event.target,

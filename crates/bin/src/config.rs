@@ -111,6 +111,10 @@ pub struct Config {
     ///
     /// Off by default; the board surface does not exist without it.
     pub board: bool,
+    /// Whether the process exposes its counters at `GET /metrics` (`BOMA_METRICS`).
+    ///
+    /// Off by default; without the flag the exposition answers 404, signed in or not (REQ-054).
+    pub metrics: bool,
     /// The inbound-mail settings (`BOMA_EMAIL_RELAY_TOKEN` + `BOMA_EMAIL_DOMAIN`).
     ///
     /// Both or neither: a half-configured relay is a startup error, not a degraded mode.
@@ -312,6 +316,7 @@ impl Config {
             stdio_allowed: parse_string_list(&env, "MCP_STDIO_ALLOWED_COMMANDS"),
             artifact_dir: optional(&env, "BOMA_ARTIFACT_DIR"),
             board: optional_parsed(&env, "BOMA_BOARD", false)?,
+            metrics: optional_parsed(&env, "BOMA_METRICS", false)?,
             email_inbound: parse_email_inbound(&env)?,
             slack: parse_slack(&env)?,
             public_base_url: parse_public_base_url(&env)?,

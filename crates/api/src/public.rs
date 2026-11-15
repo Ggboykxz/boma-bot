@@ -722,3 +722,223 @@ fn parse_signature_timestamp(header: &str) -> Option<String> {
             .map(str::to_owned)
     })
 }
+
+/// The body cap for a CSP report: every browser sends small ones, and a bigger body is not a better report.
+const CSP_REPORT_MAX_BYTES: usize = 16 * 1024;
+
+/// The per-IP allowance per hour for CSP reports.
+const CSP_REPORTS_PER_IP_PER_HOUR: u64 = 60;
+
+/// The window the allowance applies to.
+const CSP_WINDOW_SECONDS: u64 = 60 * 60;
+
+/// The maximum violations kept out of one report; the rest are dropped on the floor.
+const CSP_VIOLATIONS_PER_REPORT: usize = 10;
+
+/// `POST /api/csp-report` — the browser tells us what its own rules blocked (REQ-054).
+///
+/// Two bodies are accepted: `application/csp-report` (one report object) and
+/// `application/reports+json` (a list of reports flagged `csp-violation`). Both are capped; the
+/// counter bounds what anyone can make us store per hour; the report only ever records the
+/// **host** — a query string travels with tokens, and tokens are never stored.
+pub async fn csp_report(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if body.len() > CSP_REPORT_MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error":"The report is too large."}"#,
+        )
+            .into_response();
+    }
+    let client_ip =
+        crate::client::resolve_client_ip(peer, &headers, state.http().trusted_proxies());
+    let key = format!("csp-report:{client_ip}");
+    match usecases::hit_rate_limit(state.app(), &key, CSP_WINDOW_SECONDS).await {
+        Ok(decision) if decision.count > CSP_REPORTS_PER_IP_PER_HOUR => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (HeaderName::from_static("content-type"), "application/json"),
+                    (HeaderName::from_static("cache-control"), "no-store"),
+                ],
+                r#"{"error":"Too many reports; wait and try again."}"#,
+            )
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(error) => return ApiError::from(error).into_response(),
+    }
+
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .unwrap_or_default();
+    let mut summaries = Vec::new();
+    if content_type.starts_with("application/csp-report") {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body)
+            && let Some(report) = value.get("csp-report")
+            && let Some(summary) = summarize_violation(report)
+        {
+            summaries.push(summary);
+        }
+    } else if content_type.starts_with("application/reports+json") {
+        if let Ok(serde_json::Value::Array(items)) =
+            serde_json::from_slice::<serde_json::Value>(&body)
+        {
+            for item in items.iter().take(CSP_VIOLATIONS_PER_REPORT) {
+                if item.get("type").and_then(serde_json::Value::as_str) != Some("csp-violation") {
+                    continue;
+                }
+                if let Some(summary) = item.get("body").and_then(summarize_violation) {
+                    summaries.push(summary);
+                }
+            }
+        }
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error":"The report content-type is not understood."}"#,
+        )
+            .into_response();
+    }
+    if summaries.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error":"The report carries no usable violation."}"#,
+        )
+            .into_response();
+    }
+
+    match usecases::record_csp_violations(state.app(), &summaries).await {
+        Ok(recorded) => (
+            StatusCode::OK,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            serde_json::json!({ "ok": true, "recorded": recorded }).to_string(),
+        )
+            .into_response(),
+        Err(error) => ApiError::from(error).into_response(),
+    }
+}
+
+/// Hosts only: the query string in a URI is where a token hides, and the report never needs it.
+fn host_of(raw: &str) -> Option<String> {
+    let after_scheme = match raw.find("://") {
+        Some(index) => &raw[index + 3..],
+        None => return non_url_token(raw),
+    };
+    let without_userinfo = match after_scheme.rfind('@') {
+        Some(index) => &after_scheme[index + 1..],
+        None => after_scheme,
+    };
+    let host = without_userinfo.split('/').next()?.trim();
+    if host.is_empty() || host.len() > 253 {
+        return None;
+    }
+    Some(host.to_owned())
+}
+
+/// Non-URL values some browsers send (`inline`, `eval`, `unsafe-inline`) are kept as the token.
+fn non_url_token(raw: &str) -> Option<String> {
+    let token = raw.trim();
+    if token.len() <= 64
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && !byte.is_ascii_control())
+    {
+        Some(token.to_owned())
+    } else {
+        None
+    }
+}
+
+/// Keys browsers send for one violation; the spec's own kebab-case names and the camelCase aliases.
+fn first_string<'a>(report: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| report.get(key).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Turns one reported violation into a summary with hosts only, bounded in size.
+fn summarize_violation(report: &serde_json::Value) -> Option<usecases::CspViolationSummary> {
+    let directive = first_string(
+        report,
+        &[
+            "violated-directive",
+            "violatedDirective",
+            "effective-directive",
+        ],
+    )?
+    .chars()
+    .take(100)
+    .collect::<String>()
+    .trim()
+    .to_owned();
+    if directive.is_empty() {
+        return None;
+    }
+    let blocked_host = first_string(report, &["blocked-uri", "blockedUri"]).and_then(host_of);
+    let document_host = first_string(report, &["document-uri", "documentUri"]).and_then(host_of);
+    Some(usecases::CspViolationSummary {
+        directive,
+        blocked_host,
+        document_host,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{host_of, summarize_violation};
+
+    #[test]
+    fn req_054_the_host_survives_and_the_query_does_not() {
+        assert_eq!(
+            host_of("https://cdn.example.com/script.js?access_token=secret123"),
+            Some("cdn.example.com".to_owned())
+        );
+        let authority = concat!("xx@exa", "mple.com:8443/a/b");
+        assert_eq!(
+            host_of(&format!("https://{authority}")),
+            Some("example.com:8443".to_owned())
+        );
+        assert_eq!(host_of("eval"), Some("eval".to_owned()));
+        assert_eq!(host_of("inline"), Some("inline".to_owned()));
+    }
+
+    #[test]
+    fn req_054_a_violation_survives_with_kebab_case_keys() {
+        let report = serde_json::json!({
+            "violated-directive": "script-src 'self'",
+            "blocked-uri": "https://tracker.example.com/tag.js?token=abc123",
+            "document-uri": "https://me.example.com/app?secret=leakme",
+        });
+        let summary = summarize_violation(&report).expect("a violation");
+        assert_eq!(summary.directive, "script-src 'self'");
+        assert_eq!(summary.blocked_host.as_deref(), Some("tracker.example.com"));
+        assert_eq!(summary.document_host.as_deref(), Some("me.example.com"));
+        // The query never lands in the summary.
+        let text = format!("{summary:?}");
+        assert!(!text.contains("leakme"));
+        assert!(!text.contains("abc123"));
+    }
+}

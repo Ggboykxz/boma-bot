@@ -12,6 +12,30 @@ pub enum AuditKind {
     MailDropped,
     /// A private endpoint was reached for an installation (REQ-048, D-05).
     MessagingPrivateEndpoint,
+    /// A password sign-in attempt failed (REQ-045).
+    SignInFailed,
+    /// A browser reported a CSP violation (REQ-045, REQ-054).
+    CspViolation,
+    /// The account was deleted (REQ-044, REQ-045).
+    AccountDeleted,
+    /// An account archive was downloaded (REQ-044).
+    ExportDownloaded,
+    /// An account archive was imported (REQ-044).
+    ImportCompleted,
+    /// A SCIM-provisioned account was created (REQ-045).
+    ScimProvisioned,
+    /// A SCIM-deprovisioned account was disabled (REQ-045).
+    ScimDeprovisioned,
+    /// An admin changed a member's role in a space (REQ-058).
+    AdminMemberRoleChanged,
+    /// An admin removed a member from a space (REQ-058).
+    AdminMemberRemoved,
+    /// An admin created an access grant (REQ-058).
+    AdminGrantCreated,
+    /// An admin revoked an access grant (REQ-058).
+    AdminGrantRevoked,
+    /// An admin reviewed a plugin submission (REQ-058).
+    AdminPluginReviewed,
 }
 
 impl AuditKind {
@@ -22,6 +46,18 @@ impl AuditKind {
             Self::McpPrivateCall => "mcp.private_call",
             Self::MailDropped => "mail.dropped",
             Self::MessagingPrivateEndpoint => "messaging.private_endpoint",
+            Self::SignInFailed => "security.sign_in_failed",
+            Self::CspViolation => "security.csp_violation",
+            Self::AccountDeleted => "account.deleted",
+            Self::ExportDownloaded => "export.downloaded",
+            Self::ImportCompleted => "import.completed",
+            Self::ScimProvisioned => "scim.provisioned",
+            Self::ScimDeprovisioned => "scim.deprovisioned",
+            Self::AdminMemberRoleChanged => "admin.member_role_changed",
+            Self::AdminMemberRemoved => "admin.member_removed",
+            Self::AdminGrantCreated => "admin.grant_created",
+            Self::AdminGrantRevoked => "admin.grant_revoked",
+            Self::AdminPluginReviewed => "admin.plugin_reviewed",
         }
     }
 }

@@ -75,6 +75,7 @@ impl Worker {
     /// Returns [`AppError`] when a store cannot answer. A run that fails is *failed*, not left
     /// running: the failure is recorded on the run so the chat can say why (REQ-021).
     pub async fn step(&self) -> Result<bool, AppError> {
+        let step_started = std::time::Instant::now();
         let Some(claimed) = usecases::claim_run(&self.app, &self.owner).await? else {
             return Ok(false);
         };
@@ -97,6 +98,8 @@ impl Worker {
         )
         .await?;
 
+        announce_run_started(&self.app, &run);
+
         // One answer per pass, and a fresh pass whenever the member steered while the model was
         // working (REQ-003): the newest text joins the current attempt instead of queueing a
         // second run. Bounded so a member cannot hold the worker in a loop forever.
@@ -104,7 +107,9 @@ impl Worker {
         let mut passes: u32 = 0;
         let mut tool_passes: u32 = 0;
         loop {
-            let outcome = self.provider_pass(&context, &claimed, tool_passes).await?;
+            let outcome = self
+                .provider_pass(&context, &claimed, tool_passes, step_started)
+                .await?;
             match outcome {
                 PassOutcome::Answered {
                     text: chunk_text,
@@ -167,6 +172,7 @@ impl Worker {
             None,
         )
         .await?;
+        announce_run_finished(&self.app, &run, "completed", step_started);
         // A routine that woke this run: reset its failure counter, so one clean run unpauses
         // the routine at the next threshold crossing (REQ-024).
         usecases::record_routine_completed(&self.app, &run).await?;
@@ -257,11 +263,13 @@ impl Worker {
     ///
     /// Reads the newest page, calls the provider once and streams the chunks out. Returns what
     /// happened, so the caller can decide whether to wait for more steering or stop.
+    #[allow(clippy::too_many_lines)] // one function per turn is the design: the arms interlock
     async fn provider_pass(
         &self,
         context: &TenantContext,
         claimed: &usecases::ClaimedRun,
         tool_passes: u32,
+        step_started: std::time::Instant,
     ) -> Result<PassOutcome, AppError> {
         let run = claimed.run.clone();
         let history = self
@@ -305,7 +313,27 @@ impl Worker {
         match self.provider.complete(request).await {
             Ok(ProviderTurn::Chunks(chunks)) => {
                 let mut text = String::new();
-                for chunk in &chunks {
+                for (index, chunk) in chunks.iter().enumerate() {
+                    if index == 0 {
+                        let first_response_ms =
+                            u64::try_from(step_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        tracing::info!(
+                            target: "boma.runs",
+                            event = "run.first_response",
+                            run_id = %run.id,
+                            first_response_ms = first_response_ms,
+                            "run first response"
+                        );
+                        self.app.services.metrics.add(
+                            "boma_run_first_response_ms_total",
+                            &[],
+                            first_response_ms,
+                        );
+                        self.app
+                            .services
+                            .metrics
+                            .increment("boma_runs_first_response_total", &[]);
+                    }
                     if !self.still_live(context, &claimed.run).await? {
                         tracing::info!(run = %claimed.run.id, "the run was cancelled mid-stream; the reply is not written");
                         return Ok(PassOutcome::Cancelled);
@@ -344,6 +372,20 @@ impl Worker {
                 let retryable = error.is_retryable();
                 tracing::warn!(run = %run.id, %error, "a run failed");
                 self.fail_run(context, &run, error).await?;
+                let duration_ms =
+                    u64::try_from(step_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                tracing::info!(
+                    target: "boma.runs",
+                    event = "run.finished",
+                    run_id = %run.id,
+                    status = "failed",
+                    duration_ms = duration_ms,
+                    "run finished"
+                );
+                self.app
+                    .services
+                    .metrics
+                    .increment("boma_runs_finished_total", &[("status", "failed")]);
                 // A routine-woken run whose failure is retryable is tried again with backoff
                 // before it burns the schedule's attempts; only then does it count toward the
                 // routine's failure budget (REQ-024).
@@ -543,6 +585,59 @@ fn prompt_of(history: &[boma_domain::Message]) -> String {
         .and_then(text)
         .or_else(|| history.iter().find_map(text))
         .unwrap_or_default()
+}
+
+/// The metric label of a run's trigger; the same vocabulary the activity view shows.
+fn trigger_label(trigger: boma_domain::RunTrigger) -> &'static str {
+    match trigger {
+        boma_domain::RunTrigger::User => "user",
+        boma_domain::RunTrigger::Routine => "routine",
+        boma_domain::RunTrigger::Webhook => "webhook",
+        boma_domain::RunTrigger::BotMessage => "bot",
+        boma_domain::RunTrigger::Tickets => "tickets",
+        boma_domain::RunTrigger::Created => "created",
+        boma_domain::RunTrigger::HelperResult => "helper_result",
+        boma_domain::RunTrigger::Retry => "retry",
+    }
+}
+
+/// The structured line and counter every run starts with; put in one place so all worker
+/// call sites log the same event.
+fn announce_run_started(app: &App, run: &boma_domain::Run) {
+    app.services.metrics.increment(
+        "boma_runs_started_total",
+        &[("trigger", trigger_label(run.trigger))],
+    );
+    tracing::info!(
+        target: "boma.runs",
+        event = "run.execution_started",
+        run_id = %run.id,
+        space_id = %run.space_id,
+        bot_id = %run.bot_id,
+        trigger = ?run.trigger,
+        "run started"
+    );
+}
+
+/// The structured line and counter every run ends with, in one place.
+fn announce_run_finished(
+    app: &App,
+    run: &boma_domain::Run,
+    status: &'static str,
+    step_started: std::time::Instant,
+) {
+    let duration_ms = u64::try_from(step_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    tracing::info!(
+        target: "boma.runs",
+        event = "run.finished",
+        run_id = %run.id,
+        status = status,
+        duration_ms = duration_ms,
+        "run finished"
+    );
+    app.services
+        .metrics
+        .increment("boma_runs_finished_total", &[("status", status)]);
 }
 
 #[cfg(test)]

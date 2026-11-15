@@ -853,7 +853,7 @@ async fn audit_private_use(
         .audit
         .append(crate::ports::NewAuditEvent {
             id: app.services.ids.new_id("aud"),
-            space_id: space_id.clone(),
+            space_id: Some(space_id.clone()),
             actor_user_id: Some(user_id.clone()),
             kind: boma_domain::AuditKind::McpPrivateCall,
             target: server_name.to_owned(),
@@ -2258,7 +2258,7 @@ pub async fn mail_inbound(
             .audit
             .append(crate::ports::NewAuditEvent {
                 id: app.services.ids.new_id("aud"),
-                space_id: space_id.clone(),
+                space_id: Some(space_id.clone()),
                 actor_user_id: None,
                 kind: boma_domain::AuditKind::MailDropped,
                 target: sender,
@@ -2844,7 +2844,7 @@ pub async fn messaging_install_generic(
             .audit
             .append(crate::ports::NewAuditEvent {
                 id: app.services.ids.new_id("aud"),
-                space_id: context.space_id().cloned().ok_or(AppError::NotFound)?,
+                space_id: Some(context.space_id().cloned().ok_or(AppError::NotFound)?),
                 actor_user_id: context.user_id().cloned(),
                 kind: boma_domain::AuditKind::MessagingPrivateEndpoint,
                 target: name.clone(),
@@ -3298,8 +3298,10 @@ pub async fn deliver_external_reply(
                     .audit
                     .append(crate::ports::NewAuditEvent {
                         id: app.services.ids.new_id("aud"),
-                        space_id: boma_domain::SpaceId::new(installation.space_id.clone())
-                            .map_err(|_| AppError::Unavailable)?,
+                        space_id: Some(
+                            boma_domain::SpaceId::new(installation.space_id.clone())
+                                .map_err(|_| AppError::Unavailable)?,
+                        ),
                         actor_user_id: None,
                         kind: boma_domain::AuditKind::MessagingPrivateEndpoint,
                         target: installation.workspace_id.clone(),
@@ -3317,6 +3319,74 @@ pub async fn deliver_external_reply(
         }
     }
     Ok(())
+}
+
+/// The whole milliseconds between one RFC 3339 instant and another.
+///
+/// Coarse on purpose: cross-clock durations across a process restart are measured in seconds by
+/// the callers, which is accurate enough for a human reading a log. Returns 0 when either side
+/// does not parse.
+#[doc(hidden)]
+#[must_use]
+pub fn duration_ms_between(then_rfc3339: &str, now_rfc3339: &str) -> u64 {
+    let then = unix_seconds(then_rfc3339);
+    let now = unix_seconds(now_rfc3339);
+    u64::try_from(now.saturating_sub(then))
+        .unwrap_or(0)
+        .saturating_mul(1_000)
+}
+
+/// One CSP violation summary, already normalised by the edge: hosts only, no query.
+///
+/// The browser's report can carry a token in `document-uri`; the edge splits the host off
+/// before anything is logged or stored (REQ-054).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CspViolationSummary {
+    /// The violated directive, e.g. `script-src`.
+    pub directive: String,
+    /// The host of the blocked resource's URL, when it had one.
+    pub blocked_host: Option<String>,
+    /// The host of the document that was protected, when it had one.
+    pub document_host: Option<String>,
+}
+
+/// Records the CSP violations a report carried (REQ-054).
+///
+/// One audit row per violation, capped at ten per report; metadata never carries a query
+/// string, and the metrics counter advances once per row so a deployment's rate is visible
+/// without reading the rows.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot record the rows.
+pub async fn record_csp_violations(
+    app: &App,
+    summaries: &[CspViolationSummary],
+) -> Result<usize, AppError> {
+    let mut recorded = 0_usize;
+    for summary in summaries.iter().take(10) {
+        app.stores
+            .audit
+            .append(crate::ports::NewAuditEvent {
+                id: app.services.ids.new_id("aud"),
+                space_id: None,
+                actor_user_id: None,
+                kind: boma_domain::AuditKind::CspViolation,
+                target: summary.directive.clone(),
+                metadata: serde_json::json!({
+                    "blockedHost": summary.blocked_host,
+                    "documentHost": summary.document_host,
+                }),
+                created_at: app.services.clock.now(),
+            })
+            .await?;
+        app.services.metrics.increment(
+            "boma_csp_violations_total",
+            &[("directive", &summary.directive)],
+        );
+        recorded = recorded.saturating_add(1);
+    }
+    Ok(recorded)
 }
 
 /// Parses the deployment clock's RFC 3339 answer into seconds since the epoch.
@@ -6114,6 +6184,19 @@ pub async fn cancel_run(app: &App, context: &TenantContext, run_id: &str) -> Res
         .find(context, &run_id)
         .await?
         .ok_or(AppError::Unavailable)?;
+    let duration_ms = duration_ms_between(&run.created_at, &now);
+    tracing::info!(
+        target: "boma.runs",
+        event = "run.finished",
+        run_id = %run.id,
+        space_id = %run.space_id,
+        status = "cancelled",
+        duration_ms = duration_ms,
+        "run finished"
+    );
+    app.services
+        .metrics
+        .increment("boma_runs_finished_total", &[("status", "cancelled")]);
     app.stores
         .events
         .append(

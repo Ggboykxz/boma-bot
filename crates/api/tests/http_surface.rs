@@ -70,6 +70,18 @@ fn capabilities() -> Capabilities {
 }
 
 fn state(healthy: bool) -> AppState {
+    state_with_metrics(healthy, false)
+}
+
+fn state_with_metrics(healthy: bool, metrics: bool) -> AppState {
+    state_with_database(healthy, metrics, &boma_testkit::MemoryDatabase::new())
+}
+
+fn state_with_database(
+    healthy: bool,
+    metrics: bool,
+    database: &boma_testkit::MemoryDatabase,
+) -> AppState {
     AppState::new(
         Readiness::new(vec![Arc::new(Probe { healthy })]),
         capabilities(),
@@ -77,28 +89,28 @@ fn state(healthy: bool) -> AppState {
         http_config(),
         boma_app::App::new(
             boma_app::Stores::new(
-                std::sync::Arc::new(boma_testkit::MemoryAccountStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryUserStore::default()),
-                std::sync::Arc::new(boma_testkit::MemorySessionStore::default()),
-                std::sync::Arc::new(boma_testkit::MemorySpaceStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryBotStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryThreadStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryMessageStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryAccountStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryUserStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemorySessionStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemorySpaceStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryBotStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryThreadStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryMessageStore::new(database)),
                 std::sync::Arc::new(boma_testkit::MemoryRunStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryEventStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryInvitationStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryCardStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryPendingToolCallStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryEffectStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryToolStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryRateLimitStore::default()),
-                std::sync::Arc::new(boma_testkit::MemorySecretStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryPluginSubmissionStore::default()),
-                std::sync::Arc::new(boma_testkit::MemorySkillStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryMcpServerStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryAuditStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryConnectorStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryPluginInstallStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryInvitationStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryCardStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryPendingToolCallStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryEffectStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryToolStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryRateLimitStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemorySecretStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryPluginSubmissionStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemorySkillStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryMcpServerStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryAuditStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryConnectorStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryPluginInstallStore::new(database)),
                 std::sync::Arc::new(boma_testkit::MemoryArtifactStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryPageStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryTicketStore::default()),
@@ -109,10 +121,10 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryRosterStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryMemoryStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryRoutineStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryComputerStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryComputerStore::new(database)),
                 std::sync::Arc::new(boma_testkit::MemoryScreenCapabilityStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryModelStore::default()),
-                std::sync::Arc::new(boma_testkit::MemoryBillingStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryModelStore::new(database)),
+                std::sync::Arc::new(boma_testkit::MemoryBillingStore::new(database)),
             ),
             boma_app::Services::new(
                 std::sync::Arc::new(boma_testkit::MemoryEventPublisher::default()),
@@ -133,7 +145,8 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryArtifactContentStore::default()),
                 std::sync::Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
                 std::sync::Arc::new(boma_testkit::ScriptedModelTransport::new()),
-            ),
+            )
+            .with_metrics(metrics),
         ),
     )
 }
@@ -421,4 +434,143 @@ async fn req_034_an_invalid_source_is_refused_with_the_fixed_message() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = body_string(response).await;
     assert_eq!(body, r#"{"error": "Invalid source."}"#);
+}
+
+#[tokio::test]
+async fn req_054_the_metrics_exposition_is_absent_without_the_flag() {
+    let response = get(state(true), "/metrics").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn req_054_the_metrics_exposition_renders_when_the_flag_is_on() {
+    let state = state_with_metrics(true, true);
+    assert_eq!(get(state.clone(), "/health").await.status(), StatusCode::OK);
+
+    let response = get(state, "/metrics").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(body.starts_with("text/plain"), "the content-type is {body}");
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is in memory")
+        .to_bytes();
+    let text = String::from_utf8(bytes.to_vec()).expect("the body is text");
+    assert!(text.contains("boma_http_requests_total"), "{text}");
+    assert!(text.contains("route=\"/health\""), "{text}");
+    assert!(text.contains("status_class=\"2xx\""), "{text}");
+}
+
+fn csp_report_body(directive: &str, blocked_uri: &str, document_uri: &str) -> String {
+    serde_json::json!({
+        "csp-report": {
+            "violated-directive": directive,
+            "blocked-uri": blocked_uri,
+            "document-uri": document_uri,
+        }
+    })
+    .to_string()
+}
+
+async fn post_csp_report(state: AppState, body: &str) -> Response {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/csp-report")
+        .header(header::CONTENT_TYPE, "application/csp-report")
+        .body(Body::from(body.to_owned()))
+        .expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+#[tokio::test]
+async fn req_054_csp_report_records_one_audit_row_and_counts_it() {
+    let database = boma_testkit::MemoryDatabase::new();
+    let state = state_with_database(true, true, &database);
+    let response = post_csp_report(
+        state.clone(),
+        &csp_report_body(
+            "script-src 'self'",
+            "https://tracker.example.com/tag.js?token=secret-token-123456",
+            "https://me.example.com/app?access_key=secret-access-key-123456",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body, serde_json::json!({ "ok": true, "recorded": 1 }));
+
+    let events = database.audit().events();
+    let violations: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "security.csp_violation")
+        .collect();
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0].space_id, None, "the event has no space");
+    assert_eq!(violations[0].target, "script-src 'self'");
+    assert_eq!(
+        violations[0].metadata["blockedHost"],
+        serde_json::json!("tracker.example.com")
+    );
+    assert_eq!(
+        violations[0].metadata["documentHost"],
+        serde_json::json!("me.example.com")
+    );
+    // The query never lands in the audit row.
+    assert!(!format!("{:?}", violations[0]).contains("secret"));
+
+    let metrics = get(state, "/metrics").await;
+    let metrics_text = metrics
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is in memory")
+        .to_bytes();
+    let metrics_text = String::from_utf8(metrics_text.to_vec()).expect("the body is text");
+    assert!(
+        metrics_text.contains("boma_csp_violations_total"),
+        "{metrics_text}"
+    );
+}
+
+#[tokio::test]
+async fn req_054_csp_report_refuses_a_report_it_cannot_parse() {
+    let state = state(true);
+    let response = post_csp_report(state, "{\"csp-report\": {}}").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json(response).await;
+    assert_eq!(
+        body["error"],
+        serde_json::json!("The report carries no usable violation.")
+    );
+}
+
+#[tokio::test]
+async fn req_054_csp_report_is_rate_limited_per_ip() {
+    let state = state(true);
+    let mut last_status = StatusCode::OK;
+    for attempt in 1..=62 {
+        let response = post_csp_report(
+            state.clone(),
+            &csp_report_body("script-src", "eval", "https://me.example.com/"),
+        )
+        .await;
+        if attempt >= 61 {
+            last_status = response.status();
+        }
+    }
+    assert_eq!(
+        last_status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the hourly allowance is spent and the route refuses the calls that survive the cap"
+    );
 }

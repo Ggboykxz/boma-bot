@@ -27,22 +27,31 @@ impl PostgresAuditStore {
 #[async_trait::async_trait]
 impl AuditStore for PostgresAuditStore {
     async fn append(&self, event: NewAuditEvent) -> Result<(), AppError> {
-        let space_id = event.space_id.as_str().to_owned();
+        let space_id = event
+            .space_id
+            .as_ref()
+            .map(boma_domain::SpaceId::as_str)
+            .map(str::to_owned);
         let actor = event
             .actor_user_id
             .as_ref()
             .map(boma_domain::UserId::as_str)
             .map(str::to_owned);
         let kind = event.kind.as_str().to_owned();
-        // Every writer today acts for a member; a future system path carries its enum reason.
-        let context = match &event.actor_user_id {
-            Some(user_id) => boma_domain::TenantContext::Member {
-                space_id: event.space_id.clone(),
+        // A member-shaped event keeps the member context; a spaceless or actorless event is a
+        // system path, so the is_system write-check above is the one it uses.
+        let context = match (&event.space_id, &event.actor_user_id) {
+            (Some(space_id), Some(user_id)) => boma_domain::TenantContext::Member {
+                space_id: space_id.clone(),
                 user_id: user_id.clone(),
             },
-            None => boma_domain::TenantContext::System {
+            (Some(_), None) => boma_domain::TenantContext::System {
                 reason: boma_domain::SystemReason::ScheduledJob,
                 user_id: None,
+            },
+            (None, user_id) => boma_domain::TenantContext::System {
+                reason: boma_domain::SystemReason::ScheduledJob,
+                user_id: user_id.clone(),
             },
         };
         tenant::with_tenant(&self.pool, &context, |conn| {

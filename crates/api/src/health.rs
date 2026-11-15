@@ -7,6 +7,7 @@
 use axum::{
     Json,
     extract::State,
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use boma_app::Capabilities;
@@ -124,6 +125,29 @@ pub async fn readiness(State(state): State<AppState>) -> Response {
         "readiness refused: a required dependency did not answer"
     );
     ApiError::unavailable().into_response()
+}
+
+/// `GET /metrics` — the process' counters, for the operator's scraper.
+///
+/// The endpoint does not exist unless the deployment enabled it (`BOMA_METRICS`): 404, signed
+/// in or not, same rule as every other operator surface. The body is uninteresting to anyone
+/// who does not know what a counter is.
+pub async fn metrics(State(state): State<AppState>) -> Response {
+    if !state.app().services.metrics_enabled {
+        return ApiError::not_found().into_response();
+    }
+    (
+        StatusCode::OK,
+        [
+            (
+                header::CONTENT_TYPE,
+                "text/plain; version=0.0.4; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        state.app().services.metrics.render(),
+    )
+        .into_response()
 }
 
 /// `GET /internal/health` — worker health for the supervisor.

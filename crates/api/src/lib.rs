@@ -11,6 +11,7 @@ pub mod authcap;
 pub mod authroutes;
 pub mod client;
 pub mod config;
+pub mod correlation;
 pub mod error;
 pub mod health;
 pub mod openapi;

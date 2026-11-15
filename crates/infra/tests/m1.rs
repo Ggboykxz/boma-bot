@@ -1942,7 +1942,7 @@ async fn req_033_a_server_and_its_tools_round_trip_through_postgres() {
         .audit
         .append(boma_app::ports::NewAuditEvent {
             id: "aud_mcp_pg_round_trip".to_owned(),
-            space_id: fixture.space_id.clone(),
+            space_id: Some(fixture.space_id.clone()),
             actor_user_id: Some(fixture.user_id.clone()),
             kind: boma_domain::AuditKind::McpPrivateCall,
             target: "company-files".to_owned(),
