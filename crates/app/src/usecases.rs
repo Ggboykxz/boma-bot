@@ -6613,6 +6613,7 @@ pub async fn append_tool_result(
 /// # Errors
 ///
 /// Returns [`AppError::Unavailable`] when a store cannot answer.
+#[allow(clippy::too_many_lines)] // mints the card, appends the blocks and pings the initiator — one flow, in order
 pub async fn park_tool_calls(
     app: &App,
     context: &TenantContext,
@@ -6667,6 +6668,18 @@ pub async fn park_tool_calls(
         Err(error) => return Err(error),
     };
     if let Some(card) = card {
+        // The person sees the card as part of the thread (the UI renders the block), and the
+        // initiator is pinged once — once per card actually created, never on a replay.
+        crate::push::notify_run_waiting(
+            app,
+            crate::push::PushTarget {
+                space_id: thread.space_id.clone(),
+                user_id: run.user_id.clone(),
+                bot_id: claimed.bot.id.clone(),
+                run_id: run.id.clone(),
+            },
+        )
+        .await;
         // The person sees the card as part of the thread (the UI renders the block).
         let stored = app
             .stores

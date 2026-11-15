@@ -305,6 +305,8 @@ pub struct TestAppBuilder {
     messaging: bool,
     /// The Slack app credentials (REQ-048).
     slack: Option<(String, String, String)>,
+    /// The Web Push signing material (REQ-064); tests opt in per test.
+    vapid: Option<boma_app::push::VapidConfig>,
     /// The scripted messaging transport (REQ-048); one is scripted for every platform call.
     messaging_transport: Option<Arc<crate::ScriptedMessagingTransport>>,
     /// Whether the billing surface exists (REQ-051).
@@ -339,6 +341,7 @@ impl Default for TestAppBuilder {
             messaging: false,
             slack: None,
             messaging_transport: None,
+            vapid: None,
             billing: false,
             billing_provider: None,
             billing_webhook_secret: None,
@@ -463,6 +466,14 @@ impl TestAppBuilder {
         transport: Arc<crate::ScriptedMessagingTransport>,
     ) -> Self {
         self.messaging_transport = Some(transport);
+        self
+    }
+
+    /// Builds the application with Web Push enabled for this test (REQ-064); tests that exercise
+    /// pushes opt in, everything else leaves it inert.
+    #[must_use]
+    pub fn vapid(mut self, vapid: Option<boma_app::push::VapidConfig>) -> Self {
+        self.vapid = vapid;
         self
     }
 
@@ -637,7 +648,8 @@ impl TestAppBuilder {
                 .map(|provider| provider as Arc<dyn boma_app::ports::BillingProvider>),
             self.billing_webhook_secret.map(secrecy::SecretString::from),
         )
-        .with_scim_option(self.scim_token.clone());
+        .with_scim_option(self.scim_token.clone())
+        .with_vapid(self.vapid.clone());
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
         } else if self.computers {
@@ -8890,6 +8902,477 @@ mod group_routing_tests {
 mod notification_tests {
     use super::TestApp;
 
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+
+    const TEST_PRIVATE_KEY: &str = "-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIHI1TFBFvNn/oAlAIiY96IqxYSImFDukqiPrhITbtwWFoAoGCCqGSM49
+AwEHoUQDQgAEbuR/XNaarGjA21uGOIOWy8biBXp+oAlPCuCVKB29HUOb47vJgrN8
+8R7KHfpo0/7vPkjfmpLkPjB3nzLcvDH1Jg==
+-----END EC PRIVATE KEY-----
+";
+
+    fn test_vapid() -> boma_app::push::VapidConfig {
+        boma_app::push::VapidConfig::from_env(&BTreeMap::from([
+            (
+                "BOMA_VAPID_PRIVATE_KEY".to_owned(),
+                TEST_PRIVATE_KEY.to_owned(),
+            ),
+            (
+                "BOMA_VAPID_SUBJECT".to_owned(),
+                "mailto:boma-test@example.com".to_owned(),
+            ),
+        ]))
+        .expect("the test key parses")
+        .expect("the test key is complete")
+    }
+
+    struct StubPushServer {
+        addr: String,
+        hits: Arc<AtomicU32>,
+        status: Arc<AtomicU16>,
+        _handle: tokio::task::JoinHandle<()>,
+    }
+
+    impl StubPushServer {
+        fn endpoint(&self) -> String {
+            format!("http://{}/subscribe", self.addr)
+        }
+
+        fn hits(&self) -> u32 {
+            self.hits.load(Ordering::SeqCst)
+        }
+
+        fn set_status(&self, status: u16) {
+            self.status.store(status, Ordering::SeqCst);
+        }
+    }
+
+    fn stub_push(status: u16) -> StubPushServer {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the stub binds");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("local address");
+        let hits = Arc::new(AtomicU32::new(0));
+        let status = Arc::new(AtomicU16::new(status));
+        let hits_clone = Arc::clone(&hits);
+        let status_clone = Arc::clone(&status);
+        let handle = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                hits_clone.fetch_add(1, Ordering::SeqCst);
+                let mut buf = Vec::new();
+                let _ = socket.read(&mut buf).await;
+                let reply = format!(
+                    "HTTP/1.1 {} Push\r\ncontent-length: 0\r\n\r\n",
+                    status_clone.load(Ordering::SeqCst)
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        StubPushServer {
+            addr: addr.to_string(),
+            hits,
+            status,
+            _handle: handle,
+        }
+    }
+
+    struct PushFixture {
+        test: TestApp,
+        stub: StubPushServer,
+        space_id: boma_domain::SpaceId,
+        bot_id: boma_domain::BotId,
+        user_id: boma_domain::UserId,
+        context: boma_domain::TenantContext,
+    }
+
+    async fn push_fixture(status: u16) -> PushFixture {
+        let test = TestApp::builder().vapid(Some(test_vapid())).build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the bot exists");
+        let bot_record = test
+            .app()
+            .stores
+            .bots
+            .find(
+                &boma_domain::TenantContext::Member {
+                    space_id: space_id.clone(),
+                    user_id: owner.clone(),
+                },
+                &bot,
+            )
+            .await
+            .expect("the bot answers")
+            .expect("the bot exists");
+        let _thread = test
+            .app()
+            .stores
+            .threads
+            .for_bot(
+                &boma_domain::TenantContext::Member {
+                    space_id: space_id.clone(),
+                    user_id: owner.clone(),
+                },
+                &bot_record.id,
+            )
+            .await
+            .expect("the thread answers")
+            .expect("the bot has a thread");
+        let context = TestApp::member_context(&space_id, &owner);
+        let stub = stub_push(status);
+
+        // The subscription goes straight to the store; the wire-layer tests cover SSRF checks.
+        test.app()
+            .stores
+            .notifications
+            .subscribe(boma_domain::notification::NewNotificationSubscription {
+                id: "sub-test-1".to_owned(),
+                space_id: space_id.clone(),
+                user_id: owner.clone(),
+                endpoint: stub.endpoint(),
+                p256dh: "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg".to_owned(),
+                auth: "_Md5-ailpgkLkpnHDiVcfA".to_owned(),
+                user_agent: Some("PushTest/1.0".to_owned()),
+                created_at: "2026-11-15T00:00:00Z".to_owned(),
+            })
+            .await
+            .expect("the subscription is stored");
+
+        PushFixture {
+            test,
+            stub,
+            space_id,
+            bot_id: bot,
+            user_id: owner,
+            context,
+        }
+    }
+
+    fn target(test: &PushFixture) -> boma_app::push::PushTarget {
+        boma_app::push::PushTarget {
+            space_id: test.space_id.clone(),
+            user_id: test.user_id.clone(),
+            bot_id: test.bot_id.clone(),
+            run_id: boma_domain::RunId::new("run_064_test".to_owned()).expect("the id"),
+        }
+    }
+
+    async fn claim(
+        test: &PushFixture,
+        status: boma_domain::RunStatus,
+    ) -> (boma_app::usecases::ClaimedRun, boma_domain::ThreadId) {
+        let context = TestApp::member_context(&test.space_id, &test.user_id);
+        let bot = test
+            .test
+            .app()
+            .stores
+            .bots
+            .find(&context, &test.bot_id)
+            .await
+            .expect("the bot answers")
+            .expect("the bot exists");
+        let thread = test
+            .test
+            .app()
+            .stores
+            .threads
+            .for_bot(&context, &bot.id)
+            .await
+            .expect("the thread answers")
+            .expect("the bot has a thread");
+        let run = boma_domain::Run {
+            id: boma_domain::RunId::new("run_064_park".to_owned()).expect("the id"),
+            space_id: test.space_id.clone(),
+            bot_id: test.bot_id.clone(),
+            thread_id: thread.id.clone(),
+            user_id: test.user_id.clone(),
+            status,
+            trigger: boma_domain::RunTrigger::User,
+            client_nonce: None,
+            source_message_id: None,
+            attempt: 1,
+            created_at: "2026-11-15T00:00:00Z".to_owned(),
+            started_at: None,
+            completed_at: None,
+            error: None,
+            lease_owner: None,
+            lease_fence: 0,
+            lease_expires_at: None,
+            steering_from_seq: None,
+            steering_consumed_seq: 0,
+            model_provider: None,
+            model_id: None,
+            model_pinned: false,
+            parent_run_id: None,
+            routine_id: None,
+            not_before: None,
+        };
+        test.test
+            .app()
+            .stores
+            .runs
+            .create(boma_app::ports::NewRun {
+                id: run.id.clone(),
+                space_id: run.space_id.clone(),
+                bot_id: run.bot_id.clone(),
+                thread_id: run.thread_id.clone(),
+                user_id: run.user_id.clone(),
+                trigger: run.trigger,
+                client_nonce: None,
+                source_message_id: None,
+                created_at: run.created_at.clone(),
+                model_provider: None,
+                model_id: None,
+                model_pinned: false,
+                parent_run_id: None,
+                routine_id: None,
+            })
+            .await
+            .expect("the run row is created");
+        (
+            boma_app::usecases::ClaimedRun {
+                run,
+                bot,
+                thread: thread.clone(),
+            },
+            thread.id,
+        )
+    }
+
+    #[tokio::test]
+    async fn req_064_daily_cap_is_enforced_at_the_boundary() {
+        let test = push_fixture(201).await;
+        test.test
+            .app()
+            .stores
+            .notifications
+            .set_policy(
+                &test.context,
+                boma_domain::notification::SetNotificationPolicy {
+                    bot_id: test.bot_id.clone(),
+                    notify_waiting: None,
+                    notify_completed: None,
+                    daily_cap: Some(2),
+                },
+            )
+            .await
+            .expect("the cap is stored");
+
+        for _ in 0..3 {
+            boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+        }
+        assert_eq!(test.stub.hits(), 2, "the third send is over the cap");
+    }
+
+    #[tokio::test]
+    async fn req_064_three_permanent_failures_delete_the_subscription() {
+        let test = push_fixture(410).await;
+        for _ in 0..3 {
+            boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+        }
+        let listed = test
+            .test
+            .app()
+            .stores
+            .notifications
+            .list(&test.context)
+            .await
+            .expect("the list answers");
+        assert!(listed.is_empty(), "three permanent failures delete the row");
+    }
+
+    #[tokio::test]
+    async fn req_064_transient_failure_does_not_delete_and_success_resets() {
+        let test = push_fixture(500).await;
+        for _ in 0..3 {
+            boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+        }
+        let listed = test
+            .test
+            .app()
+            .stores
+            .notifications
+            .list(&test.context)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed.len(), 1, "a transient failure never deletes the row");
+        assert_eq!(listed[0].fail_count, 3);
+
+        test.stub.set_status(201);
+        boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+        let listed = test
+            .test
+            .app()
+            .stores
+            .notifications
+            .list(&test.context)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed[0].fail_count, 0, "success resets the counter");
+    }
+
+    #[tokio::test]
+    async fn req_064_fail_policy_completed_disabled_suppresses_the_ping() {
+        let test = push_fixture(201).await;
+
+        // Default: completed pings are off.
+        boma_app::push::notify_run_outcome(
+            test.test.app(),
+            target(&test),
+            boma_app::push::PushOutcome::Failed,
+        )
+        .await;
+        assert_eq!(
+            test.stub.hits(),
+            0,
+            "completed/failed pings are off by default"
+        );
+
+        test.test
+            .app()
+            .stores
+            .notifications
+            .set_policy(
+                &test.context,
+                boma_domain::notification::SetNotificationPolicy {
+                    bot_id: test.bot_id.clone(),
+                    notify_waiting: None,
+                    notify_completed: Some(true),
+                    daily_cap: None,
+                },
+            )
+            .await
+            .expect("the policy is stored");
+        boma_app::push::notify_run_outcome(
+            test.test.app(),
+            target(&test),
+            boma_app::push::PushOutcome::Completed,
+        )
+        .await;
+        assert_eq!(
+            test.stub.hits(),
+            1,
+            "the policy in-switch delivers the ping"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_064_a_wedged_push_leaves_the_run_parked() {
+        let test = TestApp::builder().vapid(Some(test_vapid())).build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the bot exists");
+        let result = test
+            .app()
+            .stores
+            .notifications
+            .subscribe(boma_domain::notification::NewNotificationSubscription {
+                id: "req064wedge1".to_owned(),
+                space_id: space_id.clone(),
+                user_id: owner.clone(),
+                endpoint: "http://127.0.0.1:1/dead".to_owned(),
+                p256dh: "BBPb7By_a6HvK0YueJEc86yZElts9klQHcgXPecGKi_tTWwTp90GexfpVuQVMrtiISxvbjGwVd24FxSsKTOR4pg".to_owned(),
+                auth: "_Md5-ailpgkLkpnHDiVcfA".to_owned(),
+                user_agent: None,
+                created_at: "2026-11-15T00:00:00Z".to_owned(),
+            })
+            .await;
+        assert!(
+            result.is_ok(),
+            "the subscription stores with any endpoint at the portlayer"
+        );
+
+        boma_app::push::notify_run_waiting(
+            test.app(),
+            boma_app::push::PushTarget {
+                space_id,
+                user_id: owner,
+                bot_id: bot,
+                run_id: boma_domain::RunId::new("req_064_wedged".to_owned()).expect("the id"),
+            },
+        )
+        .await;
+        // Reaching here proves the wedged endpoint never propagated an error.
+    }
+
+    #[tokio::test]
+    async fn req_064_repark_after_steering_notifies_once_per_card() {
+        let test = push_fixture(201).await;
+        let context = TestApp::member_context(&test.space_id, &test.user_id);
+        let (mut claimed, _thread_id) = claim(&test, boma_domain::RunStatus::Running).await;
+        // A fresh run path on top of the seeded bot
+        claimed.run.id = boma_domain::RunId::new("run_064_park".to_owned()).expect("the id");
+
+        test.stub.hits.store(0, Ordering::SeqCst);
+
+        let calls = vec![boma_app::ports::ToolCallRequest {
+            id: "parked-call-1".to_owned(),
+            name: "memory.write".to_owned(),
+            arguments: serde_json::json!({"path": "x.md", "text": "hi"}),
+        }];
+
+        boma_app::usecases::park_tool_calls(test.test.app(), &context, &claimed, calls.clone())
+            .await
+            .expect("the first park records a card");
+        // The second call, a crash replay, parks nothing new and pings nobody.
+        boma_app::usecases::park_tool_calls(test.test.app(), &context, &claimed, calls)
+            .await
+            .expect("the replay is absorbed");
+        assert_eq!(
+            test.stub.hits(),
+            1,
+            "only the card that was actually created pings"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_064_payload_is_content_free() {
+        let _test = push_fixture(201).await;
+        let body = boma_app::push::build_push_payload(
+            boma_domain::notification::NotificationKind::Waiting,
+            None,
+            "en-US",
+            "run_064_test",
+            "bot_analyst",
+        );
+        let payload: serde_json::Value = serde_json::from_str(&body).expect("the payload parses");
+        let keys: Vec<&str> = payload
+            .as_object()
+            .expect("the payload is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut keys = keys;
+        keys.sort_unstable();
+        assert_eq!(keys, ["kind", "tag", "title", "url", "v"]);
+        let serialized = body.clone();
+        assert!(!serialized.contains("tool"), "no tool name in a push");
+        assert!(!serialized.contains("call_"), "no tool call in a push");
+    }
     #[tokio::test]
     async fn req_064_dead_endpoints_expire_after_three_permanent_failures() {
         let test = TestApp::builder().build();

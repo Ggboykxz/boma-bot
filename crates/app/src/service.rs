@@ -271,6 +271,9 @@ pub struct Services {
     /// Whether `GET /metrics` answers (BOMA_METRICS). Off by default; the endpoint is absent,
     /// not degraded, when the flag is absent (REQ-054).
     pub metrics_enabled: bool,
+    /// The Web Push signing material (REQ-064). `None` means pushes are built but inert;
+    /// the validated operator configuration, handed at boot.
+    pub vapid: Option<crate::push::VapidConfig>,
     /// Whether the one-time invitation link is written to the process output (BOMA_SPACES_PRINT_INVITE_LINK).
     pub print_invite_link: bool,
     /// Whether the one-time recovery link is written to the process output (BOMA_AUTH_PRINT_RESET_LINK).
@@ -342,6 +345,7 @@ impl Services {
             scim_token: None,
             metrics: Arc::new(crate::metrics::Metrics::new()),
             metrics_enabled: false,
+            vapid: None,
             print_recovery_link: false,
             print_invite_link: false,
             slack: None,
@@ -442,6 +446,16 @@ impl Services {
     #[must_use]
     pub fn with_slack(mut self, slack: Option<crate::ports::SlackAppConfig>) -> Self {
         self.slack = slack;
+        self
+    }
+
+    /// Adds the Web Push signing material, or its absence (REQ-064).
+    ///
+    /// `None` disables delivery — notification sends become silent no-ops; `Some(config)` is the
+    /// operator's validated choice, handed at boot.
+    #[must_use]
+    pub fn with_vapid(mut self, vapid: Option<crate::push::VapidConfig>) -> Self {
+        self.vapid = vapid;
         self
     }
 

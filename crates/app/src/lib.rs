@@ -14,6 +14,7 @@ pub mod error;
 pub mod health;
 pub mod metrics;
 pub mod ports;
+pub mod push;
 pub mod service;
 pub mod usecases;
 pub mod worker;

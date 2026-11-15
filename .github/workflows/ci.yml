@@ -53,6 +53,11 @@ jobs:
       - name: docker daemon is reachable
         run: docker info
 
+      # The push provider (web-push -> ece -> openssl-sys) compiles against OpenSSL (REQ-064).
+      # The runner ships libssl-dev; declare it so an image change never breaks the build.
+      - name: openssl headers for the push provider
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends pkg-config libssl-dev
+
       # `--locked` everywhere: Cargo.lock is committed (AGENTS.md). A missing lock is a hard
       # failure on purpose, never a silent resolve. docs/STATE.md records that M0 cannot produce it.
       - name: fmt

@@ -14,6 +14,12 @@ RUN npm run build
 FROM rust:1.99.1-bookworm AS builder
 WORKDIR /src
 
+# The push provider (web-push -> ece -> openssl) needs OpenSSL headers at build time
+# (REQ-064 Web Push). The runner stage stays slim: only ca-certificates there.
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends pkg-config libssl-dev \
+ && rm -rf /var/lib/apt/lists/*
+
 # Manifests first so a source-only change reuses the dependency compilation.
 COPY rust-toolchain.toml rustfmt.toml clippy.toml Cargo.toml Cargo.lock ./
 COPY crates ./crates

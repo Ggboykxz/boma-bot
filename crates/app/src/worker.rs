@@ -82,6 +82,7 @@ impl Worker {
     ///
     /// Returns [`AppError`] when a store cannot answer. A run that fails is *failed*, not left
     /// running: the failure is recorded on the run so the chat can say why (REQ-021).
+    #[allow(clippy::too_many_lines)] // one function per turn is the design: the arms interlock
     pub async fn step(&self) -> Result<bool, AppError> {
         let step_started = std::time::Instant::now();
         let Some(claimed) = usecases::claim_run(&self.app, &self.owner).await? else {
@@ -180,6 +181,17 @@ impl Worker {
             None,
         )
         .await?;
+        crate::push::notify_run_outcome(
+            &self.app,
+            crate::push::PushTarget {
+                space_id: run.space_id.clone(),
+                user_id: run.user_id.clone(),
+                bot_id: run.bot_id.clone(),
+                run_id: run.id.clone(),
+            },
+            crate::push::PushOutcome::Completed,
+        )
+        .await;
         announce_run_finished(&self.app, &run, "completed", step_started);
         // A routine that woke this run: reset its failure counter, so one clean run unpauses
         // the routine at the next threshold crossing (REQ-024).
@@ -606,7 +618,19 @@ impl Worker {
                 // never the value that broke it, and never a driver's internals.
                 Some(reason.detail),
             )
-            .await
+            .await?;
+        crate::push::notify_run_outcome(
+            &self.app,
+            crate::push::PushTarget {
+                space_id: run.space_id.clone(),
+                user_id: run.user_id.clone(),
+                bot_id: run.bot_id.clone(),
+                run_id: run.id.clone(),
+            },
+            crate::push::PushOutcome::Failed,
+        )
+        .await;
+        Ok(())
     }
 }
 
