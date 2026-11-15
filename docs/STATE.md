@@ -56,12 +56,13 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   catalogue). **Complete.**
 - M9 — Operate: REQ-044 (export/import/delete), REQ-045 (audit JSONL, security events, SCIM),
   REQ-054 (structured logs + metrics + CSP reports), REQ-058 (admin surfaces).
-- M10 — UI complete + desktop: REQ-055. **In flight, owner veto 2026-11-15 on the proposed
-  Tauri (ADR-016)**: all screens from `spec/08-ui-ux.md` are built (sign-in/up/recovery, invite,
-  onboarding, `/app/artifacts` + detail, `/integrations/setup`, `/app/board` flag-gated, `/p/<token>`,
-  admin access/plugins, activity, shared not-found screen, computer panel), all 7 UI goldens are
-  implemented with zero pending, axe zero critical/serious everywhere incl. RTL, Electron shell
-  serves the static export. Caveats needing M11: `/app/g/:groupId` (group chats) and `/app/x/:linkId`
+- M10 — UI complete + desktop: REQ-055. **Complete (`18fd8ca`, CI green run `43702217584`;
+  owner veto 2026-11-15 on the proposed Tauri, ADR-016)**: all screens from `spec/08-ui-ux.md`
+  are built (sign-in/up/recovery, invite, onboarding, `/app/artifacts` + detail, `/integrations/setup`,
+  `/app/board` flag-gated, `/p/<token>`, admin access/plugins, activity, shared not-found screen,
+  computer panel), all 7 UI goldens are implemented with zero pending, axe zero critical/serious
+  everywhere incl. RTL, Electron shell packs in CI and serves the static export at the origin.
+  Caveats needing M11: `/app/g/:groupId` (group chats) and `/app/x/:linkId`
   (a pre-M10 navigation row whose semantics were never defined; the shared-page flow settled at
   `/p/<token>`) — stale rows on the owner's side; see the report to the owner.
 - M11 — Harden and release: regression across the workspace, all defects closed, budgets measured,
