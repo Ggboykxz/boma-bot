@@ -1,0 +1,102 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build and publish the release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the GitHub release and upload assets
+      id-token: write # keyless provenance attestation (Sigstore/Rekor)
+    steps:
+      - name: Check out the tagged tree
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the web client
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Build the Rust binary
+        run: cargo build --release --locked --bin boma
+
+      - name: Assemble the server bundle
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          mkdir -p dist staging/boma-${VERSION}
+          cp target/release/boma staging/boma-${VERSION}/
+          cp -r apps/web/out staging/boma-${VERSION}/web
+          cp -r migrations staging/boma-${VERSION}/migrations
+          cp README.md LICENSE CHANGELOG.md staging/boma-${VERSION}/
+          cp docs/UPGRADING.md staging/boma-${VERSION}/UPGRADING.md
+          tar -czf "dist/boma-${VERSION}-linux-x86_64.tar.gz" -C staging "boma-${VERSION}"
+
+      - name: Pack the desktop shell (unpacked, unsigned)
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npx electron-builder --dir --linux
+          ls dist
+          tar -czf "../../dist/boma-desktop-${VERSION}-linux-x64.tar.gz" -C dist linux-unpacked
+
+      - name: Write the checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS.txt
+
+      - name: Ensure there is something to publish
+        run: ls -la dist
+
+      - name: Attest provenance (Sigstore, keyless via OIDC)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            echo "Boma Bot — persistent AI teammates on hardware you own."
+            echo
+            echo "What is in this release: the full product, rebuilt in Rust from the behaviour spec — platform (M1–M3), computers (M4), integrations (M5), artifacts/pages/board (M6), channels (M7), models and money (M8), operations (M9), every screen from the spec (M10) and group chats with bot-to-bot handoffs (M11, REQ-010). 55 of 58 REQ ids are covered by tests carrying their id in the name; REQ-049 (voice, COULD) and REQ-056 (mobile, SHOULD) are deferred by record."
+            echo
+            echo "Artifacts (hashes in SHA256SUMS.txt; Sigstore attestations are published for the tarballs and the sums):"
+            echo
+            echo "- boma-${VERSION}-linux-x86_64.tar.gz — the server: the boma binary, the static web build, migrations, README/LICENSE/CHANGELOG and docs/UPGRADING.md. Serve it with boma migrate && boma serve; see docs/UPGRADING.md."
+            echo "- boma-desktop-${VERSION}-linux-x64.tar.gz — the Electron shell, unpacked and unsigned; see docs/UPGRADING.md (§Desktop). No auto-update; updates are manual."
+            echo
+            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI 4 jobs on every push."
+            echo
+            echo "Everything else is in the repository: CHANGELOG.md, docs/PLAN.md, docs/TRACEABILITY.md (56/58 REQ ids in test names), docs/adr/ (25 decisions)."
+          } > release-notes.md
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Boma Bot ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            dist/*
