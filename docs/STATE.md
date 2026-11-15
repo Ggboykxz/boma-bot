@@ -130,6 +130,11 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     - OpenSSL headers declared (pkg-config + libssl-dev) for `web-push` → `ece` → `openssl-sys`.
     - REQ-049 (voice) untouched; desktop signing untouched (identity blocked); destinations and
       k3d chart are M15.2/M15.3.
+    - `cargo deny` advisory tripwires hit twice on `web-push`'s chain (rsa via jwt-simple/
+      superboring; crypto-bigint via jwt-simple -> p256 -> ecdsa -> elliptic-curve). No fix
+      exists inside the semver windows available (web-push 0.11.0 pins jwt-simple ^0.12.11).
+      Documented ignores in deny.toml with dated rationale; the threat model (signature-only,
+      deployment-owned service-identity key, no decryption) is recorded there.
   - M12.2 (this slice) — external agents are clickable: thread header now carries an inline
     panel (inline form for base URL + agent name + secret name) calling
     `/rpc/bots/externalAgentStatus`, `bots.connectExternal`, `botsDisconnectExternal`;

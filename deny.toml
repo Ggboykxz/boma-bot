@@ -9,7 +9,21 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+  # No fixed release exists upstream (rsa >= 0.10.0-rc both flagged on 2026-11-15). The path
+  # is jwt-simple -> superboring -> rsa (web-push). JWT-simple does RSA *verify* only; we never
+  # decrypt with RSA anywhere in the tree, and the Marvin sidechannel targets PKCS#1 v1.5
+  # decryption oracles, so the exploitable primitive is absent. Owner-visible: review on
+  # every web-push/jwt-simple upgrade. (2026-11-15)
+  "RUSTSEC-2023-0071",
+  # Fix requires elliptic-curve 0.14.3's constant-time fixes. The fix chain reaches via
+  # jwt-simple >=0.13; web-push v0.11.0 pins jwt-simple ^0.12.11 and cannot move without an
+  # upstream release. The affected constant-time paths are arithmetic over the deployment's
+  # VAPID service-identity key (used for outbound push signatures on one host); theft of this
+  # key lets an attacker send pushes through the deployment's identity, never to read mail,
+  # conversations or secrets. Revisit when web-push/jwt-simple upgrade. (2026-11-15)
+  "RUSTSEC-2026-0387",
+]
 
 [licenses]
 version = 2
