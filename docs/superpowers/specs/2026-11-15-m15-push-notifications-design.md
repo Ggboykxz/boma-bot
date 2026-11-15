@@ -17,10 +17,16 @@ Apple/Windows identity is provided, and the unsigned Electron pack stays the rel
 - The app can push a Web Push (RFC 8030) notification through the browser's push service, after a
   member opts in per bot, per space.
 - Triggers, chosen by the owner:
-  1. **Waiting** — a run pauses on a person (approval card, question). The member is told that a
-     bot needs them and why-class (`waiting`), never the contents.
-  2. **Completed** — the run the member started reached a terminal state. Initiator gets a push;
-     push goes to the run initiator only.
+  1. **Waiting** — a run pauses on a person on a `WaitingInput` (approval card, question). Owner
+     scope: `WaitingTakeover` (a computer ask) is **out** of M15.1. Initiator of the run is the
+     only recipient. Run-user-set is always populated, including routine- and webhook-triggered
+     runs, so they ping the member behind that trigger; a routine/webhook-triggered run **is**
+     a waiting push too.
+  2. **Completed/failed** — the run the member started reached `Completed` **or** `Failed`
+     (not `Cancelled`). Initiator gets a push; push goes to the run initiator only.
+
+  The run's initiator for a routine/webhook run is the member behind that trigger (the routine
+  creator / the webhook guard owner) — whoever `Run.user_id` names.
 - Owner decision: on `Completed`, the notified recipient is the **initiator of the run**, not the
   members named `@` in the reply.
 - Per-bot policy: which kinds notify, a daily cap per bot. Policy is stored per (space, user, bot).
@@ -34,7 +40,7 @@ Apple/Windows identity is provided, and the unsigned Electron pack stays the rel
 
 ## Non-goals / anti-goals
 
-- No conversation **content** in a push body, ever (title + URL only).
+- No conversation **content** in a push body, ever (title + tag + URL only).
 - No push without an explicit member opt-in (`notifications.subscribe` requires a permission grant
   on the browser).
 - No background suppression by the app itself — the browser's push service is the queue; the
@@ -67,8 +73,10 @@ Server-side subscriptions, sent by the worker, RFC 8030 + VAPID, best-effort.
 - `fail_count` per subscription; at 3 consecutive failures with a 404/410 status the subscription
   row is deleted (the endpoint is dead). Transient (5xx, network) failures only bump the counter,
   which resets on success.
-- Payload `{ v: 1, kind: "waiting" | "completed", title, body, tag, url }`. No message text, no
-  names of other members, no tool arguments.
+- Payload `{ v: 1, kind: "waiting" | "completed", title, tag, url }` — the serialized keys are
+  exactly these five. No message text, no tool arguments, no member names beyond the bot name the
+  member already knows. The server builds `title` from the member's `users.locale` using a small
+  built-in catalog (en-US / fr / he; anything else falls back to en-US).
 
 ### Why the other two approaches do not fit
 
@@ -112,9 +120,13 @@ Server-side subscriptions, sent by the worker, RFC 8030 + VAPID, best-effort.
   - `notify_waiting_run(ctx, run)` / `notify_completed_run(ctx, run)` — build the payload, check the
     member's policy, count today's sends, POST via `web-push 0.11`. Best-effort: every error path
     logs and returns, never fails a run.
-- Worker: hook the two existing spots (`worker.rs` at `park_tool_calls` result / `Question`
-  equivalent — the run-waiting paths via `set_run_status(WaitingInput)` — and at
-  `announce_run_finished(.., "completed")`).
+- Worker: hook the sites where the member is actually stranded, not the metric helper alone:
+  - **Waiting** — at the card-creation site (the approval card is created inside
+    `usecases::park_tool_calls`; likewise a question card when one is parked). The push fires
+    once per card actually created, not per call, never on a re-park that dedupes against an
+    existing card.
+  - **Completed/failed** — at the terminal transition sites (`worker.rs` `announce_run_finished`
+    for `Completed`, and the `fail_run` path for `Failed`). `Cancelled` gets nothing.
 - Wire RPCs (new namespace `notifications`):
   - `notifications.status {} -> { enabled, vapidPublicKey? }`
   - `notifications.subscribe { endpoint, p256dh, auth, userAgent? } -> { id }`
@@ -131,6 +143,9 @@ Server-side subscriptions, sent by the worker, RFC 8030 + VAPID, best-effort.
   stubbed HTTP; web e2e `notifications-panel.spec.ts` following the external-agent pattern.
 - Web Push payload is "content-free by construction": a unit test asserts the serialized payload
   keys are exactly `{v, kind, title, tag, url}` and that `title` contains no message text.
+- **Subscribe endpoint validation**: HTTPS-only; the endpoint host must not be private,
+  loopback, link-local, or CGNAT (checked at subscribe time against the parsed host, reusing the
+  existing net-safety host screening used by messaging installs). Any violation → rule error.
 - **VAPID keys**: operator provides `BOMA_VAPID_PUBLIC_KEY` + `BOMA_VAPID_PRIVATE_KEY` +
   `BOMA_VAPID_SUBJECT` (e.g. `mailto:admin@example.com`). If unset → feature disabled, warning at
   startup. The doc does not auto-generate keys; there is no hidden place where a key could end up.
@@ -148,7 +163,11 @@ Server-side subscriptions, sent by the worker, RFC 8030 + VAPID, best-effort.
   of a kind, the boolean names it. (Final shape picked in M15.2 planning; the policy intent is
   "which channels this bot uses".)
 - Wire RPCs added to the same namespace: `notifications.destinations.list/create/delete` and the
-  policy flags above. Destinations are space-wide (one webhook per space), member-managed.
+  policy flags above. Destinations are space-wide (one webhook per space), **Owner/Admin only** —
+  a member may not create or delete a channel the whole space reads.
+- The policy gate for a destination send is the **initiator's own policy row** and its cap: the
+  capability (the webhook's existence as configured) is the opt-in, the cap is per member and per
+  bot like every other channel. A cap hit skips both channels silently.
 - Sending: `PushDestination` adapter; Slack POSTs `{ "text": payload.url-as-link }`,
   Teams POSTs a `MessageCard` JSON. Sent through `MessagingTransport::post_json` with the same
   SSRF rules as messaging installs (HTTPS, no private hosts unless the install opted in — for a
@@ -181,10 +200,16 @@ counting is `COUNT(*) WHERE sent_at >= date_trunc('day', now() AT TIME ZONE 'utc
 
 ## Delivery contract (what fails in which way)
 
+- A waiting push fires **once per card created**, not on every replay through the park path, so
+  approval cards and question cards ping exactly once per wait. Re-park after a steering pass
+  parks a new card and pings once per new card.
+
+
 - Missing VAPID → `notifications.status` answers `enabled: false`; `subscribe` is refused with a
   rule error; UI shows unavailable. No RPC 500s anywhere.
-- Endpoint returns 404/410 thrice → row deleted, `fail_count` reset, zero user-visible surfaces.
-- Network/5xx → `fail_count` bumps; subscription stays; cap not reached.
+- Endpoint returns 404/410 **or 401/403** (permanent) thrice → row deleted, `fail_count` reset,
+  zero user-visible surfaces.
+- Network/5xx (transient) → `fail_count` bumps; subscription stays; cap not reached.
 - Cap reached → send skipped, log nothing; the run is unaffected.
 - Push service slow (timeout 5s) → same best-effort path; log a warning, move on.
 
@@ -194,6 +219,12 @@ counting is `COUNT(*) WHERE sent_at >= date_trunc('day', now() AT TIME ZONE 'utc
   REQ-059/060/061. The floor stays frozen; these are new ids.
 - `docs/adr/027-notifications.md` records: channel set, delivery contract, per-bot policy default,
   key-generation stance.
+
+## VAPID key handling
+
+Exactly like `BOMA_MASTER_KEY`: present + valid → feature enabled; **absent** → feature disabled
+with a key warning (`notifications.status` answers `enabled: false`); **malformed** public key,
+private key, or subject → fail-fast at boot (typed config). No cached-generated key, ever.
 
 ## What's left to the builder
 
