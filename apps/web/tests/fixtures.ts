@@ -406,6 +406,42 @@ const SEED_CARD_MESSAGE = {
 };
 
 const SEEDS: Record<string, (page: Page) => Promise<void>> = {
+  /** A shared page that exists, with no session (REQ-037). */
+  "shared-page-valid": async (page) => {
+    await page.route("**/api/v1/pages/shared/token_golden", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-robots-tag": "noindex, nofollow",
+          "referrer-policy": "no-referrer",
+        },
+        body: JSON.stringify({
+          title: "Weekly report",
+          blocks: [{ type: "text", text: "All green." }],
+          updatedAt: "2026-01-01T00:02:00Z",
+        }),
+      });
+    });
+  },
+
+  /** A token that does not match a page; identical to a revoked one (REQ-037). */
+  "shared-page-unknown-token": async (page) => {
+    await page.route("**/api/v1/pages/shared/token_unknown", async (route) => {
+      await route.fulfill({
+        status: 404,
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-robots-tag": "noindex, nofollow",
+          "referrer-policy": "no-referrer",
+        },
+        body: JSON.stringify({ error: "Not found." }),
+      });
+    });
+  },
+
   /** One message, one row: the REQ-001 golden counts the rows. */
   "thread-with-one-user-message": async (page) => {
     await seedRpc(page, {

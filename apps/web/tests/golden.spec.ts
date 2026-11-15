@@ -75,3 +75,60 @@ for (const stem of stems) {
     await assertExpectations(page, fixture.expect);
   });
 }
+
+// ---------------------------------------------------------------------------
+// M10 — public shared page (REQ-037, spec/08-ui-ux.md §8.8)
+// ---------------------------------------------------------------------------
+
+test("REQ-037-shared-page a valid token renders the page with no chrome", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/pages/shared/token_golden", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-robots-tag": "noindex, nofollow",
+        "referrer-policy": "no-referrer",
+      },
+      body: JSON.stringify({
+        title: "Weekly report",
+        blocks: [{ type: "text", text: "All green." }],
+        updatedAt: "2026-01-01T00:02:00Z",
+      }),
+    });
+  });
+
+  await page.goto("/p/token_golden/");
+
+  await expect(page.getByRole("main")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Weekly report" })).toBeVisible();
+  await expect(page.getByText("All green.")).toBeVisible();
+  await expect(page.getByRole("navigation")).toHaveCount(0);
+  await expect(page.getByRole("button")).toHaveCount(0);
+});
+
+test("REQ-037-shared-page-invalid an unknown token renders one heading and no retry form", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/pages/shared/token_unknown", async (route) => {
+    await route.fulfill({
+      status: 404,
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-robots-tag": "noindex, nofollow",
+        "referrer-policy": "no-referrer",
+      },
+      body: JSON.stringify({ error: "Not found." }),
+    });
+  });
+
+  await page.goto("/p/token_unknown/");
+
+  await expect(page.getByRole("main")).toBeVisible();
+  await expect(page.getByRole("heading")).toHaveCount(1);
+  await expect(page.getByRole("navigation")).toHaveCount(0);
+  await expect(page.getByRole("form")).toHaveCount(0);
+});

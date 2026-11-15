@@ -1,187 +1,187 @@
 {
-  "api": {
-    "artifact-create": {
-      "status": "pending",
-      "req": "REQ-036",
-      "reason": "M6 - the fixture pins a synthetic hash (sha256:0000\u2026) and size 11 for a 9-byte payload; a real implementation cannot replay it byte for byte. The rebuild serves the real sha256 and size; the API tests in crates/api/tests/rpc_surface.rs::req_036_a_member_creates_gets_lists_and_removes_an_artifact pin the contract instead."
-    },
-    "artifact-versions": {
-      "status": "pending",
-      "req": "REQ-036",
-      "reason": "M6 - the fixture depends on the artifact-create world (synthetic hash); the version-chain contract is pinned by crates/testkit/src/build.rs::artifact_tests::req_036_an_update_versions_the_family and crates/infra/tests/m1.rs::req_036_an_artifact_round_trip_survives_postgres instead."
-    },
-    "auth-capabilities": {
-      "status": "implemented",
-      "req": "REQ-040",
-      "reason": null
-    },
-    "bot-create": {
-      "status": "implemented",
-      "req": "REQ-004",
-      "reason": null
-    },
-    "bot-webhook-denied": {
-      "status": "implemented",
-      "req": "REQ-050"
-    },
-    "computer-status": {
-      "status": "implemented",
-      "req": "REQ-026",
-      "reason": null
-    },
-    "computer-takeover-conflict": {
-      "status": "implemented",
-      "req": "REQ-029",
-      "reason": null
-    },
-    "cross-tenant-not-found": {
-      "status": "implemented",
-      "req": "REQ-043",
-      "reason": null
-    },
-    "export-start": {
-      "status": "implemented",
-      "req": "REQ-044"
-    },
-    "group-create": {
-      "status": "pending",
-      "req": "REQ-010",
-      "reason": "M11 - group chats and the shared thread arrive with the groups milestone; M2 has no groups"
-    },
-    "health": {
-      "status": "implemented",
-      "req": "REQ-053",
-      "reason": null
-    },
-    "memory-write": {
-      "status": "implemented",
-      "req": "REQ-022",
-      "reason": null
-    },
-    "models-catalog": {
-      "status": "pending",
-      "req": "REQ-052",
-      "reason": "M8 - the capture is synthetic (provider_golden / model_golden): the served catalogue derives display metadata from the deployment's declared keys, so the fixture cannot replay byte for byte. The contract is pinned by domain and RPC tests."
-    },
-    "plugin-submission": {
-      "status": "implemented",
-      "req": "REQ-034",
-      "reason": null
-    },
-    "plugin-submission-invalid": {
-      "status": "implemented",
-      "req": "REQ-034",
-      "reason": null
-    },
-    "ready": {
-      "status": "implemented",
-      "req": "REQ-053",
-      "reason": null
-    },
-    "routine-create": {
-      "status": "implemented",
-      "req": "REQ-023",
-      "reason": null
-    },
-    "routine-once": {
-      "status": "implemented",
-      "req": "REQ-023",
-      "reason": null
-    },
-    "run-list": {
-      "status": "implemented",
-      "req": "REQ-011",
-      "reason": null
-    },
-    "run-retry": {
-      "status": "implemented",
-      "req": "REQ-012",
-      "reason": null
-    },
-    "send-message": {
-      "status": "implemented",
-      "req": "REQ-001",
-      "reason": null
-    },
-    "send-message-replay": {
-      "status": "implemented",
-      "req": "REQ-002",
-      "reason": null
-    },
-    "shared-page": {
-      "status": "implemented",
-      "req": "REQ-037"
-    },
-    "shared-page-invalid": {
-      "status": "implemented",
-      "req": "REQ-037"
-    },
-    "space-create": {
-      "status": "implemented",
-      "req": "REQ-042",
-      "reason": null
-    },
-    "space-invite": {
-      "status": "implemented",
-      "req": "REQ-042",
-      "reason": null
-    },
-    "thread-answer": {
-      "status": "implemented",
-      "req": "REQ-017",
-      "reason": null
-    },
-    "thread-messages": {
-      "status": "implemented",
-      "req": "REQ-005",
-      "reason": null
-    },
-    "thread-subscribe": {
-      "status": "implemented",
-      "req": "REQ-020",
-      "reason": null
-    },
-    "unauthorized": {
-      "status": "implemented",
-      "req": "REQ-040",
-      "reason": null
-    }
+ "api": {
+  "artifact-create": {
+   "status": "pending",
+   "req": "REQ-036",
+   "reason": "M6 - the fixture pins a synthetic hash (sha256:0000\u2026) and size 11 for a 9-byte payload; a real implementation cannot replay it byte for byte. The rebuild serves the real sha256 and size; the API tests in crates/api/tests/rpc_surface.rs::req_036_a_member_creates_gets_lists_and_removes_an_artifact pin the contract instead."
   },
-  "ui": {
-    "REQ-001-send-message": {
-      "status": "implemented",
-      "req": "REQ-001",
-      "reason": null
-    },
-    "REQ-007-pending-card": {
-      "status": "implemented",
-      "req": "REQ-007",
-      "reason": null
-    },
-    "REQ-009-unread-divider": {
-      "status": "implemented",
-      "req": "REQ-009",
-      "reason": null
-    },
-    "REQ-012-run-statuses": {
-      "status": "implemented",
-      "req": "REQ-012",
-      "reason": null
-    },
-    "REQ-026-computer-panel": {
-      "status": "pending",
-      "req": "REQ-026",
-      "reason": "M4 - the computer panel lands with the computer milestone"
-    },
-    "REQ-037-shared-page": {
-      "status": "pending",
-      "req": "REQ-037",
-      "reason": "M6 - shared pages have no screen before the sharing milestone"
-    },
-    "REQ-037-shared-page-invalid": {
-      "status": "pending",
-      "req": "REQ-037",
-      "reason": "M6 - the invalid-token screen arrives with the shared page"
-    }
+  "artifact-versions": {
+   "status": "pending",
+   "req": "REQ-036",
+   "reason": "M6 - the fixture depends on the artifact-create world (synthetic hash); the version-chain contract is pinned by crates/testkit/src/build.rs::artifact_tests::req_036_an_update_versions_the_family and crates/infra/tests/m1.rs::req_036_an_artifact_round_trip_survives_postgres instead."
+  },
+  "auth-capabilities": {
+   "status": "implemented",
+   "req": "REQ-040",
+   "reason": null
+  },
+  "bot-create": {
+   "status": "implemented",
+   "req": "REQ-004",
+   "reason": null
+  },
+  "bot-webhook-denied": {
+   "status": "implemented",
+   "req": "REQ-050"
+  },
+  "computer-status": {
+   "status": "implemented",
+   "req": "REQ-026",
+   "reason": null
+  },
+  "computer-takeover-conflict": {
+   "status": "implemented",
+   "req": "REQ-029",
+   "reason": null
+  },
+  "cross-tenant-not-found": {
+   "status": "implemented",
+   "req": "REQ-043",
+   "reason": null
+  },
+  "export-start": {
+   "status": "implemented",
+   "req": "REQ-044"
+  },
+  "group-create": {
+   "status": "pending",
+   "req": "REQ-010",
+   "reason": "M11 - group chats and the shared thread arrive with the groups milestone; M2 has no groups"
+  },
+  "health": {
+   "status": "implemented",
+   "req": "REQ-053",
+   "reason": null
+  },
+  "memory-write": {
+   "status": "implemented",
+   "req": "REQ-022",
+   "reason": null
+  },
+  "models-catalog": {
+   "status": "pending",
+   "req": "REQ-052",
+   "reason": "M8 - the capture is synthetic (provider_golden / model_golden): the served catalogue derives display metadata from the deployment's declared keys, so the fixture cannot replay byte for byte. The contract is pinned by domain and RPC tests."
+  },
+  "plugin-submission": {
+   "status": "implemented",
+   "req": "REQ-034",
+   "reason": null
+  },
+  "plugin-submission-invalid": {
+   "status": "implemented",
+   "req": "REQ-034",
+   "reason": null
+  },
+  "ready": {
+   "status": "implemented",
+   "req": "REQ-053",
+   "reason": null
+  },
+  "routine-create": {
+   "status": "implemented",
+   "req": "REQ-023",
+   "reason": null
+  },
+  "routine-once": {
+   "status": "implemented",
+   "req": "REQ-023",
+   "reason": null
+  },
+  "run-list": {
+   "status": "implemented",
+   "req": "REQ-011",
+   "reason": null
+  },
+  "run-retry": {
+   "status": "implemented",
+   "req": "REQ-012",
+   "reason": null
+  },
+  "send-message": {
+   "status": "implemented",
+   "req": "REQ-001",
+   "reason": null
+  },
+  "send-message-replay": {
+   "status": "implemented",
+   "req": "REQ-002",
+   "reason": null
+  },
+  "shared-page": {
+   "status": "implemented",
+   "req": "REQ-037"
+  },
+  "shared-page-invalid": {
+   "status": "implemented",
+   "req": "REQ-037"
+  },
+  "space-create": {
+   "status": "implemented",
+   "req": "REQ-042",
+   "reason": null
+  },
+  "space-invite": {
+   "status": "implemented",
+   "req": "REQ-042",
+   "reason": null
+  },
+  "thread-answer": {
+   "status": "implemented",
+   "req": "REQ-017",
+   "reason": null
+  },
+  "thread-messages": {
+   "status": "implemented",
+   "req": "REQ-005",
+   "reason": null
+  },
+  "thread-subscribe": {
+   "status": "implemented",
+   "req": "REQ-020",
+   "reason": null
+  },
+  "unauthorized": {
+   "status": "implemented",
+   "req": "REQ-040",
+   "reason": null
   }
+ },
+ "ui": {
+  "REQ-001-send-message": {
+   "status": "implemented",
+   "req": "REQ-001",
+   "reason": null
+  },
+  "REQ-007-pending-card": {
+   "status": "implemented",
+   "req": "REQ-007",
+   "reason": null
+  },
+  "REQ-009-unread-divider": {
+   "status": "implemented",
+   "req": "REQ-009",
+   "reason": null
+  },
+  "REQ-012-run-statuses": {
+   "status": "implemented",
+   "req": "REQ-012",
+   "reason": null
+  },
+  "REQ-026-computer-panel": {
+   "status": "pending",
+   "req": "REQ-026",
+   "reason": "M4 - the computer panel lands with the computer milestone"
+  },
+  "REQ-037-shared-page": {
+   "status": "implemented",
+   "req": "REQ-037",
+   "reason": null
+  },
+  "REQ-037-shared-page-invalid": {
+   "status": "implemented",
+   "req": "REQ-037",
+   "reason": null
+  }
+ }
 }
