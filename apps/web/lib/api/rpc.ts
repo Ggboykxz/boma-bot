@@ -614,3 +614,116 @@ export async function threadsSubscribe(
     handlers.onClose();
   }
 }
+
+// ---------------------------------------------------------------------------
+// M9 — admin surfaces (REQ-058)
+// ---------------------------------------------------------------------------
+
+/** One member of a space, as the admin surface sees them. */
+export interface AdminMemberView {
+  userId: string;
+  email: string;
+  name: string;
+  role: string;
+  lastSeenAt: string | null;
+}
+
+/** `admin.members.list`. */
+export interface AdminMembersReply {
+  members: AdminMemberView[];
+}
+
+/** One pending invitation, as the admin surface sees them. */
+export interface AdminInvitationView {
+  id: string;
+  email: string;
+  role: string;
+  expiresAt: string;
+}
+
+/** `admin.invitations.list`. */
+export interface AdminInvitationsReply {
+  invitations: AdminInvitationView[];
+}
+
+/** One server-level grant of hosted access, as the admin surface sees them. */
+export interface AdminGrantView {
+  email: string;
+  reason: string;
+  grantedBy: string;
+  createdAt: string;
+}
+
+/** `admin.grants.list`. */
+export interface AdminGrantsReply {
+  grants: AdminGrantView[];
+}
+
+/** One plugin submission, as the admin surface sees them. */
+export interface AdminPluginSubmissionView {
+  id: string;
+  source: string;
+  name: string | null;
+  status: string;
+  createdAt: string;
+}
+
+/** `admin.plugins.list`. */
+export interface AdminPluginsReply {
+  submissions: AdminPluginSubmissionView[];
+}
+
+/** `admin.members.list` — the caller's space only. */
+export function adminMembersList(signal?: AbortSignal): Promise<AdminMembersReply> {
+  return call<AdminMembersReply>("admin", "members.list", {}, signal);
+}
+
+/** `admin.invitations.list`. */
+export function adminInvitationsList(signal?: AbortSignal): Promise<AdminInvitationsReply> {
+  return call<AdminInvitationsReply>("admin", "invitations.list", {}, signal);
+}
+
+/** `admin.invitations.revoke`. */
+export function adminInvitationsRevoke(
+  request: { invitationId: string },
+  signal?: AbortSignal,
+): Promise<{ revoked: boolean }> {
+  return call("admin", "invitations.revoke", request, signal);
+}
+
+/** `admin.grants.list` — the whole deployment. */
+export function adminGrantsList(signal?: AbortSignal): Promise<AdminGrantsReply> {
+  return call<AdminGrantsReply>("admin", "grants.list", {}, signal);
+}
+
+/** `admin.grants.create`. */
+export function adminGrantsCreate(
+  request: { email: string; reason: string },
+  signal?: AbortSignal,
+): Promise<{ grant: AdminGrantView }> {
+  return call("admin", "grants.create", request, signal);
+}
+
+/** `admin.grants.revoke`. */
+export function adminGrantsRevoke(
+  request: { email: string },
+  signal?: AbortSignal,
+): Promise<{ revoked: boolean }> {
+  return call("admin", "grants.revoke", request, signal);
+}
+
+/** `admin.plugins.list`. */
+export function adminPluginsList(
+  request: { status?: string },
+  signal?: AbortSignal,
+): Promise<AdminPluginsReply> {
+  return call<AdminPluginsReply>("admin", "plugins.list", request, signal);
+}
+
+/** `admin.plugins.decide` — the reviewer's approve or reject (REQ-058). */
+export function adminPluginsDecide(
+  request: { submissionId: string; decision: "approved" | "rejected" },
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return call("admin", "plugins.decide", request, signal);
+}

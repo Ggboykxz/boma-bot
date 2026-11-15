@@ -11,7 +11,7 @@ import { expect, test } from "./fixtures";
  * always a locale, label or contrast regression.
  */
 
-const ROUTES = ["/", "/app/"] as const;
+const ROUTES = ["/", "/app/", "/admin/access", "/admin/plugins"] as const;
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 async function analyse(page: import("@playwright/test").Page) {
