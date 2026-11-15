@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-**M11 — in flight** (this section also carries the M9 slice log; M10 is complete and logged below). Pushed to `dev`:
+**M11 — complete: v0.1.0 released (2026-11-15).** M10 closed with it. This section also carries the M9 slice log. `docs/PLAN.md` marks M10/M11 done.
 
 - slice 1 — REQ-054 (structured logs + metrics + CSP reports, `909dd52`, CI run 43663121560
   green): JSON logs with `traceparent`/`x-request-id`, route templates never raw paths, W3C
@@ -107,7 +107,14 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
   - Docs coherence: `spec/03-api-contract.md` groups section extended (additive procedures
     documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
-  - M11.4 (regression + signed release) and the release signing identity are the owner's.
+  - M11.4 — **done (2026-11-15)**: release `v0.1.0` published by the repo's own OIDC identity
+    (`.github/workflows/release.yml`), run 43755912392 fully green. Assets (all three public,
+    checksums verified): `boma-0.1.0-linux-x86_64.tar.gz` (8.9 MB, binary + static export +
+    migrations + README/LICENSE/CHANGELOG/UPGRADING), `boma-desktop-0.1.0-linux-x64.tar.gz`
+    (~124 MB, unsigned Electron unpacked), `SHA256SUMS.txt` (verified against API digests).
+    Sigstore attestation published for the tarballs and the sums (keyless; identity = repo
+    OIDC); attestations query confirms 1 per subject. Server bundle contents verified.
+    Workspace suites green on `cb2fd3d` (run 43755450081).
   - M11.4 prep (this slice, docs only — **not** the release): `docs/UPGRADING.md` (backup,
     additive-only migrations, two upgrade paths, rollback, desktop, secrets), `CHANGELOG.md`
     (`0.1.0`, everything shipped M1–M11.3b + REQ-049/056 remains deferred by record),
@@ -116,7 +123,7 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     release is public, and the Electron artifact checklist.
 
 REQ-010 ships complete as M11.1–M11.3b: creation (byte-exact golden), mention fan-out, groups
-read surface + room UI, bot-to-bot handoff. M10 stays closed-by-record until M11.4 releases.
+read surface + room UI, bot-to-bot handoff. M10 and M11 are closed for good — v0.1.0 is released (2026-11-15).
 
 REQ-010 (group chats) and REQ-011 (activity view) arrive with M11 alongside their regression set,
 as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay out, recorded.
