@@ -62,6 +62,8 @@ maintenance, licence, simplicity).
 | `url` | 2.5.8 | MIT OR Apache-2.0 | URL parsing for the plugin-source grammar (REQ-034) and the MCP server-name rules (REQ-033); already in the tree via transitive deps, now declared directly |
 | `aes-gcm` | 0.11.1 | Apache-2.0 OR MIT | AES-256-GCM seal for bot secrets and the per-space data keys (REQ-046, ADR-020); `aes`, `cipher`, `aead` come with it |
 | `getrandom` | 0.4.3 | MIT OR Apache-2.0 | fresh nonces and the per-space DEKs (REQ-046); direct `getrandom::fill`, no rand-wrapper needed |
+| `zip` | 9.5.1 | MIT | REQ-044 archives (`manifest.json` + one file per section); ZIP is the format an exporting person expects, `deflate` is the default compression, no `aes`, no `ppmd`, no `xz` enabled |
+| `bzip2-1.0.6` (transitive via `zip`) | — | bzip2-1.0.6 | the `zip` crate's `bzip2` feature is default-enabled; pulled into the `deny.toml` graph by `all-features`. Licence allowed explicitly, see below |
 
 Deliberately **not** added yet, so no unused dependency rots in the tree: `proptest`,
 `testcontainers`, `criterion`, `cargo-llvm-cov`. Each arrives with the milestone that needs it.
@@ -78,6 +80,13 @@ the `deserialize` feature, so the optional validation and diagnostic stacks stay
 **One extra allowed licence.** `webpki-roots` (pulled in by `sqlx`'s `tls-rustls-ring` feature)
 ships the Mozilla root store under `CDLA-Permissive-2.0`. It is permissive and compatible with the
 project's own licence, so `deny.toml` allows it explicitly rather than disabling the check.
+
+**bzip2-1.0.6.** The `zip` crate (REQ-044) enables its `bzip2` feature by default, and the
+`cargo-deny` graph runs with `all-features = true`, so `libbz2-rs-sys` (via `bzip2`) appears in the
+graph regardless of what we enable. The licence is permissive, BSD-like and compatible with the
+project's own licence, so `deny.toml` allows it explicitly rather than disabling the check. The
+whole dependency exists only because the account-export archive uses the `zip` format the exporting
+person expects; no compressed bzip2 streams are ever produced by the export itself.
 
 ## Node packages (`apps/web`)
 

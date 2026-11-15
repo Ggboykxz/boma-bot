@@ -31,6 +31,9 @@ allow = [
   # The Mozilla root store shipped by webpki-roots (pulled in by sqlx's rustls feature).
   # CDLA-Permissive-2.0 is permissive and compatible with the project's own licence.
   "CDLA-Permissive-2.0",
+  # bzip2 v1.0.6 library+tool licence (pulled in by the zip crate's bzip2 feature, analysed
+  # by the all-features graph). Permissive, BSD-like; compatible with the project's licence.
+  "bzip2-1.0.6",
 ]
 exceptions = []
 
