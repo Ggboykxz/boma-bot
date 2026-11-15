@@ -521,6 +521,16 @@ and a dead subscription is deleted after repeated permanent failures.
   is sent and the run is unaffected.
 - Rationale: the bot is only as useful as its reach when nobody has the app open.
 
+### REQ-065 — Notification destinations (MUST)
+A space can name one or more Slack/Teams incoming webhooks; opted-in initiators receive pushes
+there, alongside the browser, behind the same per-(space, member, bot) policy and daily cap.
+Destinations are space-scoped, sealed at rest, and managed by Owners and Admins only.
+- Given an opted-in initiator of a run that completes, when the space configured a destination of
+  the member's kind for this bot, then the destination receives the same content-free text the
+  browser would; nothing of the conversation travels.
+- Given a destination that refuses or times out, the run is unaffected; the failure is logged.
+- Rationale: teams live in Slack/Teams; the walk-away case is real and shared.
+
 ### REQ-061 — Local CLI agents as durable teammates (MUST)
 A deployment may attach local command-line agent runtimes (installed on the machine running the
 server) as bots; each runs in an isolated per-run workspace and is surfaced through the same
