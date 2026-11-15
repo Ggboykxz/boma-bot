@@ -2,7 +2,7 @@
 
 - Exported (UTC): 2026-11-12T02:55:21Z
 - Source workspace: /home/user/myapp/re-workspace
-- Requirements: 58
+- Requirements: 62
 - Golden examples: 30
 - UI golden examples: 7
 - Gates: none blocking; golden sanity and secret scan are advisory
@@ -10,7 +10,7 @@
 | file | sha256 | bytes |
 |---|---|---|
 | 00-overview.md | aea4ebfbe8fd273cc22d8567b5808f2222a394ea3663ab96f2de476d8deb7824 | 3084 |
-| 01-requirements.md | 15c313efd5eb6084f68c3c06265ad531b80dfa345341b9a8d2eac41f80cf8f4c | 27632 |
+| 01-requirements.md | 74f66fef7618143b98749414e6098c638bdfcadb7878263bb3a33d7596fbfcd4 | 31825 |
 | 02-data-model.md | 98493a0b02c770bbcf84266cee603b63f574c2c63752e8787e6a182dad3d7f6f | 11359 |
 | 03-api-contract.md | a90579c93a402fd95b333f6bf563c7a52f151bb5463e5dd8edd1c864387084e7 | 7848 |
 | 04-nonfunctional.md | 92e1854118452ec50a5c5e6fcdb2933b261d3a954e2b0b3b41154306d853a42f | 8925 |
@@ -69,3 +69,4 @@ Verify later with: `sha256sum -c` against this table.
 | date (UTC) | file | previous sha256 | new sha256 | bytes | requirements | why |
 |---|---|---|---|---|---|---|
 | 2026-11-15T21:10:00Z | 01-requirements.md | 15c313efd5eb6084f68c3c06265ad531b80dfa345341b9a8d2eac41f80cf8f4c | 362c4406a91ba2625eb4ff927b3058907f3bceae096027fbf2bc527e3b16cb8e | 30947 | 61 | Improvement program (`docs/IMPROVEMENTS.md`, owner-approved): adds REQ-059 (external agents), REQ-060 (sign-in requests and Recorder), REQ-061 (local CLI agents). The frozen Rakazo floor (REQ-001..058) is unchanged. |
+| 2026-11-15T22:00:00Z | 01-requirements.md | 362c4406a91ba2625eb4ff927b3058907f3bceae096027fbf2bc527e3b16cb8e | 74f66fef7618143b98749414e6098c638bdfcadb7878263bb3a33d7596fbfcd4 | 31825 | 62 | Improvement program (`docs/IMPROVEMENTS.md`, owner-approved): adds REQ-064 (Web Push notifications). The frozen Rakazo floor (REQ-001..058) is unchanged. |

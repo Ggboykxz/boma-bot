@@ -509,6 +509,18 @@ controls.
   into the vault only through that person's explicit grant.
 - Rationale: most real work happens behind logins; a bot that cannot ask has no path forward.
 
+### REQ-064 — Web Push notifications (MUST)
+A member can subscribe the browser to push notifications for a space, per bot. The server may
+push content-free notifications when the member's run parks waiting on a person (approval or
+question card), and when that run completes or fails; pushes never carry conversation content.
+Pushes follow the member's per-bot policy and a per-(space, member, bot) daily cap,
+and a dead subscription is deleted after repeated permanent failures.
+- Given an opted-in member with no waiting runs, when their run completes, then a push naming
+  neither the thread nor tool arguments arrives, and following it opens the thread.
+- Given a member whose daily cap is already reached, when the run would notify them, then no push
+  is sent and the run is unaffected.
+- Rationale: the bot is only as useful as its reach when nobody has the app open.
+
 ### REQ-061 — Local CLI agents as durable teammates (MUST)
 A deployment may attach local command-line agent runtimes (installed on the machine running the
 server) as bots; each runs in an isolated per-run workspace and is surfaced through the same
