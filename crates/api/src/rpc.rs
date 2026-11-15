@@ -37,7 +37,8 @@ use crate::{
         ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
         ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
         ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
-        ExportStartReply, ExportStatusReply, GroupBotView, GroupGetReply, GroupListView,
+        ExportStartReply, ExportStatusReply, ExternalAgentConnectedReply,
+        ExternalAgentDisconnectedReply, GroupBotView, GroupGetReply, GroupListView,
         GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply, HeldDropReply,
         HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply, InstallTelegramReply,
         InstallUrlReply, InstallationsReply, InvitationAcceptReply, InvitationAcceptRequest,
@@ -135,6 +136,8 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BOTS, "create"),
         (namespaces::BOTS, "get"),
         (namespaces::BOTS, "list"),
+        (namespaces::BOTS, "connectExternal"),
+        (namespaces::BOTS, "disconnectExternal"),
         (namespaces::SPACES, "create"),
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
@@ -341,6 +344,12 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "list") => bots_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "connectExternal") => bots_connect_external(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "disconnectExternal") => bots_disconnect_external(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::SPACES, "create") => spaces_create(state, auth, body)
@@ -3724,5 +3733,72 @@ async fn groups_list(
                 created_at: group.created_at,
             })
             .collect(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M12.1 — external agents (REQ-059)
+// ---------------------------------------------------------------------------
+
+/// The body of `bots.connectExternal`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotsConnectExternalRequest {
+    /// The bot to connect.
+    bot_id: String,
+    /// The executor base URL (https, or http on loopback).
+    base_url: String,
+    /// Which agent the executor should run, when it exposes several.
+    #[serde(default)]
+    agent_name: Option<String>,
+    /// The space's bot-secret to use as the executor's credential.
+    #[serde(default)]
+    secret_name: Option<String>,
+}
+
+/// `bots.connectExternal` — point a bot at an external agent executor (REQ-059).
+async fn bots_connect_external(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ExternalAgentConnectedReply, ApiError> {
+    let request: BotsConnectExternalRequest = parse(&body)?;
+    let outcome = usecases::connect_external_agent(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.base_url,
+        request.agent_name.as_deref(),
+        request.secret_name.as_deref(),
+    )
+    .await?;
+    Ok(ExternalAgentConnectedReply {
+        bot_id: outcome.bot_id.as_str().to_owned(),
+        base_url: outcome.base_url,
+        agent_name: outcome.agent_name,
+        secret_name: outcome.secret_name,
+        connected_at: outcome.connected_at,
+    })
+}
+
+/// The body of `bots.disconnectExternal`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotsDisconnectExternalRequest {
+    /// The bot to disconnect.
+    bot_id: String,
+}
+
+/// `bots.disconnectExternal` — the bot falls back to the deployment's internal provider.
+async fn bots_disconnect_external(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ExternalAgentDisconnectedReply, ApiError> {
+    let request: BotsDisconnectExternalRequest = parse(&body)?;
+    usecases::disconnect_external_agent(state.app(), &auth.actor.context, &request.bot_id).await?;
+    Ok(ExternalAgentDisconnectedReply {
+        bot_id: request.bot_id,
+        disconnected: true,
     })
 }

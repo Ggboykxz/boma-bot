@@ -8701,3 +8701,70 @@ impl boma_app::ports::AdminStore for MemoryAdminStore {
         Ok(())
     }
 }
+
+/// The external-agents store of the improvement program (REQ-059).
+#[derive(Clone)]
+pub struct MemoryExternalAgentStore {
+    agents: Arc<RwLock<std::collections::HashMap<String, boma_domain::external::ExternalAgent>>>,
+}
+
+impl MemoryExternalAgentStore {
+    /// Builds the store on an empty database.
+    #[must_use]
+    pub fn new(_database: &MemoryDatabase) -> Self {
+        Self {
+            agents: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ExternalAgentStore for MemoryExternalAgentStore {
+    async fn connect(
+        &self,
+        config: boma_domain::external::NewExternalAgent,
+    ) -> Result<boma_domain::external::ExternalAgent, AppError> {
+        let mut agents = self.agents.write().map_err(|_| AppError::Unavailable)?;
+        let agent = boma_domain::external::ExternalAgent {
+            bot_id: config.bot_id,
+            space_id: config.space_id,
+            base_url: config.base_url,
+            agent_name: config.agent_name,
+            secret_name: config.secret_name,
+            created_at: config.saved_at.clone(),
+            updated_at: config.saved_at,
+        };
+        let key = agent.bot_id.as_str().to_owned();
+        agents.insert(key, agent.clone());
+        Ok(agent)
+    }
+
+    async fn disconnect(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<(), AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut agents = self.agents.write().map_err(|_| AppError::Unavailable)?;
+        match agents.get(bot_id.as_str()) {
+            Some(agent) if agent.space_id == space => {
+                agents.remove(bot_id.as_str());
+                Ok(())
+            }
+            _ => Err(AppError::NotFound),
+        }
+    }
+
+    async fn find(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Option<boma_domain::external::ExternalAgent>, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let agents = self.agents.read().map_err(|_| AppError::Unavailable)?;
+        Ok(agents
+            .get(bot_id.as_str())
+            .filter(|agent| agent.space_id == space)
+            .cloned())
+    }
+}

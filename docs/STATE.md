@@ -109,6 +109,11 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
   - Improvements analysis v2 (`docs/IMPROVEMENTS.md`, this slice): every OpenBot area mapped
+  - M12.1 (this slice, `001d956`) — external agents over AG-UI are wired, end to end: a TCP stub
+    AG-UI executor receives the run and answers in the room attributed to its bot; the approval
+    gate relays post-approval effects exactly once through the existing rail; REQ-059 added to
+    spec (improvement program, EXPORT.md refreshed). RPC surface covers connect/disconnect.
+    Every req_059 wire test round-trips against the stub. Next up M13.
   - Target B — `nightly-labs/openbot` (LICENSE PolyForm Noncommercial; ideas only, never code):
     added to the program. `src/backend` has ~220 files incl. ACP flavors for 12+ CLIs; apps ship
     on mac/windows/linux/mobile/slack/telegram/discord; Apps marketplace (207 entries) visible.

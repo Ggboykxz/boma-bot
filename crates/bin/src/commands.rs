@@ -9,15 +9,15 @@ use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountExportStore,
     PostgresAccountStore, PostgresAdminStore, PostgresArtifactStore, PostgresAuditStore,
     PostgresBillingStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
-    PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresGroupStore,
-    PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore, PostgresMemoryStore,
-    PostgresMessageStore, PostgresMessagingStore, PostgresModelStore, PostgresPageStore,
-    PostgresPasswordResetStore, PostgresPendingToolCallStore, PostgresPluginInstallStore,
-    PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
-    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSkillStore,
-    PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore, PostgresToolStore,
-    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresExternalAgentStore,
+    PostgresGroupStore, PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore,
+    PostgresMemoryStore, PostgresMessageStore, PostgresMessagingStore, PostgresModelStore,
+    PostgresPageStore, PostgresPasswordResetStore, PostgresPendingToolCallStore,
+    PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
+    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
+    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
+    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore,
+    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -196,6 +196,7 @@ fn build_app(
             Arc::new(PostgresAdminStore::new(pool.clone())),
             Arc::new(PostgresPasswordResetStore::new(pool.clone())),
             Arc::new(PostgresGroupStore::new(pool.clone())),
+            Arc::new(PostgresExternalAgentStore::new(pool.clone())),
         ),
         {
             let services = Services::new(

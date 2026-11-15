@@ -20,6 +20,7 @@ pub mod computer;
 pub mod connector;
 pub mod error;
 pub mod event;
+pub mod external;
 pub mod group;
 pub mod ids;
 pub mod mail;

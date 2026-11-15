@@ -4721,3 +4721,88 @@ async fn req_010_the_group_read_surface_returns_the_room_and_its_messages() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// M12.1 — external agents (REQ-059)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_059_bots_connect_external_over_rpc_round_trips() {
+    let test_app = TestApp::builder().build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot, _) = test_app
+        .seed_bot(&space_id, &owner, "Analyst")
+        .await
+        .expect("the bot exists");
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // Connect — the address does not need to answer; only its shape and the tenant matter now.
+    let response = post(
+        state(&test_app),
+        "/rpc/bots/connectExternal",
+        Some(&caller),
+        serde_json::json!({
+            "botId": bot.as_str(),
+            "baseUrl": "https://agents.internal.example.com/agui",
+            "agentName": "release-bot",
+            "secretName": null,
+        }),
+    )
+    .await;
+    let status = response.status();
+    let body = json(response).await;
+    eprintln!("connect status={status} body={body}");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["botId"], serde_json::json!(bot.as_str()));
+    assert_eq!(
+        body["baseUrl"],
+        serde_json::json!("https://agents.internal.example.com/agui"),
+    );
+    assert_eq!(body["agentName"], serde_json::json!("release-bot"));
+
+    // Disconnect is idempotent in shape: a first call disconnects; a second is not found.
+    let response = post(
+        state(&test_app),
+        "/rpc/bots/disconnectExternal",
+        Some(&caller),
+        serde_json::json!({"botId": bot.as_str()}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["disconnected"], serde_json::json!(true));
+
+    let response = post(
+        state(&test_app),
+        "/rpc/bots/disconnectExternal",
+        Some(&caller),
+        serde_json::json!({"botId": bot.as_str()}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // An unknown bot is refused.
+    let response = post(
+        state(&test_app),
+        "/rpc/bots/connectExternal",
+        Some(&caller),
+        serde_json::json!({
+            "botId": "bot_missing",
+            "baseUrl": "https://agents.internal.example.com/agui",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

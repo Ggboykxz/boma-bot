@@ -570,6 +570,7 @@ impl TestAppBuilder {
             Arc::new(crate::memory::MemoryAdminStore::new(&database)),
             Arc::new(crate::memory::MemoryPasswordResetStore::new(&database)),
             Arc::new(crate::memory::MemoryGroupStore::new(&database)),
+            Arc::new(crate::memory::MemoryExternalAgentStore::new(&database)),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -8875,6 +8876,318 @@ mod group_routing_tests {
                 ))
             ),
             "a bot answering for another bot cannot delegate further"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M12.1 — external agents (REQ-059)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod external_agent_tests {
+    use super::TestApp;
+
+    /// The live-window case: a well-behaved AG-UI executor answers with a text turn.
+    #[tokio::test]
+    async fn req_059_an_external_agent_answers_in_the_room() {
+        let (base_url, _) = http_stub(
+            "data: {\"type\":\"TEXT_MESSAGE_START\",\"messageId\":\"m1\"}\n\
+data: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"m1\",\"delta\":\"Release notes drafted.\"}\n\
+data: {\"type\":\"TEXT_MESSAGE_END\",\"messageId\":\"m1\"}\n\
+data: {\"type\":\"RUN_FINISHED\"}\n"
+                .to_owned(),
+        );
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, thread_id) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        boma_app::usecases::connect_external_agent(
+            test.app(),
+            &context,
+            bot.as_str(),
+            base_url.trim_end_matches('/'),
+            None,
+            None,
+        )
+        .await
+        .expect("the executor is connected");
+
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.as_str().to_owned(),
+                text: "draft me the release notes".to_owned(),
+                client_nonce: Some("req-059-1".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+
+        let worker = boma_app::worker::Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            std::sync::Arc::new(crate::ScriptedProvider::new(vec![vec![
+                "fallback".to_owned(),
+            ]])),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread_id, None, 10)
+            .await
+            .expect("the page answers");
+        let bot_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Bot)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert_eq!(
+            bot_texts,
+            ["Release notes drafted."],
+            "the external agent's reply is in the room"
+        );
+    }
+
+    /// Hand-rolled HTTP stub serving an SSE reply. Not a framework; a TCP listener with a loopback
+    /// address, no external service.
+    fn http_stub(reply: String) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the stub binds");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("local address");
+        let handle = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = Vec::new();
+                let mut header_end = None;
+                let mut content_length = 0usize;
+                'outer: loop {
+                    let mut chunk = [0u8; 4096];
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break 'outer,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if header_end.is_none()
+                                && let Some(pos) = find_subsequence(&buf, b"\r\n\r\n")
+                            {
+                                header_end = Some(pos);
+                                let mut cl = None;
+                                for line in buf[..pos].split(|b| *b == b'\r' || *b == b'\n') {
+                                    let line = String::from_utf8_lossy(line).to_lowercase();
+                                    if let Some(rest) = line.strip_prefix("content-length:") {
+                                        cl = Some(rest.trim().parse::<usize>().unwrap_or(0));
+                                    }
+                                }
+                                content_length = cl.unwrap_or(0);
+                            }
+                            if let Some(pos) = header_end
+                                && buf.len() >= pos + 4 + content_length
+                            {
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{}",
+                    reply.len(),
+                    reply,
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    /// The stub POSTs an agent-style SSE answer. Returning a tool-call event in the first turn
+    /// and a text reply in the second mimics a real AG-UI executor.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_059_executors_approval_gate_relays_the_decision() {
+        let first = "data: {\"type\":\"TOOL_CALL_START\",\"toolCallId\":\"call_1\",\"toolCallName\":\"memory.write\"}\n\
+data: {\"type\":\"TOOL_CALL_ARGS\",\"toolCallId\":\"call_1\",\"delta\":\"{\\\"scope\\\":\\\"bot\\\",\\\"botId\\\":\\\"bot_1\\\",\\\"path\\\":\\\"notes/release.md\\\",\\\"text\\\":\\\"approve the plans\\\"}\"}\n\
+data: {\"type\":\"TOOL_CALL_END\",\"toolCallId\":\"call_1\"}\n\
+data: {\"type\":\"RUN_FINISHED\"}\n";
+        let second = "data: {\"type\":\"TEXT_MESSAGE_CONTENT\",\"messageId\":\"m2\",\"delta\":\"Noted, and recorded.\"}\n\
+data: {\"type\":\"RUN_FINISHED\"}\n";
+
+        let seq = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seq_for_task = seq.clone();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::from_std(listener).expect("tokio listener");
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let reply = if seq_for_task.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    second
+                } else {
+                    first
+                };
+                let mut buf = Vec::new();
+                let mut header_end = None;
+                let mut content_length = 0usize;
+                'outer: loop {
+                    let mut chunk = [0u8; 4096];
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break 'outer,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if header_end.is_none()
+                                && let Some(pos) = find_subsequence(&buf, b"\r\n\r\n")
+                            {
+                                header_end = Some(pos);
+                                for line in buf[..pos].split(|b| *b == b'\r' || *b == b'\n') {
+                                    let line = String::from_utf8_lossy(line).to_lowercase();
+                                    if let Some(rest) = line.strip_prefix("content-length:") {
+                                        content_length = rest.trim().parse::<usize>().unwrap_or(0);
+                                    }
+                                }
+                            }
+                            if let Some(pos) = header_end
+                                && buf.len() >= pos + 4 + content_length
+                            {
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+                let body_bytes = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{}",
+                    reply.len(),
+                    reply,
+                )
+                .into_bytes();
+                let _ = socket.write_all(&body_bytes).await;
+                let _ = socket;
+            }
+        });
+        let base_url = format!("http://{addr}");
+
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, thread_id) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        boma_app::usecases::connect_external_agent(
+            test.app(),
+            &context,
+            bot.as_str(),
+            base_url.trim_end_matches('/'),
+            None,
+            None,
+        )
+        .await
+        .expect("the executor is connected");
+
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.as_str().to_owned(),
+                text: "please write the release note to memory".to_owned(),
+                client_nonce: Some("req-059-2".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+
+        let _ = outcome.runs;
+        let worker = boma_app::worker::Worker::new(
+            std::sync::Arc::new(test.app().clone()),
+            std::sync::Arc::new(crate::ScriptedProvider::new(vec![vec![
+                "fallback".to_owned(),
+            ]])),
+            "worker-1".to_owned(),
+        );
+        assert!(worker.step().await.expect("the worker answers"));
+
+        // The first turn parks on the approval card, like every write-class effect.
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread_id, None, 10)
+            .await
+            .expect("the page answers");
+        let card_id = page
+            .messages
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                _ => None,
+            })
+            .expect("an approval card is in the room");
+
+        let _ = boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the card is answered");
+        assert!(worker.step().await.expect("the worker answers"));
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread_id, None, 10)
+            .await
+            .expect("the page answers");
+        let bot_texts: Vec<&str> = page
+            .messages
+            .iter()
+            .filter(|message| message.role == boma_domain::MessageRole::Bot)
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(boma_domain::Block::as_text)
+            .collect();
+        assert_eq!(
+            bot_texts,
+            ["Noted, and recorded."],
+            "the post-approval answer landed from the external executor"
         );
     }
 }

@@ -4325,3 +4325,35 @@ pub trait AdminStore: Send + Sync {
         _reviewer: &UserId,
     ) -> Result<(), AppError>;
 }
+
+/// Bots backed by an external agent executor (REQ-059, improvement program).
+#[async_trait]
+pub trait ExternalAgentStore: Send + Sync {
+    /// Connects a bot to an external executor, replacing any previous configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn connect(
+        &self,
+        config: boma_domain::external::NewExternalAgent,
+    ) -> Result<boma_domain::external::ExternalAgent, AppError>;
+
+    /// Disconnects a bot from its external executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn disconnect(&self, context: &TenantContext, bot_id: &BotId) -> Result<(), AppError>;
+
+    /// The external configuration for a bot, when one is connected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn find(
+        &self,
+        context: &TenantContext,
+        bot_id: &BotId,
+    ) -> Result<Option<boma_domain::external::ExternalAgent>, AppError>;
+}

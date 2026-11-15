@@ -54,6 +54,14 @@ pub struct Worker {
     owner: String,
 }
 
+/// The name a context member uses for its one call: the space and user the run belongs to.
+fn member_context_for(run: &boma_domain::Run) -> boma_domain::TenantContext {
+    boma_domain::TenantContext::Member {
+        space_id: run.space_id.clone(),
+        user_id: run.user_id.clone(),
+    }
+}
+
 impl Worker {
     /// Builds a worker.
     #[must_use]
@@ -310,7 +318,9 @@ impl Worker {
             skills,
         };
 
-        match self.provider.complete(request).await {
+        // An external executor answers over AG-UI instead of the deployment's internal model.
+        let provider_for_turn = self.provider_for(&run).await;
+        match provider_for_turn.complete(request).await {
             Ok(ProviderTurn::Chunks(chunks)) => {
                 let mut text = String::new();
                 for (index, chunk) in chunks.iter().enumerate() {
@@ -524,6 +534,39 @@ impl Worker {
         if let Err(error) = usecases::complete_helper_run(&self.app, context, run, outcome).await {
             tracing::warn!(run = %run.id, %error, "the helper outcome could not be recorded on the parent");
         }
+    }
+
+    /// The provider that answers for this run: the external executor when the bot points at one,
+    /// otherwise the provider this worker was built with.
+    async fn provider_for(&self, run: &boma_domain::Run) -> Arc<dyn ModelProvider> {
+        let scoped = member_context_for(run);
+        let Ok(Some(config)) = self
+            .app
+            .stores
+            .external_agents
+            .find(&scoped, &run.bot_id)
+            .await
+        else {
+            return Arc::clone(&self.provider);
+        };
+        let bearer = match config.secret_name.as_deref() {
+            Some(name) => self
+                .app
+                .stores
+                .secrets
+                .reveal(&scoped, &run.bot_id, name)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        Arc::new(crate::agui_provider::AgUiProvider::new(
+            crate::agui_provider::AgUiExecutor {
+                base_url: config.base_url,
+                agent_name: config.agent_name,
+                bearer: bearer.unwrap_or_else(|| secrecy::SecretString::from("")),
+            },
+        ))
     }
 
     /// Whether the run has not reached a terminal state yet.

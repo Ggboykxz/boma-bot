@@ -9003,3 +9003,140 @@ pub async fn get_group(
         member_bot_names,
     })
 }
+
+// ---------------------------------------------------------------------------
+// M12.1 — external agents (REQ-059)
+// ---------------------------------------------------------------------------
+
+/// The outcome of connecting a bot to an external agent executor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalAgentConnected {
+    /// The bot.
+    pub bot_id: boma_domain::BotId,
+    /// The executor address the bot now talks to.
+    pub base_url: String,
+    /// Which agent the executor was told to run.
+    pub agent_name: Option<String>,
+    /// The name of the space's bot-secret to use as the executor's credential.
+    pub secret_name: Option<String>,
+    /// When the connection was saved.
+    pub connected_at: String,
+}
+
+/// Validates an external executor address.
+///
+/// `http://` is only accepted on loopback and for tests of the protocol; every production
+/// executor must use `https://`. A bad value is refused up front — before any row is written.
+fn external_agent_base_url_must_parse(base_url: &str) -> Result<(), AppError> {
+    let parsed = reqwest::Url::parse(base_url.trim()).map_err(|_| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "an external executor needs a parseable base url".to_owned(),
+        ))
+    })?;
+    let host = parsed.host_str().ok_or_else(|| {
+        AppError::Rule(boma_domain::DomainError::InvalidName(
+            "an external executor needs a host".to_owned(),
+        ))
+    })?;
+    let host_lc = host.to_ascii_lowercase();
+    let is_loopback = host_lc == "localhost" || host_lc.starts_with("127.") || host_lc == "::1";
+    if parsed.scheme() == "http" && !is_loopback {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "an external executor may only carry http:// on loopback".to_owned(),
+        )));
+    }
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "an external executor needs an https:// (or loopback http://) base url".to_owned(),
+        )));
+    }
+    Ok(())
+}
+
+/// Connects a bot to an external agent executor (REQ-059).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the address is refused or the text is empty,
+/// [`AppError::NotFound`] when the bot does not exist or is archived.
+pub async fn connect_external_agent(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    base_url: &str,
+    agent_name: Option<&str>,
+    secret_name: Option<&str>,
+) -> Result<ExternalAgentConnected, AppError> {
+    validate_message_text(base_url)?;
+    external_agent_base_url_must_parse(base_url)?;
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    // A secret name we cannot resolve is worse than an error at use time — the connection
+    // must point at a bearer the vault actually holds before any turn runs.
+    if let Some(name) = secret_name {
+        let _ = app
+            .stores
+            .secrets
+            .reveal(context, &bot_id, name)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    }
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    let now = app.services.clock.now();
+    let stored = app
+        .stores
+        .external_agents
+        .connect(boma_domain::external::NewExternalAgent {
+            bot_id: bot_id.clone(),
+            space_id,
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            agent_name: agent_name.map(str::to_owned),
+            secret_name: secret_name.map(str::to_owned),
+            saved_at: now.clone(),
+        })
+        .await?;
+    tracing::info!(bot_id = %stored.bot_id, agent = ?stored.agent_name, "the bot now points at an external agent executor");
+    Ok(ExternalAgentConnected {
+        bot_id: stored.bot_id,
+        base_url: stored.base_url,
+        agent_name: stored.agent_name,
+        secret_name: stored.secret_name,
+        connected_at: stored.updated_at,
+    })
+}
+
+/// Disconnects a bot from its external agent executor; the bot falls back to the deployment's
+/// internal provider after this call.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when no connection exists.
+pub async fn disconnect_external_agent(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<(), AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let exists = app
+        .stores
+        .external_agents
+        .find(context, &bot_id)
+        .await?
+        .is_some();
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+    app.stores
+        .external_agents
+        .disconnect(context, &bot_id)
+        .await?;
+    Ok(())
+}

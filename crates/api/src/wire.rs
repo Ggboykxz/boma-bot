@@ -2005,3 +2005,31 @@ pub struct GroupListView {
     /// When it was created.
     pub created_at: String,
 }
+
+/// The reply of `bots.connectExternal` — one external agent now answers for the bot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConnectedReply {
+    /// The bot now connected.
+    pub bot_id: String,
+    /// The executor address it points at.
+    pub base_url: String,
+    /// Which agent the executor was told to run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    /// The space's bot-secret name carrying the executor's bearer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_name: Option<String>,
+    /// When the connection was saved.
+    pub connected_at: String,
+}
+
+/// The reply of `bots.disconnectExternal`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentDisconnectedReply {
+    /// The bot it disconnected.
+    pub bot_id: String,
+    /// Always true when the handler returns.
+    pub disconnected: bool,
+}

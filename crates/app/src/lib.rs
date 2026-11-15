@@ -9,6 +9,7 @@
 
 pub mod account_export;
 pub mod accounts;
+pub mod agui_provider;
 pub mod error;
 pub mod health;
 pub mod metrics;
