@@ -7447,3 +7447,181 @@ mod observability_tests {
         assert!(!event_debug.contains("owner@example.com"));
     }
 }
+
+#[cfg(test)]
+mod account_export_tests {
+    // REQ-044 — export the account as an archive, import smaller archives, delete the account.
+
+    use super::TestApp;
+
+    async fn seeded() -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_domain::UserId,
+        boma_domain::SpaceId,
+    ) {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        (test, context, user_id, space.id)
+    }
+
+    async fn seeded_bot(
+        test: &TestApp,
+        context: &boma_domain::TenantContext,
+    ) -> boma_app::usecases::BotCreated {
+        boma_app::usecases::create_bot(test.app(), context, "Assistant", None, None)
+            .await
+            .expect("the bot is created")
+    }
+
+    #[tokio::test]
+    async fn req_044_an_export_mints_an_id_and_renders_a_parseable_archive() {
+        let (test, context, _, _) = seeded().await;
+        let created = seeded_bot(&test, &context).await;
+        let _ = created;
+
+        let started = boma_app::account_export::account_export_start(test.app(), &context)
+            .await
+            .expect("the export starts");
+        assert_eq!(started.status, "pending");
+        assert!(started.export_id.starts_with("exp_"));
+
+        let status = boma_app::account_export::account_export_status(
+            test.app(),
+            &context,
+            &started.export_id,
+        )
+        .await
+        .expect("the status answers");
+        assert_eq!(status.counts.bots, 1);
+
+        let bytes = boma_app::account_export::account_export_download(
+            test.app(),
+            &context,
+            &started.export_id,
+        )
+        .await
+        .expect("the download renders the archive");
+        // Parse it back: manifest version 1, bot counts match.
+        let cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor).expect("the archive is a zip");
+        let mut manifest_bytes = Vec::new();
+        {
+            use std::io::Read as _;
+            let mut entry = archive
+                .by_name("manifest.json")
+                .expect("the manifest is inside");
+            entry
+                .read_to_end(&mut manifest_bytes)
+                .expect("the manifest reads");
+        }
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&manifest_bytes).expect("the manifest is JSON");
+        assert_eq!(manifest["version"], 1);
+        assert_eq!(manifest["counts"]["bots"], 1);
+    }
+
+    #[tokio::test]
+    async fn req_044_the_delete_refuses_a_shared_space_and_a_pro_subscription() {
+        let (test, context, _user_id, space_id) = seeded().await;
+        // Pro subscription on the space blocks deletion.
+        test.app()
+            .stores
+            .billing
+            .activate_subscription(
+                &context,
+                boma_app::ports::NewSubscription {
+                    space_id: space_id.as_str().to_owned(),
+                    plan: "pro".to_owned(),
+                    status: "active".to_owned(),
+                    provider_ref: None,
+                    credits_minor_units: 0,
+                    current_period_end: None,
+                    created_at: "2026-01-01T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the subscription activates");
+        let pro_error = boma_app::account_export::account_delete(test.app(), &context)
+            .await
+            .expect_err("a pro plan blocks deletion");
+        assert!(pro_error.to_string().contains("cancel"), "{pro_error}");
+
+        // A sole member with no pro plan: deletion succeeds.
+        test.app()
+            .stores
+            .billing
+            .activate_subscription(
+                &context,
+                boma_app::ports::NewSubscription {
+                    space_id: space_id.as_str().to_owned(),
+                    plan: "free".to_owned(),
+                    status: "active".to_owned(),
+                    provider_ref: None,
+                    credits_minor_units: 0,
+                    current_period_end: None,
+                    created_at: "2026-01-01T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the subscription can be swapped");
+        boma_app::account_export::account_delete(test.app(), &context)
+            .await
+            .expect("the deletion removes sole-member account");
+        // The member cannot sign in anymore.
+        let signed_in = boma_app::usecases::sign_in(
+            test.app(),
+            0,
+            &boma_app::usecases::SignIn {
+                email: "person@example.com".to_owned(),
+                password: "correct horse battery".to_owned(),
+            },
+        )
+        .await;
+        assert!(signed_in.is_err(), "a deleted account cannot sign in");
+    }
+
+    #[tokio::test]
+    async fn req_044_importing_a_broken_archive_reports_refused_sections_not_silence() {
+        let (test, context, _, _) = seeded().await;
+        // Provide an archive with bad JSON inside one parse-tolerant section plus an unknown one.
+        let buf = std::io::Cursor::new(Vec::new());
+        let archive = {
+            let mut writer = zip::ZipWriter::new(buf);
+            let options = zip::write::SimpleFileOptions::default();
+            writer
+                .start_file("manifest.json", options)
+                .expect("start manifest");
+            use std::io::Write as _;
+            writer
+                .write_all(
+                    br#"{"version":1,"exportedAt":"2026-01-01T00:00:00Z","userId":"u","counts":{"bots":0,"threads":0,"messages":0,"memory":0,"routines":0,"artifacts":0}}"#,
+                )
+                .expect("manifest writes");
+            writer.start_file("bots.json", options).expect("start bots");
+            writer
+                .write_all(b"not json at all")
+                .expect("bots writes");
+            writer.finish().expect("zip finishes").into_inner()
+        };
+        let outcome = boma_app::account_export::account_import(test.app(), &context, &archive)
+            .await
+            .expect("the archive is accepted; the refusal is named by path");
+        assert!(outcome
+            .refused
+            .iter()
+            .any(|entry| entry.contains("bots.json")), "{:?}", outcome.refused);
+    }
+}

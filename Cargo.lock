@@ -504,6 +504,7 @@ dependencies = [
  "subtle",
  "time",
  "tokio",
+ "zip",
 ]
 
 [[package]]

@@ -554,16 +554,43 @@ pub async fn account_import(
     };
     let mut refused: Vec<String> = Vec::new();
 
-    // Parse optional sections.
-    let bots: Vec<boma_domain::Bot> = read_optional(&entries, "bots.json", app).unwrap_or_default();
-    let _threads: Vec<boma_domain::Thread> =
-        read_optional(&entries, "threads.json", app).unwrap_or_default();
-    let messages: Vec<boma_domain::Message> =
-        read_optional(&entries, "messages.json", app).unwrap_or_default();
-    let memories: Vec<boma_domain::MemoryDocument> =
-        read_optional(&entries, "memories.json", app).unwrap_or_default();
-    let routines: Vec<crate::ports::Routine> =
-        read_optional(&entries, "routines.json", app).unwrap_or_default();
+    // Parse optional sections; every refusal is named in `refused` so the caller knows exactly which
+    // entries did not land. None of them is silent.
+    let bots: Vec<boma_domain::Bot> = match read_optional(&entries, "bots.json", app) {
+        Ok(value) => value,
+        Err(_) => {
+            refused.push("bots.json: not valid for the archive schema".to_owned());
+            Vec::new()
+        }
+    };
+    let _threads: Vec<boma_domain::Thread> = match read_optional(&entries, "threads.json", app) {
+        Ok(value) => value,
+        Err(_) => {
+            refused.push("threads.json: not valid for the archive schema".to_owned());
+            Vec::new()
+        }
+    };
+    let messages: Vec<boma_domain::Message> = match read_optional(&entries, "messages.json", app) {
+        Ok(value) => value,
+        Err(_) => {
+            refused.push("messages.json: not valid for the archive schema".to_owned());
+            Vec::new()
+        }
+    };
+    let memories: Vec<boma_domain::MemoryDocument> = match read_optional(&entries, "memories.json", app) {
+        Ok(value) => value,
+        Err(_) => {
+            refused.push("memories.json: not valid for the archive schema".to_owned());
+            Vec::new()
+        }
+    };
+    let routines: Vec<crate::ports::Routine> = match read_optional(&entries, "routines.json", app) {
+        Ok(value) => value,
+        Err(_) => {
+            refused.push("routines.json: not valid for the archive schema".to_owned());
+            Vec::new()
+        }
+    };
 
     // The bots become new, caller-owned bots; their threads follow the same creation helper.
     let mut new_bot_ids: BTreeMap<String, boma_domain::BotId> = BTreeMap::new();

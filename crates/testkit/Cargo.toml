@@ -25,3 +25,6 @@ tokio = { workspace = true }
 boma-app = { workspace = true }
 boma-domain = { workspace = true }
 secrecy = "0.10.3"
+
+[dev-dependencies]
+zip = "9.5.1"
