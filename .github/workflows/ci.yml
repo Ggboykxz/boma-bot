@@ -123,6 +123,31 @@ jobs:
           path: apps/web/playwright-report
           retention-days: 7
 
+  desktop:
+    # REQ-055: the Electron shell must install, typecheck, build and pack on every push; an
+    # app that has never packed is a claim, not evidence. No GUI is needed for packing; no
+    # certificate is referenced (the update feed stays inert until the owner signs, ADR-016).
+    name: desktop (install, typecheck, build, pack)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run lint
+      - run: npm run smoke
+      - run: npm run dist
+
   compose:
     # M0's last exit criterion: `docker compose up` migrates and serves. Reviewed-only YAML is not
     # evidence, so the stack is built and probed here on every push.

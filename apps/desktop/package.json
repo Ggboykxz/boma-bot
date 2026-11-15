@@ -1,0 +1,37 @@
+{
+  "name": "@boma/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Boma Bot desktop shell (REQ-055): Electron, a session partition it owns, WebAuthn via the loopback origin, signed auto-update wiring.",
+  "license": "MIT",
+  "main": "main/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "smoke": "electron --version",
+    "dist": "electron-builder --dir",
+    "lint": "eslint . --max-warnings=0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "22.20.5",
+    "electron": "45.3.2",
+    "electron-builder": "26.18.0",
+    "eslint": "9.39.5",
+    "typescript": "6.0.3"
+  },
+  "build": {
+    "appId": "com.boma.desktop",
+    "productName": "Boma Bot",
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "category": "Network"
+    }
+  }
+}

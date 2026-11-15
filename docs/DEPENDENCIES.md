@@ -88,6 +88,20 @@ project's own licence, so `deny.toml` allows it explicitly rather than disabling
 whole dependency exists only because the account-export archive uses the `zip` format the exporting
 person expects; no compressed bzip2 streams are ever produced by the export itself.
 
+## Node packages (`apps/desktop`)
+
+| Package | Version | Licence | Why |
+| --- | --- | --- | --- |
+| `electron` | 45.3.2 | MIT | REQ-055: pinned major for the shell, not floating |
+| `electron-builder` | 26.18.0 | MIT | `electron-builder --dir` pack in CI without a certificate |
+| `electron-updater` | 6.6.2 | MIT | signed auto-update wiring; inert until `BOMA_DESKTOP_SIGNED=true` (ADR-016) |
+| `@types/node` | 22.20.5 | MIT | matches the CI/Node 22 toolchain |
+| `eslint` | 9.39.5 | MIT | flat config over the shell source |
+
+The transitive dev dependency chain (`electron-builder`) has 6 moderate findings on
+`minimatch` (glob amplification DoS, dev-time only, no runtime exposure); `npm audit fix --force`
+would downgrade `electron-builder` and is rejected. Revisit on the next major.
+
 ## Node packages (`apps/web`)
 
 | Package | Version | Licence | Why |

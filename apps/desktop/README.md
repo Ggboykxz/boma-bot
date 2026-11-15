@@ -1,34 +1,30 @@
-# `apps/desktop` — deferred to milestone M10
+# `apps/desktop` — the Boma Bot desktop shell (REQ-055)
 
-This directory is intentionally empty.
+An Electron shell for the web app: the browser session in a partition only this app owns,
+native WebAuthn via the loopback origin, a menu affordance to sign out (clearing the partition),
+a consent-gated "run a local stack" action wired to the Compose file, and a signed-update path
+that stays inert until the owner signs.
 
-REQ-055 (desktop client, SHOULD) is still in scope, and ADR-016 chooses **Tauri v2** for it. It is
-not scaffolded at M0 because a Tauri project that has never been compiled is worse than an honest
-placeholder: it would claim a buildable shell while containing no verified configuration, and M0's
-exit criteria do not include it (`docs/PLAN.md` §milestones).
+## What ships / what does not
 
-## What lands here, and when
+- **Shipped (this milestone):** the shell itself — window, partition, native menu, local-stack
+  runner, update-feed wiring (inert by default), packaged `electron-builder --dir` in CI.
+- **Not wired:** the signing identity and the update feed. `BOMA_DESKTOP_SIGNED=true` turns
+  checking on; without a signed feed it stays off (ADR-016). No certificate is embedded anywhere
+  in this tree, and none should be: signing keys live with the owner.
+- **Not in this shell:** no Node in the renderer, no API proxying, no cookies shared with any
+  other window or profile. The deployment origin is a same-origin loopback by default
+  (`BOMA_DESKTOP_URL`, port 3000), overridable at package time for a hosted deployment.
 
-Milestone **M10** ("UI complete + desktop") adds:
+## Build and run
 
-- `src-tauri/` — the Tauri v2 Rust core, with the same `com.boma.app` identifier and the static web
-  export from `apps/web/out` as its front end.
-- A partitioned webview profile: the session cookie is owned by the app, never shared with another
-  window or with a system browser.
-- Native passkey support through the platform authenticator (WebAuthn relying party `com.boma.app`).
-- Signed auto-update: artifacts published with checksums, verification before install, and install
-  on restart — never a silent download.
-- An optional "run a local stack" mode that invokes the Compose file only after explicit consent.
+```sh
+npm ci
+npm run build        # tsc -> main/main.js
+npm start            # build + electron
+npm run dist         # electron-builder --dir (unsigned pack)
+```
 
-## What must be true before it starts
-
-1. The web export is stable enough to embed (M1–M9 screens, not the M0 shell).
-2. Auth and sessions exist (M1), because the partition requirement is about session isolation.
-3. The release pipeline signs artifacts (`docs/adr/018-deployment-ci.md`), because an auto-updater
-   without a signature is a remote code execution path.
-
-## What you can do today
-
-Nothing in this directory. The web client at `apps/web` runs in a browser, and the API at
-`crates/api` is the same contract the shell will use. Mobile is deferred for the same reason,
-recorded in `docs/STATE.md` (REQ-056, SHOULD).
+CI carries a `desktop` job: installs, typechecks, builds, runs the smoke, builds the pack on
+ubuntu-latest (it has the system GTK libraries). On this machine there is no GTK, so runtime
+is verified by CI only.
