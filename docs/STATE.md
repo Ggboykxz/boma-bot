@@ -108,6 +108,12 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     documented; contract unchanged).
   - REQ-049 (COULD, voice) and REQ-056 (SHOULD, mobile) stay deferred, recorded.
   - M11.4 (regression + signed release) and the release signing identity are the owner's.
+  - M11.4 prep (this slice, docs only — **not** the release): `docs/UPGRADING.md` (backup,
+    additive-only migrations, two upgrade paths, rollback, desktop, secrets), `CHANGELOG.md`
+    (`0.1.0`, everything shipped M1–M11.3b + REQ-049/056 remains deferred by record),
+    `docs/adr/025-group-delegation.md` (the REQ-010 handoff contract, alternatives scored).
+    Release remains blocked on the owner: signing identity, the tag, whether the GitHub
+    release is public, and the Electron artifact checklist.
 
 REQ-010 ships complete as M11.1–M11.3b: creation (byte-exact golden), mention fan-out, groups
 read surface + room UI, bot-to-bot handoff. M10 stays closed-by-record until M11.4 releases.
