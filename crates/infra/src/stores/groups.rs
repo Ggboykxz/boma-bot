@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use boma_app::{AppError, ports};
-use boma_domain::{BotId, Group, GroupId, UserId};
+use boma_domain::{BotId, Group, GroupId, ThreadId, UserId};
 use sqlx::PgPool;
 
 use super::rows::{self, GroupRow};
@@ -24,6 +24,24 @@ impl PostgresGroupStore {
     pub const fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+}
+
+/// The bot members of one group, in creation order.
+async fn bots_for(conn: &mut sqlx::PgConnection, group_id: &str) -> Result<Vec<BotId>, AppError> {
+    let bots = sqlx::query_scalar::<_, String>(
+        "SELECT member_id FROM group_memberships
+          WHERE group_id = $1 AND member_kind = 'bot'
+          ORDER BY created_at, member_id",
+    )
+    .bind(group_id)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(tenant::unavailable)?
+    .into_iter()
+    .map(BotId::new)
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|_| AppError::Unavailable)?;
+    Ok(bots)
 }
 
 #[async_trait]
@@ -118,19 +136,70 @@ impl ports::GroupStore for PostgresGroupStore {
                 let Some(row) = row else {
                     return Ok(None);
                 };
-                let bots = sqlx::query_scalar::<_, String>(
-                    "SELECT member_id FROM group_memberships
-                      WHERE group_id = $1 AND member_kind = 'bot'
-                      ORDER BY created_at, member_id",
+                let bots = bots_for(&mut *conn, &row.id).await?;
+                Ok(Some(rows::group(row, bots)?))
+            })
+        })
+        .await
+    }
+
+    async fn find_by_thread(
+        &self,
+        context: &boma_domain::TenantContext,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Group>, AppError> {
+        let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let owner_space = space_id.clone();
+        let thread_id = thread_id.as_str().to_owned();
+        tenant::in_space(&self.pool, &owner_space, |conn| {
+            Box::pin(async move {
+                let row = sqlx::query_as::<_, GroupRow>(
+                    "SELECT id, space_id, name, thread_id, boma.rfc3339(created_at) AS created_at
+                       FROM groups
+                      WHERE thread_id = $1 AND space_id = $2",
                 )
-                .bind(&row.id)
-                .fetch_all(&mut *conn)
+                .bind(&thread_id)
+                .bind(space_id.as_str())
+                .fetch_optional(&mut *conn)
                 .await
-                .map_err(tenant::unavailable)?
-                .into_iter()
-                .map(BotId::new)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| AppError::Unavailable)?;
+                .map_err(tenant::unavailable)?;
+                let Some(row) = row else {
+                    return Ok(None);
+                };
+                let bots = bots_for(&mut *conn, &row.id).await?;
+                Ok(Some(rows::group(row, bots)?))
+            })
+        })
+        .await
+    }
+
+    async fn find_for_bot(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &BotId,
+    ) -> Result<Option<Group>, AppError> {
+        let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+        let owner_space = space_id.clone();
+        let bot_id = bot_id.as_str().to_owned();
+        tenant::in_space(&self.pool, &owner_space, |conn| {
+            Box::pin(async move {
+                let row = sqlx::query_as::<_, GroupRow>(
+                    "SELECT g.id, g.space_id, g.name, g.thread_id, boma.rfc3339(g.created_at) AS created_at
+                       FROM groups g
+                       JOIN group_memberships m ON m.group_id = g.id
+                      WHERE m.member_kind = 'bot' AND m.member_id = $1 AND g.space_id = $2
+                      ORDER BY g.created_at
+                      LIMIT 1",
+                )
+                .bind(&bot_id)
+                .bind(space_id.as_str())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                let Some(row) = row else {
+                    return Ok(None);
+                };
+                let bots = bots_for(&mut *conn, &row.id).await?;
                 Ok(Some(rows::group(row, bots)?))
             })
         })
@@ -164,19 +233,7 @@ impl ports::GroupStore for PostgresGroupStore {
                 .map_err(tenant::unavailable)?;
                 let mut groups = Vec::with_capacity(rows.len());
                 for row in rows {
-                    let bots = sqlx::query_scalar::<_, String>(
-                        "SELECT member_id FROM group_memberships
-                          WHERE group_id = $1 AND member_kind = 'bot'
-                          ORDER BY created_at, member_id",
-                    )
-                    .bind(&row.id)
-                    .fetch_all(&mut *conn)
-                    .await
-                    .map_err(tenant::unavailable)?
-                    .into_iter()
-                    .map(BotId::new)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|_| AppError::Unavailable)?;
+                    let bots = bots_for(&mut *conn, &row.id).await?;
                     groups.push(rows::group(row, bots)?);
                 }
                 Ok(groups)

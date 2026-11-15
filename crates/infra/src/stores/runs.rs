@@ -45,6 +45,7 @@ impl RunStore for PostgresRunStore {
         let space_id = run.space_id.clone();
         let nonce = run.client_nonce.clone();
         let thread_id = run.thread_id.clone();
+        let bot_id = run.bot_id.clone();
         let nonce_key = nonce.clone();
         let user_key = run.user_id.as_str().to_owned();
 
@@ -110,7 +111,10 @@ impl RunStore for PostgresRunStore {
                     space_id: space_id.clone(),
                     user_id: run.user_id.clone(),
                 };
-                let Some(existing) = self.find_by_nonce(&context, &thread_id, &nonce).await? else {
+                let Some(existing) = self
+                    .find_by_nonce(&context, &thread_id, &nonce, &bot_id)
+                    .await?
+                else {
                     tracing::error!("a run conflicted but no run carries that nonce");
                     return Err(AppError::Unavailable);
                 };
@@ -154,9 +158,11 @@ impl RunStore for PostgresRunStore {
         context: &TenantContext,
         thread_id: &ThreadId,
         client_nonce: &str,
+        bot_id: &boma_domain::BotId,
     ) -> Result<Option<Run>, AppError> {
         let thread_id = thread_id.as_str().to_owned();
         let client_nonce = client_nonce.to_owned();
+        let bot_id = bot_id.as_str().to_owned();
         let row = tenant::with_tenant(&self.pool, context, |conn| {
             Box::pin(async move {
                 sqlx::query_as::<_, RunRow>(
@@ -169,12 +175,14 @@ impl RunStore for PostgresRunStore {
                             boma.rfc3339(lease_expires_at) AS lease_expires_at,
                             boma.rfc3339(started_at) AS started_at,
                             boma.rfc3339(completed_at) AS completed_at, error,
+                            steering_from_seq, steering_consumed_seq, attempt,
                             boma.rfc3339(created_at) AS created_at
                      FROM runs
-                     WHERE thread_id = $1 AND client_nonce = $2",
+                     WHERE thread_id = $1 AND client_nonce = $2 AND bot_id = $3",
                 )
                 .bind(thread_id.as_str())
                 .bind(client_nonce)
+                .bind(bot_id)
                 .fetch_optional(&mut *conn)
                 .await
                 .map_err(tenant::unavailable)

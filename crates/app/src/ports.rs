@@ -505,6 +505,34 @@ pub trait GroupStore: Send + Sync {
         id: &boma_domain::GroupId,
     ) -> Result<Option<Group>, AppError>;
 
+    /// The group a thread belongs to, when one does (REQ-010).
+    ///
+    /// A member message in a group thread must fan out to the mentioned bots; this is the
+    /// only link the use case can resolve before the message exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_by_thread(
+        &self,
+        context: &TenantContext,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Group>, AppError>;
+
+    /// The group a bot is a member of, when one does (REQ-010).
+    ///
+    /// The send path uses it to steer a member's message into the shared room before any bot
+    /// starts runs on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn find_for_bot(
+        &self,
+        context: &TenantContext,
+        bot_id: &BotId,
+    ) -> Result<Option<Group>, AppError>;
+
     /// Every group a person belongs to, oldest first.
     ///
     /// # Errors
@@ -905,6 +933,7 @@ pub trait RunStore: Send + Sync {
         context: &boma_domain::TenantContext,
         thread_id: &boma_domain::ThreadId,
         client_nonce: &str,
+        bot_id: &boma_domain::BotId,
     ) -> Result<Option<Run>, AppError>;
 
     /// The newest run on a thread that is working and can take a steering message (REQ-003).

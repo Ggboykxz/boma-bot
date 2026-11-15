@@ -503,7 +503,7 @@ struct GroupRow {
 
 /// A membership of one group; `member_kind` decides what `member_id` names (REQ-010).
 /// An opaque string because the target table differs per kind.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GroupMemberKind {
     Person,
     Bot,
@@ -596,6 +596,54 @@ impl GroupStore for MemoryGroupStore {
             .groups
             .iter()
             .find(|row| &row.id == id && Some(&row.space_id) == context.space_id())
+            .map(|row| boma_domain::Group {
+                id: row.id.clone(),
+                space_id: row.space_id.clone(),
+                name: row.name.clone(),
+                thread_id: row.thread_id.clone(),
+                created_at: row.created_at.clone(),
+                bot_ids: row.bot_ids.clone(),
+            }))
+    }
+
+    async fn find_for_bot(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Option<boma_domain::Group>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .group_memberships
+            .iter()
+            .find(|membership| {
+                membership.member_kind == GroupMemberKind::Bot
+                    && membership.member_id == bot_id.as_str()
+            })
+            .and_then(|membership| {
+                state.groups.iter().find(|row| {
+                    row.id == membership.group_id && Some(&row.space_id) == context.space_id()
+                })
+            })
+            .map(|row| boma_domain::Group {
+                id: row.id.clone(),
+                space_id: row.space_id.clone(),
+                name: row.name.clone(),
+                thread_id: row.thread_id.clone(),
+                created_at: row.created_at.clone(),
+                bot_ids: row.bot_ids.clone(),
+            }))
+    }
+
+    async fn find_by_thread(
+        &self,
+        context: &boma_domain::TenantContext,
+        thread_id: &boma_domain::ThreadId,
+    ) -> Result<Option<boma_domain::Group>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .groups
+            .iter()
+            .find(|row| &row.thread_id == thread_id && Some(&row.space_id) == context.space_id())
             .map(|row| boma_domain::Group {
                 id: row.id.clone(),
                 space_id: row.space_id.clone(),
@@ -2254,7 +2302,7 @@ impl RunStore for MemoryRunStore {
         // The nonce already started a run: the caller replays a send, and the run it already
         // has comes back unchanged (REQ-002).
         if let Some(nonce) = run.client_nonce.as_deref()
-            && let Some(existing) = run_with_nonce(&state, &run.thread_id, nonce)
+            && let Some(existing) = run_with_nonce(&state, &run.thread_id, nonce, &run.bot_id)
         {
             return Ok(existing.run.clone());
         }
@@ -2342,9 +2390,10 @@ impl RunStore for MemoryRunStore {
         context: &TenantContext,
         thread_id: &ThreadId,
         client_nonce: &str,
+        bot_id: &boma_domain::BotId,
     ) -> Result<Option<Run>, AppError> {
         let state = read(&self.state);
-        let Some(existing) = run_with_nonce(&state, thread_id, client_nonce) else {
+        let Some(existing) = run_with_nonce(&state, thread_id, client_nonce, bot_id) else {
             return Ok(None);
         };
         if !visible(context, &existing.run.space_id) {
@@ -2612,14 +2661,17 @@ impl RunStore for MemoryRunStore {
     }
 }
 
-/// The run a nonce already started, in a thread.
+/// The run a nonce already started, in a thread, for one bot.
 fn run_with_nonce<'rows>(
     state: &'rows State,
     thread_id: &ThreadId,
     nonce: &str,
+    bot_id: &boma_domain::BotId,
 ) -> Option<&'rows RunRow> {
     state.runs.iter().find(|row| {
-        row.run.thread_id == *thread_id && row.run.client_nonce.as_deref() == Some(nonce)
+        row.run.thread_id == *thread_id
+            && row.run.client_nonce.as_deref() == Some(nonce)
+            && row.run.bot_id == *bot_id
     })
 }
 

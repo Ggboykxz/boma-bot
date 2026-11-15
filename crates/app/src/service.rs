@@ -486,8 +486,8 @@ pub struct Actor {
 pub struct SendOutcome {
     /// The message that was written.
     pub message: Message,
-    /// The run that was started for it.
-    pub run: Run,
+    /// Every run created or steered by the message, in creation order.
+    pub runs: Vec<Run>,
 }
 
 /// The bot and its conversation, as one pair.

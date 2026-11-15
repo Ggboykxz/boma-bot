@@ -727,7 +727,7 @@ mod tests {
         .await
         .expect("the message is sent");
 
-        assert_eq!(outcome.run.status, RunStatus::Queued);
+        assert_eq!(outcome.runs[0].status, RunStatus::Queued);
         assert_eq!(outcome.message.seq, 1);
 
         // The replay of the same nonce returns the same turn (REQ-002).
@@ -745,7 +745,7 @@ mod tests {
         .await
         .expect("the replay is sent");
         assert_eq!(replay.message.id, outcome.message.id);
-        assert_eq!(replay.run.id, outcome.run.id);
+        assert_eq!(replay.runs[0].id, outcome.runs[0].id);
     }
 
     #[tokio::test]
@@ -784,7 +784,7 @@ mod tests {
         )
         .await
         .expect("the message is sent");
-        assert_eq!(outcome.run.status, RunStatus::Queued);
+        assert_eq!(outcome.runs[0].status, RunStatus::Queued);
 
         // The provider has nothing to say, so the turn fails: the person must still be told,
         // in words safe to show (REQ-021).
@@ -849,18 +849,20 @@ mod tests {
         )
         .await
         .expect("the message is sent");
-        assert_eq!(outcome.run.status, RunStatus::Queued);
+        assert_eq!(outcome.runs[0].status, RunStatus::Queued);
 
         // The person stops the work before the worker ever sees it (REQ-006).
-        let stopped = boma_app::usecases::cancel_run(test.app(), &context, outcome.run.id.as_str())
-            .await
-            .expect("the run is stopped");
+        let stopped =
+            boma_app::usecases::cancel_run(test.app(), &context, outcome.runs[0].id.as_str())
+                .await
+                .expect("the run is stopped");
         assert_eq!(stopped.status, RunStatus::Cancelled);
 
         // Stopping again is a no-op that shows the same state.
-        let again = boma_app::usecases::cancel_run(test.app(), &context, outcome.run.id.as_str())
-            .await
-            .expect("the stop is idempotent");
+        let again =
+            boma_app::usecases::cancel_run(test.app(), &context, outcome.runs[0].id.as_str())
+                .await
+                .expect("the stop is idempotent");
         assert_eq!(again.status, RunStatus::Cancelled);
 
         // Nothing lands on the run afterwards: a terminal row refuses every write.
@@ -870,7 +872,7 @@ mod tests {
             .runs
             .set_status(
                 &context,
-                &outcome.run.id,
+                &outcome.runs[0].id,
                 RunStatus::Running,
                 &test.app().services.clock.now(),
                 None,
@@ -932,7 +934,7 @@ mod tests {
             .await
             .expect("the claim answers")
             .expect("the run is claimed");
-        assert_eq!(claimed.id, first.run.id);
+        assert_eq!(claimed.id, first.runs[0].id);
         test.app()
             .stores
             .runs
@@ -941,7 +943,7 @@ mod tests {
                     reason: boma_domain::SystemReason::ScheduledJob,
                     user_id: Some(user_id.clone()),
                 },
-                &first.run.id,
+                &first.runs[0].id,
                 RunStatus::Running,
                 &test.app().services.clock.now(),
                 Some(claimed.lease_fence),
@@ -965,7 +967,7 @@ mod tests {
         .expect("the steering message is sent");
 
         assert_eq!(
-            second.run.id, first.run.id,
+            second.runs[0].id, first.runs[0].id,
             "one working run: the steering message joined the active one (REQ-003)"
         );
 
@@ -973,7 +975,7 @@ mod tests {
             .app()
             .stores
             .runs
-            .find(&context, &first.run.id)
+            .find(&context, &first.runs[0].id)
             .await
             .expect("the run answers")
             .expect("the run exists");
@@ -1044,7 +1046,10 @@ mod tests {
         )
         .await
         .expect("the steering message is sent");
-        assert_eq!(second.run.id, first.run.id, "one working run (REQ-003)");
+        assert_eq!(
+            second.runs[0].id, first.runs[0].id,
+            "one working run (REQ-003)"
+        );
         release
             .send(boma_app::ports::ProviderTurn::Chunks(vec![
                 "Considering Friday.".to_owned(),
@@ -1092,7 +1097,7 @@ mod tests {
             .app()
             .stores
             .runs
-            .find(&context, &first.run.id)
+            .find(&context, &first.runs[0].id)
             .await
             .expect("the run answers")
             .expect("the run exists");
@@ -1139,7 +1144,7 @@ mod tests {
             id: boma_domain::CardId::new("card_golden").expect("an id is accepted"),
             space_id: space.id.clone(),
             thread_id: created.thread.id.clone(),
-            run_id: Some(first.run.id.clone()),
+            run_id: Some(first.runs[0].id.clone()),
             kind: boma_domain::CardKind::Approval,
             status: boma_domain::CardStatus::Pending,
             answer: None,
@@ -1202,7 +1207,7 @@ mod tests {
         )
         .await
         .expect("the message is sent");
-        let run_id = outcome.run.id.clone();
+        let run_id = outcome.runs[0].id.clone();
 
         // The model asks for a write-class tool; the run must park, never write.
         let provider = Arc::new(ScriptedProvider::new_turn(vec![
@@ -1320,7 +1325,7 @@ mod tests {
         )
         .await
         .expect("the message is sent");
-        let run_id = outcome.run.id.clone();
+        let run_id = outcome.runs[0].id.clone();
 
         let provider = Arc::new(ScriptedProvider::new_turn(vec![
             boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
@@ -1457,7 +1462,7 @@ mod tests {
         )
         .await
         .expect("the message is sent");
-        let run_id = outcome.run.id.clone();
+        let run_id = outcome.runs[0].id.clone();
 
         // Parent: delegate. Helper: its answer. Parent: the final reply.
         let provider = Arc::new(ScriptedProvider::new_turn(vec![
@@ -1979,8 +1984,8 @@ mod tests {
         )
         .await
         .expect("the fallback resolves");
-        assert_eq!(outcome.run.model_provider.as_deref(), Some("openai"));
-        assert_eq!(outcome.run.model_id.as_deref(), Some("gpt-5"));
+        assert_eq!(outcome.runs[0].model_provider.as_deref(), Some("openai"));
+        assert_eq!(outcome.runs[0].model_id.as_deref(), Some("gpt-5"));
     }
 
     #[tokio::test]
@@ -2406,7 +2411,7 @@ mod tests {
         let helper = boma_app::usecases::delegate_helper_run(
             test.app(),
             &context,
-            parent.run.id.as_str(),
+            parent.runs[0].id.as_str(),
             "Research the week's commits.",
         )
         .await
@@ -2418,7 +2423,7 @@ mod tests {
                 .parent_run_id
                 .as_ref()
                 .map(boma_domain::RunId::as_str),
-            Some(parent.run.id.as_str())
+            Some(parent.runs[0].id.as_str())
         );
         assert!(helper.is_helper());
     }
@@ -3832,7 +3837,7 @@ mod skills_tests {
             .app()
             .stores
             .runs
-            .find(&context, &outcome.run.id)
+            .find(&context, &outcome.runs[0].id)
             .await
             .expect("the run exists")
             .expect("the run exists");
@@ -4369,7 +4374,7 @@ mod mcp_tests {
             .app()
             .stores
             .runs
-            .find(&context, &outcome.run.id)
+            .find(&context, &outcome.runs[0].id)
             .await
             .expect("the store answers")
             .expect("the run exists");
@@ -4383,7 +4388,7 @@ mod mcp_tests {
             .app()
             .stores
             .runs
-            .find(&context, &outcome.run.id)
+            .find(&context, &outcome.runs[0].id)
             .await
             .expect("the store answers")
             .expect("the run exists");
@@ -6730,7 +6735,7 @@ mod models_tests {
             .app()
             .stores
             .runs
-            .find(&context, &sent.run.id)
+            .find(&context, &sent.runs[0].id)
             .await
             .expect("the store answers")
             .expect("the run exists");
@@ -8289,5 +8294,170 @@ mod groups_tests {
         )
         .await;
         assert!(refused_empty.is_err(), "no bots at all — refused");
+    }
+}
+
+#[cfg(test)]
+mod group_routing_tests {
+    // REQ-010 — mention routing: a member message in a shared thread starts one run per mentioned
+    // bot, and only for the mentioned bots; an unmentioned room runs the owner (it is one room).
+    use super::TestApp;
+
+    #[tokio::test]
+    async fn req_010_a_member_message_addresses_the_mentioned_bots_only() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        let created = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+        let sent = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "@writer please polish this commit summary.".to_owned(),
+                client_nonce: Some("req-010-send-1".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+        assert_eq!(sent.runs.len(), 1, "only the mentioned bot gets a run");
+        assert_eq!(sent.runs[0].bot_id, writer);
+        let _ = created.id;
+    }
+
+    #[tokio::test]
+    async fn req_010_a_mentionless_message_runs_the_owner_of_the_room() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        let _created = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+
+        let sent = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "hello everyone".to_owned(),
+                client_nonce: Some("req-010-send-2".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+        assert_eq!(sent.runs.len(), 1, "the owner of the shared thread runs");
+        assert_eq!(sent.runs[0].bot_id, analyst);
+    }
+
+    #[tokio::test]
+    async fn req_010_two_mentions_start_two_runs() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space_id, &owner, "writer")
+            .await
+            .expect("the writer exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+
+        let sent = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "@analyst @writer please check this together".to_owned(),
+                client_nonce: Some("req-010-send-3".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+        for run in &sent.runs {
+            eprintln!("run.bot_id={}", run.bot_id.as_str());
+        }
+        assert_eq!(sent.runs.len(), 2, "both mentioned bots run");
+        let bot_ids: Vec<String> = sent
+            .runs
+            .iter()
+            .map(|run| run.bot_id.as_str().to_owned())
+            .collect();
+        assert_eq!(
+            bot_ids,
+            vec![analyst.as_str().to_owned(), writer.as_str().to_owned()]
+        );
     }
 }

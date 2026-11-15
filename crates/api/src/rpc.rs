@@ -638,10 +638,22 @@ async fn send(state: AppState, auth: AuthContext, body: Bytes) -> Result<SendRep
     )
     .await?;
 
+    let first = outcome.runs.first().ok_or(ApiError::unavailable())?;
     Ok(SendReply {
         message_id: outcome.message.id.as_str().to_owned(),
-        run_id: outcome.run.id.as_str().to_owned(),
-        status: outcome.run.status.as_str().to_owned(),
+        run_id: first.id.as_str().to_owned(),
+        status: first.status.as_str().to_owned(),
+        run_ids: if outcome.runs.len() > 1 {
+            Some(
+                outcome
+                    .runs
+                    .iter()
+                    .map(|run| run.id.as_str().to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        },
     })
 }
 

@@ -167,7 +167,12 @@ async fn req_002_the_same_nonce_returns_the_same_message_and_run() {
     );
 
     let found = runs
-        .find_by_nonce(&fixture.context, &fixture.thread_id, "the-same-nonce")
+        .find_by_nonce(
+            &fixture.context,
+            &fixture.thread_id,
+            "the-same-nonce",
+            &fixture.bot_id,
+        )
         .await
         .expect("the run is read");
     assert!(found.is_some(), "the run the nonce started is there");

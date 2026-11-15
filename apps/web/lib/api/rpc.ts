@@ -65,11 +65,17 @@ export interface RunView {
   completedAt?: string;
 }
 
-/** The reply of `threads.send`. */
+/** The reply of `threads.send`.
+ *
+ * A group message starts runs for every mentioned member bot; all their ids are carried in
+ * `runIds` when the batch is larger than one. `runId` keeps the same contract as the single-bot
+ * case: the first run, the one the member's optimistic UI follows (REQ-001, REQ-010).
+ */
 export interface SendReply {
   messageId: string;
   runId: string;
   status: string;
+  runIds?: string[];
 }
 
 /** The head of a thread, as the unread divider is rendered (REQ-009). `lastMessageAt` is null for an empty thread. */

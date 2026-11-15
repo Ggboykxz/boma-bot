@@ -4117,12 +4117,24 @@ pub async fn send_message(
     if bot.is_archived() {
         return Err(AppError::NotFound);
     }
-    let thread = app
-        .stores
-        .threads
-        .for_bot(context, &bot.id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+
+    // A message to any member of a group lands in the shared thread — one room, several bots
+    // (REQ-010). The bot's own thread is pushed aside; the group owns the conversation.
+    let member_group = app.stores.groups.find_for_bot(context, &bot.id).await?;
+    let thread = match &member_group {
+        Some(group) => app
+            .stores
+            .threads
+            .find(context, &group.thread_id)
+            .await?
+            .ok_or(AppError::NotFound)?,
+        None => app
+            .stores
+            .threads
+            .for_bot(context, &bot.id)
+            .await?
+            .ok_or(AppError::NotFound)?,
+    };
     let space_id = context.space_id().ok_or(AppError::NotFound)?.clone();
     let user_id = context.user_id().cloned().ok_or(AppError::NotFound)?;
     let now = app.services.clock.now();
@@ -4159,54 +4171,150 @@ pub async fn send_message(
         )
         .await?;
 
-    // A conversational run that is already working takes this message as steering input instead
-    // of queueing a second run behind it (REQ-003). The message is in the thread, the run is
-    // marked, and the client sees one working run.
-    if let Some(active) = app
-        .stores
-        .runs
-        .find_active_for_thread(context, &thread.id)
-        .await?
-    {
-        app.stores
-            .runs
-            .set_steering_from(context, &active.id, message.message.seq)
-            .await?;
-        return Ok(SendOutcome {
-            message: message.message,
-            run: active,
-        });
-    }
+    // The target bots: in a group, the ones the member mentioned by name — and only those
+    // (REQ-010). No mention leaves the owner running, matching the single-bot conversation's
+    // shape.
+    let targets: Vec<BotId> = match &member_group {
+        // The group decides who answers (REQ-010): mentioned bots run when the member named
+        // any, otherwise the owner of the shared thread runs, matching the single-bot shape.
+        Some(group) => {
+            let mentioned = mentioned_bots(app, context, group, &request.text).await?;
+            if mentioned.is_empty() {
+                vec![group.bot_ids[0].clone()]
+            } else {
+                mentioned
+            }
+        }
+        None => vec![bot.id.clone()],
+    };
 
-    // The model is picked before the run exists (REQ-015): a pinned choice the deployment cannot
-    // reach fails visibly instead of silently running elsewhere.
-    let choice = model_choice_for(app, context, &bot, &app.services.models).await?;
-
-    let run = app
-        .stores
-        .runs
-        .create(NewRun {
-            id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
-            space_id,
-            bot_id: bot.id,
-            thread_id: thread.id,
-            user_id,
-            trigger: RunTrigger::User,
-            client_nonce: request.client_nonce.clone(),
-            source_message_id: Some(message.message.id.clone()),
-            created_at: now,
-            model_provider: Some(choice.provider),
-            model_id: Some(choice.model),
-            model_pinned: choice.pinned,
-            parent_run_id: None,
-            routine_id: None,
-        })
-        .await?;
+    let fanout = Fanout {
+        app,
+        context,
+        space_id,
+        user_id,
+        thread_id: thread.id,
+        message: &message.message,
+        now: &now,
+    };
+    let runs = create_or_steer_runs(&fanout, targets).await?;
 
     Ok(SendOutcome {
         message: message.message,
-        run,
+        runs,
     })
+}
+
+/// The inputs a fan-out needs that do not change between bots.
+struct Fanout<'message> {
+    app: &'message App,
+    context: &'message TenantContext,
+    space_id: boma_domain::SpaceId,
+    user_id: boma_domain::UserId,
+    thread_id: boma_domain::ThreadId,
+    message: &'message Message,
+    now: &'message str,
+}
+
+/// Creates one run per mentioned bot, steering a busy bot instead of queueing behind it.
+///
+/// One bot at a time: a busy bot takes this message as steering (REQ-003), a free bot gets a
+/// new queue entry. The threat of a duplicate run never exists per bot because the single-shot
+/// run creation path dedups by nonce.
+async fn create_or_steer_runs(
+    fanout: &Fanout<'_>,
+    targets: Vec<BotId>,
+) -> Result<Vec<boma_domain::Run>, AppError> {
+    let app = fanout.app;
+    let context = fanout.context;
+    let space_id = &fanout.space_id;
+    let user_id = &fanout.user_id;
+    let thread_id = &fanout.thread_id;
+    let message = fanout.message;
+    let now = fanout.now;
+
+    let mut runs = Vec::with_capacity(targets.len());
+    for target_bot in &targets {
+        // One bot at a time: a busy bot takes this message as steering instead of queueing a
+        // second run (REQ-003), a free bot gets a new queue entry.
+        if let Some(active) = app
+            .stores
+            .runs
+            .find_active_for_thread(context, thread_id)
+            .await?
+            .filter(|active| active.bot_id == *target_bot)
+        {
+            app.stores
+                .runs
+                .set_steering_from(context, &active.id, message.seq)
+                .await?;
+            runs.push(active);
+            continue;
+        }
+        let target = app
+            .stores
+            .bots
+            .find(context, target_bot)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        // The model is picked before the run exists (REQ-015): a pinned choice the deployment
+        // cannot reach fails visibly instead of silently running elsewhere.
+        let choice = model_choice_for(app, context, &target, &app.services.models).await?;
+
+        let run = app
+            .stores
+            .runs
+            .create(NewRun {
+                id: boma_domain::RunId::new(app.services.ids.new_id("run"))?,
+                space_id: space_id.clone(),
+                bot_id: target.id,
+                thread_id: thread_id.clone(),
+                user_id: user_id.clone(),
+                trigger: boma_domain::RunTrigger::User,
+                client_nonce: message.client_nonce.clone(),
+                source_message_id: Some(message.id.clone()),
+                created_at: now.to_owned(),
+                model_provider: Some(choice.provider),
+                model_id: Some(choice.model),
+                model_pinned: choice.pinned,
+                parent_run_id: None,
+                routine_id: None,
+            })
+            .await?;
+
+        runs.push(run);
+    }
+    Ok(runs)
+}
+
+/// Which member bots the text addresses, in creation order of `bot_ids`.
+///
+/// The grammar is deliberately boring: an `@` sign followed by the bot's display name,
+/// case-insensitively, anywhere in the text. A member needs no tooling beyond the composer;
+/// a quoted name counts the same as an imperative one because the runner, not the picker,
+/// decides what to do with the message.
+async fn mentioned_bots(
+    app: &App,
+    context: &TenantContext,
+    group: &boma_domain::Group,
+    text: &str,
+) -> Result<Vec<BotId>, AppError> {
+    let lowered = text.to_ascii_lowercase();
+    let mut targets = Vec::with_capacity(group.bot_ids.len());
+    for bot_id in &group.bot_ids {
+        let bot = app
+            .stores
+            .bots
+            .find(context, bot_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let needle = format!("@{}", bot.name.to_ascii_lowercase());
+        let hit = lowered.contains(&needle);
+        if hit {
+            targets.push(bot_id.clone());
+        }
+    }
+    Ok(targets)
 }
 /// A page of the thread's history, newest first.
 #[derive(Debug, Clone, PartialEq, Eq)]

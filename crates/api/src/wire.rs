@@ -150,10 +150,13 @@ impl RunView {
 pub struct SendReply {
     /// The message that was written.
     pub message_id: String,
-    /// The run that was started for it.
+    /// The run that was started for it. This member's run first when several start.
     pub run_id: String,
     /// Where the run is.
     pub status: String,
+    /// Every run started by the message, in creation order. Omitted for the regular one-bot case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_ids: Option<Vec<String>>,
 }
 
 /// The head of a thread, as the client renders the unread divider and its badge (REQ-009).
@@ -1770,6 +1773,7 @@ mod tests {
             message_id: "msg_1".to_owned(),
             run_id: "run_1".to_owned(),
             status: "queued".to_owned(),
+            run_ids: None,
         };
         let json = serde_json::to_value(reply).expect("the reply serialises");
         assert_eq!(
