@@ -129,10 +129,13 @@ impl Accounts {
     /// [`AppError::Unavailable`] when the store cannot answer.
     pub async fn sign_in(&self, request: &SignIn) -> Result<SessionGrant, AppError> {
         let email = Email::new(request.email.clone())?;
+        let now = self.app.services.clock.now();
         let Some((user, stored)) = self.app.stores.users.find_by_email(&email).await? else {
             // The password is still put through the hasher, so the time taken does not say whether
-            // the address exists.
+            // the address exists. The audit row says only that an attempt failed: never the
+            // address, so an export cannot leak a member's email.
             let _ = self.app.services.hasher.hash(&request.password).await;
+            let _ = self.record_sign_in_failure(now.clone()).await;
             return Err(AppError::InvalidCredentials);
         };
         if !self
@@ -142,9 +145,26 @@ impl Accounts {
             .verify(&request.password, &stored)
             .await?
         {
+            let _ = self.record_sign_in_failure(now).await;
             return Err(AppError::InvalidCredentials);
         }
         self.grant_session(user).await
+    }
+
+    async fn record_sign_in_failure(&self, now: String) -> Result<(), AppError> {
+        self.app
+            .stores
+            .audit
+            .append(crate::ports::NewAuditEvent {
+                id: self.app.services.ids.new_id("aud"),
+                space_id: None,
+                actor_user_id: None,
+                kind: boma_domain::AuditKind::SignInFailed,
+                target: "password".to_owned(),
+                metadata: serde_json::json!({ "method": "password" }),
+                created_at: now,
+            })
+            .await
     }
 
     /// Mints a session for a person who is already known.

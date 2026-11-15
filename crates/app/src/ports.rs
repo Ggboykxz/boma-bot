@@ -379,6 +379,27 @@ pub trait SpaceStore: Send + Sync {
     async fn default_for(&self, user_id: &UserId) -> Result<Option<Space>, AppError>;
 }
 
+/// One audit row read back, for the admin export (REQ-045).
+///
+/// The metadata is presented as-is; the caller redacts or skips it before writing out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditEventView {
+    /// The event's id.
+    pub id: String,
+    /// The space the event belongs to; `None` for deployment-scoped events.
+    pub space_id: Option<String>,
+    /// The member who caused it, when there was one.
+    pub actor_user_id: Option<String>,
+    /// What happened.
+    pub kind: String,
+    /// What it happened to.
+    pub target: String,
+    /// The structured payload.
+    pub metadata: serde_json::Value,
+    /// When it happened.
+    pub created_at: String,
+}
+
 /// Stores and reads bots.
 #[async_trait]
 pub trait BotStore: Send + Sync {
@@ -1870,6 +1891,22 @@ pub trait AuditStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn append(&self, event: NewAuditEvent) -> Result<(), AppError>;
+
+    /// The newest events of a space, oldest-first page after backward sorting, capped.
+    ///
+    /// `kinds_prefix` (`security.` filters to the security kinds (REQ-058). Absent is everything.
+    /// `limit` bounds the page; the use case caps it at 4_000.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list_for_space(
+        &self,
+        context: &TenantContext,
+        space_id: &SpaceId,
+        kinds_prefix: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<AuditEventView>, AppError>;
 }
 
 /// The credential the caller hands in for an MCP server (REQ-033).

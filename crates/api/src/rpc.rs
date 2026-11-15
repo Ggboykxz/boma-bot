@@ -26,22 +26,23 @@ use crate::{
     wire::{
         AnswerReply, ArtifactCreateReply, ArtifactGetReply, ArtifactListSpaceReply,
         ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply, ArtifactView,
-        BillingCheckoutReply, BillingStatusReply, BoardsGetReply, BotReply, BotsListReply,
-        CancelReply, CatalogModelView, CatalogProviderView, ComputerOpenScreenReply,
-        ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
-        ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
-        ConnectionsRemoveReply, ConnectorView, ConversationView, ConversationsReply, HeldDropReply,
-        HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply, InstallTelegramReply,
-        InstallUrlReply, InstallationsReply, InvitationReply, MailPolicyReply, MailPolicyView,
-        MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply,
-        McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
-        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
-        MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
-        ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
-        ModelsCatalogReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
-        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
-        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
-        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply,
+        AuditEventView, AuditExportReply, BillingCheckoutReply, BillingStatusReply, BoardsGetReply,
+        BotReply, BotsListReply, CancelReply, CatalogModelView, CatalogProviderView,
+        ComputerOpenScreenReply, ComputerProviderInfo, ComputerProviderReply,
+        ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
+        ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
+        ConversationsReply, HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply,
+        InstallGenericReply, InstallTelegramReply, InstallUrlReply, InstallationsReply,
+        InvitationReply, MailPolicyReply, MailPolicyView, MarketplaceInstallReply,
+        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
+        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
+        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
+        MessagesReply, MessagingInstallationView, MessagingRemoveReply, ModelConnectReply,
+        ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply, ModelsCatalogReply,
+        PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
+        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
+        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
+        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply, SkillReply,
         SkillView, SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply,
         ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply, TicketView,
     },
@@ -90,6 +91,10 @@ pub mod namespaces {
     /// Billing: the plan, the checkout, the spending limit (REQ-018, REQ-051). Absent when the
     /// deployment does not offer billing.
     pub const BILLING: &str = "billing";
+    /// Audit: the export of the space's trail (REQ-045).
+    pub const AUDIT: &str = "audit";
+    /// Security: the recent security events of the space (REQ-045).
+    pub const SECURITY: &str = "security";
 }
 
 /// Every procedure this deployment serves.
@@ -186,6 +191,8 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BILLING, "checkout"),
         (namespaces::BILLING, "limit.get"),
         (namespaces::BILLING, "limit.set"),
+        (namespaces::AUDIT, "export"),
+        (namespaces::SECURITY, "events.list"),
     ]
 }
 
@@ -524,6 +531,12 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BILLING, "limit.set") => billing_limit_set(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::AUDIT, "export") => audit_export(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::SECURITY, "events.list") => security_events_list(state, auth)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -3165,5 +3178,45 @@ async fn billing_limit_set(
         cap_minor_units: limit.cap_minor_units,
         spent_minor_units: limit.spent_minor_units,
         remaining_minor_units: limit.remaining_minor_units,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M9 — observability (REQ-045)
+// ---------------------------------------------------------------------------
+
+/// `audit.export` — the space's trail as JSONL (REQ-045).
+///
+/// The caller must be an owner or admin of the space the session acts in; everyone else gets
+/// the same refusal a non-member sees (a `403`, never anything about another tenant).
+async fn audit_export(state: AppState, auth: AuthContext) -> Result<AuditExportReply, ApiError> {
+    let outcome = usecases::audit_export(state.app(), &auth.actor.context).await?;
+    Ok(AuditExportReply {
+        version: "1".to_owned(),
+        events: u64::try_from(outcome.events).unwrap_or(u64::MAX),
+        jsonl: outcome.jsonl,
+    })
+}
+
+/// `security.events.list` — the space's recent security events (REQ-045).
+async fn security_events_list(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<SecurityEventsReply, ApiError> {
+    let outcome = usecases::security_events_list(state.app(), &auth.actor.context).await?;
+    Ok(SecurityEventsReply {
+        events: outcome
+            .events
+            .into_iter()
+            .map(|event| AuditEventView {
+                id: event.id,
+                space_id: event.space_id,
+                actor_user_id: event.actor_user_id,
+                kind: event.kind,
+                target: event.target,
+                metadata: boma_domain::redact_audit_value(&event.metadata),
+                created_at: event.created_at,
+            })
+            .collect(),
     })
 }

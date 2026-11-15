@@ -41,7 +41,7 @@ pub use artifact::{
     ARTIFACT_MAX_BYTES, detect_mime, sniff_artifact_mime, validate_artifact_description,
     validate_artifact_name,
 };
-pub use audit::AuditKind;
+pub use audit::{AuditKind, redact_audit_value};
 pub use billing::{
     StripeSignature, WEBHOOK_MAX_SKEW_SECONDS, parse_stripe_signature, verify_stripe_signature,
 };

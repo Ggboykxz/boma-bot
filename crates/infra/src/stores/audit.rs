@@ -6,6 +6,7 @@ use boma_app::{
     AppError,
     ports::{AuditStore, NewAuditEvent},
 };
+use boma_domain::TenantContext;
 use sqlx::PgPool;
 
 use crate::tenant;
@@ -26,6 +27,50 @@ impl PostgresAuditStore {
 
 #[async_trait::async_trait]
 impl AuditStore for PostgresAuditStore {
+    async fn list_for_space(
+        &self,
+        context: &TenantContext,
+        _space_id: &boma_domain::SpaceId,
+        kinds_prefix: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<boma_app::ports::AuditEventView>, AppError> {
+        let prefix = kinds_prefix.map(|text| format!("{text}%"));
+        let rows = tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                let rows = sqlx::query_as::<_, (String, Option<String>, Option<String>, String, String, serde_json::Value, String)>(
+                    "SELECT id, space_id, actor_user_id, kind, target, metadata, boma.rfc3339(created_at)
+                       FROM audit_events
+                      WHERE ($1::text IS NULL OR kind LIKE $1)
+                      ORDER BY created_at DESC, id DESC
+                      LIMIT $2",
+                )
+                .bind(prefix.as_deref())
+                .bind(limit)
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+                Ok(rows)
+            })
+        })
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, space_id, actor_user_id, kind, target, metadata, created_at)| {
+                    boma_app::ports::AuditEventView {
+                        id,
+                        space_id,
+                        actor_user_id,
+                        kind,
+                        target,
+                        metadata,
+                        created_at,
+                    }
+                },
+            )
+            .collect())
+    }
+
     async fn append(&self, event: NewAuditEvent) -> Result<(), AppError> {
         let space_id = event
             .space_id

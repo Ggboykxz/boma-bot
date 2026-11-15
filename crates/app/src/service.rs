@@ -473,6 +473,7 @@ impl From<AppError> for Failure {
             AppError::RateLimited => "rate_limited",
             AppError::Unavailable => "dependency_unavailable",
             AppError::NotFound => "not_found",
+            AppError::Forbidden => "forbidden",
         };
         Self {
             reason,

@@ -35,6 +35,9 @@ pub enum AppError {
     /// The caller asked for something that does not exist, including another tenant's data.
     #[error("not found")]
     NotFound,
+    /// The caller is signed in but not permitted to do this (REQ-058).
+    #[error("forbidden")]
+    Forbidden,
 }
 
 impl AppError {

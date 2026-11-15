@@ -1437,6 +1437,46 @@ pub struct SpendingLimitReply {
     pub remaining_minor_units: Option<i64>,
 }
 
+/// One audit event, as the admin surfaces see it (REQ-045).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEventView {
+    /// The event's id.
+    pub id: String,
+    /// The space the event belongs to; `null` for deployment-scoped events (absent from the file).
+    pub space_id: Option<String>,
+    /// The member who caused it, when there was one.
+    pub actor_user_id: Option<String>,
+    /// What happened.
+    pub kind: String,
+    /// What it happened to.
+    pub target: String,
+    /// The structured payload, with secret-shaped values redacted.
+    pub metadata: serde_json::Value,
+    /// When it happened.
+    pub created_at: String,
+}
+
+/// The reply of `audit.export` (REQ-045): the header plus the JSONL body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditExportReply {
+    /// The format of the export (`1` for the stable JSONL shape used here).
+    pub version: String,
+    /// How many events the file carries.
+    pub events: u64,
+    /// One line of metadata, then one event per line, oldest first.
+    pub jsonl: String,
+}
+
+/// The reply of `security.events.list` (REQ-045).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityEventsReply {
+    /// The security events of the caller's space, newest first, capped at two hundred.
+    pub events: Vec<AuditEventView>,
+}
+
 #[cfg(test)]
 mod tests {
     use boma_domain::{Block, MessageId, MessageRole, RunId, ThreadId};

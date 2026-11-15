@@ -574,3 +574,42 @@ async fn req_054_csp_report_is_rate_limited_per_ip() {
         "the hourly allowance is spent and the route refuses the calls that survive the cap"
     );
 }
+
+#[tokio::test]
+async fn req_045_a_failed_sign_in_writes_one_security_event() {
+    let database = boma_testkit::MemoryDatabase::new();
+    let state = state_with_database(true, false, &database);
+
+    for email in ["nobody@example.com", "nobody.else@example.com"] {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/sign-in")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": email,
+                    "password": "not the right password",
+                })
+                .to_string(),
+            ))
+            .expect("the request builds");
+        let response = router(state.clone())
+            .oneshot(request)
+            .await
+            .expect("the router answers");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let events = database.audit().events();
+    let failures: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "security.sign_in_failed")
+        .collect();
+    assert_eq!(failures.len(), 2, "one row per failure");
+    for failure in failures {
+        assert_eq!(failure.target, "password");
+        // The attempted address never lands in the row: a file export cannot leak members.
+        let text = format!("{failure:?}");
+        assert!(!text.contains("nobody"));
+    }
+}

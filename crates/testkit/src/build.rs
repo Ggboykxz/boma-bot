@@ -93,10 +93,22 @@ impl TestApp {
         self.publisher.as_ref()
     }
 
-    /// The rows every store shares.
+    /// The rows the stores share; tests that need an extra member or a custom membership
+    /// write them here.
     #[must_use]
     pub fn database(&self) -> &MemoryDatabase {
         &self.database
+    }
+
+    /// Seeds a member with a role other than `Owner` (the creation path is always Owner).
+    pub fn seed_member(
+        &self,
+        space_id: &boma_domain::SpaceId,
+        user_id: &boma_domain::UserId,
+        role: boma_domain::SpaceRole,
+    ) {
+        self.database
+            .seed_member(space_id.clone(), user_id.clone(), role);
     }
 
     /// The tenant a member of a space acts in.
@@ -7262,5 +7274,164 @@ mod billing_tests {
                 .and_then(serde_json::Value::as_bool),
             Some(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    // REQ-045 — the audit export and the security events list.
+
+    use super::TestApp;
+
+    async fn world() -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_domain::TenantContext,
+    ) {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&owner)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let plain = test
+            .seed_user("plain@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        test.seed_member(&space.id, &plain, boma_domain::SpaceRole::Member);
+        (
+            test,
+            TestApp::member_context(&space.id, &owner),
+            TestApp::member_context(&space.id, &plain),
+        )
+    }
+
+    #[tokio::test]
+    async fn req_045_the_owner_exports_the_space_audit_and_secrets_are_reduced() {
+        let (test, owner, _) = world().await;
+        let scope = owner.space_id().expect("a member context").clone();
+        test.app()
+            .stores
+            .audit
+            .append(boma_app::ports::NewAuditEvent {
+                id: "aud_m9_secv_1".to_owned(),
+                space_id: Some(scope.clone()),
+                actor_user_id: owner.user_id().cloned(),
+                kind: boma_domain::AuditKind::McpPrivateCall,
+                target: "company-files".to_owned(),
+                metadata: serde_json::json!({
+                    "bearer": "sk-live-123456789012",
+                    "tool": "list-issues",
+                }),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            })
+            .await
+            .expect("the event is written");
+
+        let outcome = boma_app::usecases::audit_export(test.app(), &owner)
+            .await
+            .expect("the owner is allowed");
+        let mut lines = outcome.jsonl.lines();
+        let header: serde_json::Value =
+            serde_json::from_str(lines.next().expect("the header line exists"))
+                .expect("the header is JSON");
+        assert_eq!(header["version"], "1");
+        assert_eq!(header["events"], 1);
+        let row: serde_json::Value =
+            serde_json::from_str(lines.next().expect("the event line exists"))
+                .expect("the event is JSON");
+        assert_eq!(row["id"], "aud_m9_secv_1");
+        assert_eq!(row["metadata"]["bearer"], "[redacted]");
+        assert_eq!(row["metadata"]["tool"], "list-issues");
+
+        let listed = test.database().audit().events();
+        assert_eq!(listed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn req_045_a_plain_member_is_refused_the_export_and_the_list() {
+        let (test, _owner, plain) = world().await;
+        let export_error = boma_app::usecases::audit_export(test.app(), &plain)
+            .await
+            .expect_err("a plain member is refused");
+        assert!(matches!(export_error, boma_app::AppError::Forbidden));
+
+        let list_error = boma_app::usecases::security_events_list(test.app(), &plain)
+            .await
+            .expect_err("a plain member is refused");
+        assert!(matches!(list_error, boma_app::AppError::Forbidden));
+    }
+
+    #[tokio::test]
+    async fn req_045_the_security_list_returns_only_security_prefixed_kinds_newest_first() {
+        let (test, owner, _plain) = world().await;
+        let scope = owner.space_id().expect("a member context").clone();
+        for (id, kind) in [
+            ("aud_m9_secv_2", boma_domain::AuditKind::SignInFailed),
+            ("aud_m9_secv_3", boma_domain::AuditKind::McpPrivateCall),
+            ("aud_m9_secv_4", boma_domain::AuditKind::CspViolation),
+        ] {
+            test.app()
+                .stores
+                .audit
+                .append(boma_app::ports::NewAuditEvent {
+                    id: id.to_owned(),
+                    space_id: Some(scope.clone()),
+                    actor_user_id: None,
+                    kind,
+                    target: "t".to_owned(),
+                    metadata: serde_json::json!({}),
+                    created_at: "2026-01-01T00:00:00Z".to_owned(),
+                })
+                .await
+                .expect("the event is written");
+        }
+        let outcome = boma_app::usecases::security_events_list(test.app(), &owner)
+            .await
+            .expect("the owner is allowed");
+        let kinds: Vec<&str> = outcome
+            .events
+            .iter()
+            .map(|event| event.kind.as_str())
+            .collect();
+        for kind in &kinds {
+            assert!(kind.starts_with("security."), "{kind}");
+        }
+        assert_eq!(kinds.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn req_045_a_failed_sign_in_writes_one_event_without_the_address() {
+        let test = TestApp::builder().build();
+        test.seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let _ = boma_app::usecases::sign_in(
+            test.app(),
+            0,
+            &boma_app::usecases::SignIn {
+                email: "owner@example.com".to_owned(),
+                password: "not the right password".to_owned(),
+            },
+        )
+        .await
+        .expect_err("the password is wrong");
+        let events = test.database().audit().events();
+        let failures: Vec<_> = events
+            .iter()
+            .filter(|event| event.kind == "security.sign_in_failed")
+            .collect();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].target, "password");
+        // The address itself never lands in the row.
+        let event_debug = format!("{:?}", failures[0]);
+        assert!(!event_debug.contains("owner@example.com"));
     }
 }

@@ -3877,3 +3877,159 @@ async fn req_051_the_webhook_is_uniformly_denied_until_its_signature_verifies() 
         boma_app::usecases::PRO_SEEDED_CREDITS_MINOR
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9 — observability (REQ-045)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the export is the test
+async fn req_045_audit_export_redacts_secrets_and_refuses_a_plain_member() {
+    let test_app = TestApp::builder().build();
+    let owner_id = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner_id, "Audit space")
+        .await
+        .expect("the space exists");
+    let (bot_id, _thread_id) = test_app
+        .seed_bot(&space_id, &owner_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let _ = bot_id;
+    let owner_cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let plain_id = test_app
+        .seed_user("plain@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    test_app.seed_member(&space_id, &plain_id, boma_domain::SpaceRole::Member);
+    let plain_cookie = sign_in_as(&test_app, "plain@example.com").await;
+    test_app
+        .app()
+        .stores
+        .audit
+        .append(boma_app::ports::NewAuditEvent {
+            id: "aud_rpc_export_1".to_owned(),
+            space_id: Some(space_id.clone()),
+            actor_user_id: Some(owner_id.clone()),
+            kind: boma_domain::AuditKind::McpPrivateCall,
+            target: "company-files".to_owned(),
+            metadata: serde_json::json!({
+                "bearer": "sk-live-0123456789abcdef",
+                "tool": "list-issues",
+            }),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        })
+        .await
+        .expect("the event is written");
+    let plain_caller = Caller {
+        cookie: plain_cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let plain = post(
+        state(&test_app),
+        "/rpc/audit/export",
+        Some(&plain_caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(plain.status(), StatusCode::FORBIDDEN);
+
+    let owner_caller = Caller {
+        cookie: owner_cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let response = post(
+        state(&test_app),
+        "/rpc/audit/export",
+        Some(&owner_caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["version"], "1");
+    assert_eq!(body["events"], 1);
+    let text = body["jsonl"].as_str().expect("a JSONL body");
+    assert!(text.contains("\"bearer\":\"[redacted]\""), "{text}");
+    assert!(text.contains("list-issues"), "{text}");
+    let mut lines = text.lines();
+    let header: serde_json::Value =
+        serde_json::from_str(lines.next().expect("a header line")).expect("header parses");
+    assert_eq!(header["version"], "1");
+    let row: serde_json::Value =
+        serde_json::from_str(lines.next().expect("an event line")).expect("row parses");
+    assert_eq!(row["id"], "aud_rpc_export_1");
+}
+
+#[tokio::test]
+async fn req_045_security_events_list_refuses_a_plain_member_and_returns_security_kinds() {
+    let test_app = TestApp::builder().build();
+    let owner_id = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner_id, "Security space")
+        .await
+        .expect("the space exists");
+    let _ = test_app
+        .seed_bot(&space_id, &owner_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let plain_id = test_app
+        .seed_user("plain@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    test_app.seed_member(&space_id, &plain_id, boma_domain::SpaceRole::Member);
+    let plain_cookie = sign_in_as(&test_app, "plain@example.com").await;
+    let owner_cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let plain_caller = Caller {
+        cookie: plain_cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let owner_caller = Caller {
+        cookie: owner_cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    test_app
+        .app()
+        .stores
+        .audit
+        .append(boma_app::ports::NewAuditEvent {
+            id: "aud_rpc_seclist_1".to_owned(),
+            space_id: Some(space_id.clone()),
+            actor_user_id: None,
+            kind: boma_domain::AuditKind::SignInFailed,
+            target: "password".to_owned(),
+            metadata: serde_json::json!({}),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        })
+        .await
+        .expect("the event is written");
+
+    let plain = post(
+        state(&test_app),
+        "/rpc/security/events.list",
+        Some(&plain_caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(plain.status(), StatusCode::FORBIDDEN);
+
+    let response = post(
+        state(&test_app),
+        "/rpc/security/events.list",
+        Some(&owner_caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let events = body["events"].as_array().expect("an array");
+    assert!(!events.is_empty(), "the events are listed");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["kind"], "security.sign_in_failed");
+}

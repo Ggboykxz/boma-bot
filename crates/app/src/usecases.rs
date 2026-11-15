@@ -7688,3 +7688,132 @@ async fn dispatch_read_tool(
         }),
     }
 }
+
+// ---------------------------------------------------------------------------
+// M9 — observability (REQ-045): exports, security events, role gating
+// ---------------------------------------------------------------------------
+
+/// The roles that may administer a space: owner and admin (REQ-058).
+const SPACE_ADMINS: &[boma_domain::SpaceRole] =
+    &[boma_domain::SpaceRole::Owner, boma_domain::SpaceRole::Admin];
+
+/// The role a member has, or a refusal if they are not administered.
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the member is not among `allowed`, and
+/// [`AppError::NotFound`] when the space is not theirs to see.
+pub async fn require_space_role(
+    app: &App,
+    context: &TenantContext,
+    space_id: &boma_domain::SpaceId,
+    allowed: &[boma_domain::SpaceRole],
+) -> Result<(), AppError> {
+    let Some(user_id) = context.user_id() else {
+        return Err(AppError::Forbidden);
+    };
+    let role = app.stores.spaces.membership(space_id, user_id).await?;
+    match role {
+        Some(role) if allowed.contains(&role) => Ok(()),
+        Some(_) => Err(AppError::Forbidden),
+        None => Err(AppError::NotFound),
+    }
+}
+
+/// The outcome of `security.events.list` (REQ-045).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityEventsOutcome {
+    /// The security events, newest first.
+    pub events: Vec<crate::ports::AuditEventView>,
+}
+
+/// The outcome of `audit.export` (REQ-045).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditExportOutcome {
+    /// The line a JSONL consumer should record as the file's own contract.
+    pub header: serde_json::Value,
+    /// One line per event, oldest first, with secret-shaped values redacted.
+    pub jsonl: String,
+    /// How many events the export carries.
+    pub events: usize,
+}
+
+/// The security events of the caller's space, newest first, capped at two hundred (REQ-045).
+///
+/// Deployment-scoped events (no space) are never returned here; they are written
+/// system-scoped for the operator.
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin of the space, or
+/// [`AppError::NotFound`] when the space is not the caller's, and an error when a store cannot
+/// answer.
+pub async fn security_events_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<SecurityEventsOutcome, AppError> {
+    let space_id = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+    require_space_role(app, context, &space_id, SPACE_ADMINS).await?;
+    let events = app
+        .stores
+        .audit
+        .list_for_space(context, &space_id, Some("security."), 200)
+        .await?;
+    Ok(SecurityEventsOutcome { events })
+}
+
+/// The audit export of the caller's space as JSONL (REQ-045).
+///
+/// The first line is metadata: `{"version":"1",...}`. Every following line is one event,
+/// oldest first, with secret-shaped values replaced by `[redacted]`. The row cap is 4 000; a
+/// space with more is truncated at the newest rows, and the header says so.
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin of the space,
+/// [`AppError::NotFound`] when the space is not the caller's, and an error when a store cannot
+/// answer.
+pub async fn audit_export(
+    app: &App,
+    context: &TenantContext,
+) -> Result<AuditExportOutcome, AppError> {
+    let space_id = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+    require_space_role(app, context, &space_id, SPACE_ADMINS).await?;
+    let mut rows = app
+        .stores
+        .audit
+        .list_for_space(context, &space_id, None, 4_000)
+        .await?;
+    rows.reverse(); // oldest first for the file
+    let truncated = u64::try_from(rows.len()).unwrap_or(u64::MAX) == 4_000;
+    let exported_at = app.services.clock.now();
+    let header = serde_json::json!({
+        "version": "1",
+        "exportedAt": exported_at,
+        "spaceId": space_id.as_str(),
+        "events": rows.len(),
+        "truncated": truncated,
+    });
+    let mut jsonl = String::with_capacity(rows.len() * 256);
+    let header_line = header.to_string();
+    jsonl.push_str(&header_line);
+    jsonl.push('\n');
+    for row in &rows {
+        let line = serde_json::json!({
+            "id": row.id,
+            "spaceId": row.space_id,
+            "actorUserId": row.actor_user_id,
+            "kind": row.kind,
+            "target": row.target,
+            "metadata": boma_domain::redact_audit_value(&row.metadata),
+            "createdAt": row.created_at,
+        });
+        jsonl.push_str(&line.to_string());
+        jsonl.push('\n');
+    }
+    Ok(AuditExportOutcome {
+        header,
+        jsonl,
+        events: rows.len(),
+    })
+}

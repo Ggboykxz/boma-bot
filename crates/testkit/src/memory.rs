@@ -685,6 +685,19 @@ impl MemoryDatabase {
         Self::default()
     }
 
+    /// Adds one member to a space, with a role.
+    ///
+    /// The account-and-space creation paths always record the creator as `Owner`; tests that
+    /// need a plain member or an admin call this instead of poking the row vec by hand.
+    pub fn seed_member(&self, space_id: SpaceId, user_id: UserId, role: boma_domain::SpaceRole) {
+        let mut state = write(&self.state);
+        state.memberships.push(MembershipRow {
+            space_id,
+            user_id,
+            role,
+        });
+    }
+
     /// The store of accounts.
     #[must_use]
     pub fn accounts(&self) -> MemoryAccountStore {
@@ -5191,6 +5204,36 @@ impl Default for MemoryAuditStore {
 
 #[async_trait::async_trait]
 impl boma_app::ports::AuditStore for MemoryAuditStore {
+    async fn list_for_space(
+        &self,
+        _context: &boma_domain::TenantContext,
+        space_id: &boma_domain::SpaceId,
+        kinds_prefix: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<boma_app::ports::AuditEventView>, AppError> {
+        let limit = usize::try_from(limit).unwrap_or(0);
+        let state = read(&self.state);
+        let rows = state
+            .audit_events
+            .iter()
+            .filter(|row| row.space_id.as_deref() == Some(space_id.as_str()))
+            .filter(|row| kinds_prefix.is_none_or(|prefix| row.kind.starts_with(prefix)))
+            .rev() // newest inserted order stands in for newest-first
+            .take(limit)
+            .map(|row| boma_app::ports::AuditEventView {
+                id: row.id.clone(),
+                space_id: row.space_id.clone(),
+                actor_user_id: row.actor_user_id.as_ref().map(boma_domain::UserId::as_str).map(str::to_owned),
+                kind: row.kind.clone(),
+                target: row.target.clone(),
+                metadata: row.metadata.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect();
+        drop(state);
+        Ok(rows)
+    }
+
     async fn append(&self, event: boma_app::ports::NewAuditEvent) -> Result<(), AppError> {
         let mut state = write(&self.state);
         state.audit_events.push(AuditEventRow {
