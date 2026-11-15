@@ -175,6 +175,10 @@ pub struct UiExpectation {
     /// Exact number of matches, when the fixture pins one.
     #[serde(default)]
     pub count: Option<u32>,
+    /// Accessible name the assertion pins (exact), when the fixture names the control it means;
+    /// kept in step with the web fixture engine (`apps/web/tests/fixtures.ts`).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// A path inside the repository, independent of the working directory.
