@@ -9111,11 +9111,7 @@ pub async fn external_agent_status(
     if bot.is_archived() {
         return Err(AppError::NotFound);
     }
-    let connection = app
-        .stores
-        .external_agents
-        .find(context, &bot_id)
-        .await?;
+    let connection = app.stores.external_agents.find(context, &bot_id).await?;
     Ok(match connection {
         Some(connection) => ExternalAgentStatusOutcome {
             connected: true,

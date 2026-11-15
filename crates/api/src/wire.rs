@@ -2072,7 +2072,6 @@ pub struct SignInRequestedReply {
     pub origin: String,
 }
 
-
 /// The reply of `bots.externalAgentStatus`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -39,21 +39,20 @@ use crate::{
         ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
         ExportStartReply, ExportStatusReply, ExternalAgentConnectedReply,
         ExternalAgentDisconnectedReply, ExternalAgentStatusReply, GroupBotView, GroupGetReply,
-        GroupListView,
-        GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply, HeldDropReply,
-        HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply, InstallTelegramReply,
-        InstallUrlReply, InstallationsReply, InvitationAcceptReply, InvitationAcceptRequest,
-        InvitationReply, MailPolicyReply, MailPolicyView, MarketplaceInstallReply,
-        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
-        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
-        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
-        MessagesReply, MessagingInstallationView, MessagingRemoveReply, ModelConnectReply,
-        ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply, ModelsCatalogReply,
-        PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
-        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
-        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
-        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply,
-        SignInRequestView, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
+        GroupListView, GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply,
+        HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply,
+        InstallTelegramReply, InstallUrlReply, InstallationsReply, InvitationAcceptReply,
+        InvitationAcceptRequest, InvitationReply, MailPolicyReply, MailPolicyView,
+        MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply,
+        McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
+        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
+        MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
+        ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
+        ModelsCatalogReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
+        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
+        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
+        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SecurityEventsReply,
+        SendReply, SignInRequestView, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
         SpendingLimitReply, TeachSkillReply, ThreadHeadReply, TicketCommentReply,
         TicketCommentView, TicketReply, TicketView,
     },
@@ -3843,7 +3842,6 @@ async fn bots_sign_ins(
     })
 }
 
-
 // ---------------------------------------------------------------------------
 // M12.2 — external agent status
 // ---------------------------------------------------------------------------
@@ -3865,7 +3863,8 @@ async fn bots_external_agent_status(
     body: Bytes,
 ) -> Result<ExternalAgentStatusReply, ApiError> {
     let request: BotsExternalAgentStatusRequest = parse(&body)?;
-    let outcome = usecases::external_agent_status(state.app(), &auth.actor.context, &request.bot_id).await?;
+    let outcome =
+        usecases::external_agent_status(state.app(), &auth.actor.context, &request.bot_id).await?;
     Ok(ExternalAgentStatusReply {
         connected: outcome.connected,
         base_url: outcome.base_url,
