@@ -4184,3 +4184,63 @@ async fn req_058_the_plugin_review_approve_then_a_second_decision_conflicts() {
     .await;
     assert_eq!(second.status(), StatusCode::CONFLICT);
 }
+
+// ---------------------------------------------------------------------------
+// M9 — export download round trip (REQ-044)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_044_the_download_route_serves_a_zip_to_the_session_that_owns_it() {
+    let world = world().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/export/start",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let export_id = body["exportId"].as_str().expect("an export id").to_owned();
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/me/exports/{export_id}"))
+        .header(header::COOKIE, &world.caller.cookie)
+        .header("x-space-id", &world.caller.space_id)
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(state(&world.app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(content_type, "application/zip");
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body is in memory")
+        .to_bytes();
+    assert_eq!(&bytes[..4], b"PK\x03\x04", "the body is a zip archive");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("manifest.json"), "the manifest is in the archive");
+
+    // A stranger without the session is refused.
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/me/exports/{export_id}"))
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(state(&world.app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

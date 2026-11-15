@@ -2,8 +2,47 @@
 
 ## Current milestone
 
-**M8 — complete.** `51575c0` on `dev` (CI run 43659192066, all jobs green). ADR-023 records
-the decisions and the deviations from ADR-012; the deviations are summarized below.
+**M9 — in flight.** Pushed to `dev`:
+
+- slice 1 — REQ-054 (structured logs + metrics + CSP reports, `909dd52`, CI run 43663121560
+  green): JSON logs with `traceparent`/`x-request-id`, route templates never raw paths, W3C
+  parse (strict, malformed = absent), `/metrics` flagged by `BOMA_METRICS` (uniform 404
+  otherwise), `POST /api/csp-report` (hosts only, D-01 rate limit, `security.csp_violation`
+  audit + counter), migration 0045 (audit kinds widened + `space_id` nullable).
+- slice 2 — REQ-045 (audit export + security events, `629c389`, CI run 43663836149 green):
+  `audit.export` (JSONL v1, secret-shaped values redacted), `security.events.list` (200 rows,
+  security kinds only), Owner/Admin gate, sign-in failures audited (`security.sign_in_failed`,
+  never the address).
+- slice 3 — REQ-045 SCIM (`c3dee31`, CI run 43665095413 green): `BOMA_SCIM`+`BOMA_SCIM_TOKEN`
+  (both-or-neither, ≥16 chars), constant-time hash compare, provision (born disabled without a
+  password), list/find/patch, `scim.provisioned|deprovisioned` audit, D-09 scanner updated with
+  `ScimDirectorySync`.
+- slice 4 — REQ-044 (export/import/delete, `50f9c15`, CI **failed at the rust job's cargo-deny
+  step** — `zip 9.5.1`'s bzip2 licence is now explicitly allowed with a comment, `657d921`):
+  `export.start|status|download`, `GET /api/v1/me/exports/{id}`, `POST /api/v1/me/account/import`,
+  `account.delete` RPC, manifest `version: 1`, migration 0046 (`account_exports`, RLS
+  system-only), `AccountExport` system reason. The refused-sections fix is **uncommitted** at
+  the time of writing (`1ff3415` follows).
+- slice 5 — REQ-044 follow-up (`1ff3415`): refused import sections are named by path in the
+  `refused` list (never silently dropped); the export round-trip tests live in `account_export_tests`.
+- slice 6 — REQ-058 server half (`02d64b1`): `admin.*` namespace (members/invitations/grants/
+  plugins), `AdminStore` port + Postgres + in-memory double, `require_space_role` shared with
+  slice 2, migration 0047 (`access_grants`), audit kinds `admin.grant_created|grant_revoked|
+  admin.plugin_reviewed`.
+- slice 7 — REQ-058 web half (`b3896ec`): `/admin/access` and `/admin/plugins` routes, hand-
+  written RPC client extension, catalogue strings (en/fr/he), Playwright specs ×3, both routes
+  added to the axe gate.
+
+**CI after the failure:** run 43670039866 covers `b3896ec` (web + admin); the rust job re-runs
+the full workspace from scratch (fresh PG inside the job).
+
+**ADRs:** ADR-024 (`docs/adr/024-operate.md`) records the milestone decisions (export zip
+shape, on-demand rendering, flat sections, refusal rules, SCIM off-a-switch, metrics flag,
+grants as an unconsumed allow-list, no submitter notification, `last_seen_at = null`).
+
+**Deferred cleanly (M9):** SCIM Groups and bulk; OTLP forwarding and `deployment.settings.*`
+(DEC-18); submission-to-submitter email (no outbound mail; audit is the record); consumption
+of `access_grants` by a gate; role change / member removal verbs (the AC does not demand them).
 
 **M-completed plan (in order, nothing skipped, nothing started early).**
 - M5 — Integrations: REQ-032 (connector catalogue + per-space installs), REQ-033 (MCP remote +
