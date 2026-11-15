@@ -83,8 +83,8 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
     `router.push` to the room), typed web client (`groupsCreate|List|Get|Messages`), Playwright
     `group.spec.ts` ×2, `/app/g/group_golden` on the axe gate. REQ-007/REQ-026 goldens now pin
     their control by accessible name (DEV-04).
-  - M11.3b (same commit range as M11.3 plus the delegation work riding this slice) —
-    bot-to-bot handoffs are BUILT (REQ-010, second clause): `delegate.bot` builtin tool
+  - M11.3b (`030fc09`, fmt follow-up `522f77f`; CI `43750818272` green — all four jobs;
+    `030fc09` alone failed only on fmt) — bot-to-bot handoffs are BUILT (REQ-010, second clause): `delegate.bot` builtin tool
     (Write effect, `delegate.helper` approval-card convention). A bot hands work to another
     member bot of the same room by name or id; one hop only (a bot already answering for
     another bot cannot hand the work off further — nested delegation is refused with
