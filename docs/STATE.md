@@ -1025,6 +1025,17 @@ Recorded going into the owner report; per-slice DEC-18/DEC-19 follow.
   provisions the signed feed (ADR-016).
 - **TRACEABILITY holds at 55/58** — missing: REQ-010 (M11), REQ-049 (COULD, deferred),
   REQ-056 (mobile, deferred per ADR-016).
+- **Security review of the M10 slices fixed two criticals and one atomicity defect before
+  release** (see the review thread): the static handler's dot rule refused every dotted
+  asset of the export (every `/_next/static/chunks/*.js` in production) — narrowed to
+  `..`/`.`/backslash plus a canonicalize check; invite tokens were logged by the correlation
+  middleware — the log now records `/api/v1/invites/{token}`; reset-token consumption was a
+  read-modify-write racy pair — now one conditional statement that also retires any other
+  outstanding token for the person, and the invitation accept is a single `status='pending'`
+  transition; emails trim+lowercase at the domain boundary with a backfill migration; the
+  open redirect on `next=` is closed (same-origin only); board dialog traps focus and closes
+  on Escape. Reviewer's remaining minor advisories addressed in the same pass (audit
+  `security.invite_accepted`, RiCloseLine icon, the honest timing comment).
 
 ## Deviations
 
