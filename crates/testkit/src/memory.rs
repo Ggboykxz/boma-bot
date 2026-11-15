@@ -8848,6 +8848,8 @@ impl boma_app::ports::SignInStore for MemorySignInStore {
     }
 }
 
+type ScopedKey = (String, String, String);
+
 type PolicyKey = (String, String, String);
 
 type SendRow = (String, String, String, String, String);
@@ -8857,14 +8859,16 @@ type SendRow = (String, String, String, String, String);
 pub struct MemoryNotificationStore {
     subscriptions: Arc<
         RwLock<
-            std::collections::HashMap<String, boma_domain::notification::NotificationSubscription>,
+            std::collections::HashMap<
+                ScopedKey,
+                boma_domain::notification::NotificationSubscription,
+            >,
         >,
     >,
     policies: Arc<
         RwLock<std::collections::HashMap<PolicyKey, boma_domain::notification::NotificationPolicy>>,
     >,
     sends: Arc<RwLock<Vec<SendRow>>>,
-    sends_count_day: String,
 }
 
 impl MemoryNotificationStore {
@@ -8875,7 +8879,6 @@ impl MemoryNotificationStore {
             subscriptions: Arc::new(RwLock::new(std::collections::HashMap::new())),
             policies: Arc::new(RwLock::new(std::collections::HashMap::new())),
             sends: Arc::new(RwLock::new(Vec::new())),
-            sends_count_day: String::new(),
         }
     }
 }
@@ -8902,7 +8905,12 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
             created_at: subscription.created_at.clone(),
             updated_at: subscription.created_at,
         };
-        subscriptions.insert(subscription.id.clone(), subscription.clone());
+        let key = subscription_key(
+            &subscription.space_id,
+            &subscription.user_id,
+            &subscription.endpoint,
+        );
+        subscriptions.insert(key, subscription.clone());
         Ok(subscription)
     }
 
@@ -8911,13 +8919,15 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
         context: &boma_domain::TenantContext,
         endpoint: &str,
     ) -> Result<bool, AppError> {
-        let _space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
         let mut subscriptions = self
             .subscriptions
             .write()
             .map_err(|_| AppError::Unavailable)?;
         let before = subscriptions.len();
-        subscriptions.retain(|_, entry| entry.endpoint != endpoint);
+        let key = subscription_key(&space, &user, endpoint);
+        subscriptions.remove(&key);
         Ok(subscriptions.len() != before)
     }
 
@@ -8926,13 +8936,14 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
         context: &boma_domain::TenantContext,
     ) -> Result<Vec<boma_domain::notification::NotificationSubscription>, AppError> {
         let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
         let subscriptions = self
             .subscriptions
             .read()
             .map_err(|_| AppError::Unavailable)?;
         let mut v: Vec<_> = subscriptions
             .values()
-            .filter(|entry| entry.space_id == space)
+            .filter(|entry| entry.space_id == space && entry.user_id == user)
             .cloned()
             .collect();
         v.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -9003,12 +9014,16 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
         let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
         let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
         let mut sends = self.sends.write().map_err(|_| AppError::Unavailable)?;
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| "2026-01-01T00:00:00Z".to_owned());
+        let _ = kind;
         sends.push((
             id.to_owned(),
             space.as_str().to_owned(),
             user.as_str().to_owned(),
             bot_id.as_str().to_owned(),
-            kind.as_str().to_owned(),
+            now,
         ));
         Ok(())
     }
@@ -9021,13 +9036,14 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
         let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
         let user = context.user_id().cloned().ok_or(AppError::Forbidden)?;
         let sends = self.sends.read().map_err(|_| AppError::Unavailable)?;
+        let today_prefix = today_utc_prefix();
         Ok(sends
             .iter()
             .filter(|(_id, s, u, b, sent_at)| {
                 s == &space.as_str().to_owned()
                     && u == &user.as_str().to_owned()
                     && b == &bot_id.as_str().to_owned()
-                    && sent_at.starts_with(self.sends_count_day.as_str())
+                    && sent_at.starts_with(today_prefix.as_str())
             })
             .count() as u64)
     }
@@ -9043,13 +9059,20 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
             .subscriptions
             .write()
             .map_err(|_| AppError::Unavailable)?;
-        let Some(subscription) = subscriptions.get_mut(id) else {
+        let scoped = subscriptions
+            .iter()
+            .find(|(_, entry)| entry.id == id)
+            .map(|(key, _)| key.clone());
+        let Some(scoped) = scoped else {
             return Ok(boma_domain::notification::NotificationFailureOutcome::Ok);
         };
+        let subscription = subscriptions
+            .get_mut(&scoped)
+            .ok_or(AppError::Unavailable)?;
         subscription.fail_count = subscription.fail_count.saturating_add(1);
         let count = subscription.fail_count;
         if permanent && count >= 3 {
-            subscriptions.remove(id);
+            subscriptions.remove(&scoped);
             return Ok(boma_domain::notification::NotificationFailureOutcome::Deleted);
         }
         Ok(boma_domain::notification::NotificationFailureOutcome::Recorded(count))
@@ -9065,10 +9088,31 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
             .subscriptions
             .write()
             .map_err(|_| AppError::Unavailable)?;
-        if let Some(subscription) = subscriptions.get_mut(id) {
+        let scoped = subscriptions
+            .iter()
+            .find(|(_, entry)| entry.id == id)
+            .map(|(key, _)| key.clone());
+        if let Some(subscription) = scoped.and_then(|scoped| subscriptions.get_mut(&scoped)) {
             subscription.fail_count = 0;
             "2026-01-01T00:00:00Z".clone_into(&mut subscription.updated_at);
         }
         Ok(())
     }
+}
+
+fn subscription_key(
+    space_id: &boma_domain::SpaceId,
+    user_id: &boma_domain::UserId,
+    endpoint: &str,
+) -> ScopedKey {
+    (
+        space_id.as_str().to_owned(),
+        user_id.as_str().to_owned(),
+        endpoint.to_owned(),
+    )
+}
+
+fn today_utc_prefix() -> String {
+    let at = time::OffsetDateTime::now_utc();
+    format!("{:04}-{:02}-{:02}", at.year(), at.month() as u8, at.day())
 }

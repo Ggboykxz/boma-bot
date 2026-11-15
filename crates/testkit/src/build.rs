@@ -9447,7 +9447,118 @@ mod notification_tests {
     }
 
     #[tokio::test]
-    async fn req_064_count_today_counts_only_todays_rows() {
+    async fn req_064_memory_resubscribe_replaces_by_space_user_endpoint() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        for (id, key) in [("sub-first", "key-a"), ("sub-second", "key-b")] {
+            test.app()
+                .stores
+                .notifications
+                .subscribe(boma_domain::notification::NewNotificationSubscription {
+                    id: id.to_owned(),
+                    space_id: space_id.clone(),
+                    user_id: owner.clone(),
+                    endpoint: "https://updates.push.services.mozilla.com/wpush/replace".to_owned(),
+                    p256dh: key.to_owned(),
+                    auth: key.to_owned(),
+                    user_agent: None,
+                    created_at: "2026-11-15T00:00:00Z".to_owned(),
+                })
+                .await
+                .expect("the subscription is stored");
+        }
+        let listed = test
+            .app()
+            .stores
+            .notifications
+            .list(&context)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed.len(), 1, "the second subscribe replaces the first");
+        assert_eq!(listed[0].id, "sub-second");
+        assert_eq!(listed[0].p256dh, "key-b");
+    }
+
+    #[tokio::test]
+    async fn req_064_memory_list_is_scoped_to_the_calling_member() {
+        let test = TestApp::builder().build();
+        let alice = test
+            .seed_user("alice@example.com", "correct horse battery")
+            .await
+            .expect("alice exists");
+        let space_id = test
+            .seed_space(&alice, "Golden space")
+            .await
+            .expect("the space exists");
+        let bob = test
+            .seed_user("bob@example.com", "correct horse battery")
+            .await
+            .expect("bob exists");
+        let alice_context = TestApp::member_context(&space_id, &alice);
+        let bob_context = TestApp::member_context(&space_id, &bob);
+
+        test.app()
+            .stores
+            .notifications
+            .subscribe(boma_domain::notification::NewNotificationSubscription {
+                id: "alice-sub".to_owned(),
+                space_id: space_id.clone(),
+                user_id: alice.clone(),
+                endpoint: "https://updates.push.services.mozilla.com/wpush/alice".to_owned(),
+                p256dh: "a".to_owned(),
+                auth: "a".to_owned(),
+                user_agent: None,
+                created_at: "2026-11-15T00:00:00Z".to_owned(),
+            })
+            .await
+            .expect("the subscription is stored");
+
+        let visible_to_bob = test
+            .app()
+            .stores
+            .notifications
+            .list(&bob_context)
+            .await
+            .expect("the list answers");
+        assert!(
+            visible_to_bob.is_empty(),
+            "bob does not see alice's subscriptions"
+        );
+
+        assert!(
+            !test
+                .app()
+                .stores
+                .notifications
+                .unsubscribe(
+                    &bob_context,
+                    "https://updates.push.services.mozilla.com/wpush/alice"
+                )
+                .await
+                .expect("the unsubscribe answers"),
+            "bob cannot delete alice's subscriptions"
+        );
+        let listed = test
+            .app()
+            .stores
+            .notifications
+            .list(&alice_context)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn req_064_memory_count_today_counts_only_todays_rows() {
         let test = TestApp::builder().build();
         let owner = test
             .seed_user("owner@example.com", "correct horse battery")

@@ -125,7 +125,8 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
       captions axe flagged bumped to AA contrast on `/app/bot_golden`.
     - VAPID: operator provides a PEM or base64url key (`BOMA_VAPID_PRIVATE_KEY` +
       `BOMA_VAPID_SUBJECT`); absent → feature inert (`status` answers `enabled:false`), malformed
-      → fail-fast at boot. No key is generated or cached by the deployment.
+      → fail-fast at boot. The public key is derived from the private one; no key is generated,
+      cached, or leaked by the deployment.
     - OpenSSL headers declared (pkg-config + libssl-dev) for `web-push` → `ece` → `openssl-sys`.
     - REQ-049 (voice) untouched; desktop signing untouched (identity blocked); destinations and
       k3d chart are M15.2/M15.3.

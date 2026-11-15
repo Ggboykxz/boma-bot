@@ -17,7 +17,6 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(title, {
       tag,
-      body: "",
       data: { url },
     }),
   );
@@ -46,6 +45,10 @@ self.addEventListener("notificationclick", (event) => {
       return self.clients.openWindow(url);
     })(),
   );
+});
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener("activate", (event) => {

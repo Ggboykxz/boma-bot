@@ -93,6 +93,15 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
     .context("the HTTP server stopped with an error")
 }
 
+/// The Web Push signing material, read from the environment exactly as `BOMA_MASTER_KEY` is
+/// handled by the vault: absent is off (pushes inert), malformed is fail-fast at boot. The
+/// public key never appears in the operator's config — the binary derives it from the private
+/// key it holds, so there is no public-key environment variable.
+fn vapid_config() -> anyhow::Result<Option<boma_app::push::VapidConfig>> {
+    let env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    boma_app::push::VapidConfig::from_env(&env).context("the web push configuration is invalid")
+}
+
 /// The vault the deployment seals bot secrets with, read from `BOMA_MASTER_KEY` (REQ-046).
 fn secrets_vault() -> anyhow::Result<boma_infra::SecretBox> {
     boma_infra::SecretBox::from_env(&std::env::vars().collect())
@@ -237,6 +246,7 @@ fn build_app(
             .with_metrics(config_metrics)
             .with_scim_option(config_scim_token)
             .with_endpoint_safety(Some(Arc::new(boma_infra::InfraEndpointSafety)))
+            .with_vapid(vapid_config()?)
             .with_print_recovery_link(config_print_reset_link)
             .with_print_invite_link(config_print_invite_link);
             match computer {

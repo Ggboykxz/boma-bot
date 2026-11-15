@@ -39,10 +39,11 @@ is idempotent — is the honest hook for a waiting-on-a-person push.
    double-ping. `Completed`/`Failed` fire at the two terminal transition sites in `worker.rs`.
    `WaitingTakeover` is out of M15.1; `Failed` maps onto the same `notify_completed` flag.
 6. **VAPID fail-fast when present, off when absent.** `BOMA_VAPID_PRIVATE_KEY` (PEM or raw
-   base64url) and `BOMA_VAPID_SUBJECT` are read at boot; absent → push is built but inert
-   (`notifications.status` answers `enabled: false`); malformed → fail-fast, like
-   `BOMA_MASTER_KEY`. The operator never has to pick between safe and configured — both are
-   explicit states.
+   base64url) and `BOMA_VAPID_SUBJECT` are read at boot via the same env grammar as the vault;
+   absent → push is built but inert (`notifications.status` answers `enabled: false`);
+   malformed → fail-fast at boot, like `BOMA_MASTER_KEY`. The **public** key is derived from
+   the private one at boot and is the only thing the RPC advertises — there is no public-key
+   env var, so a deployment cannot accidentally ship a mismatched pair.
 7. **SSRF boundary at subscribe.** The endpoint is member-supplied; the handler parses, refuses
    plain HTTP, credentialed authority and unregistered schemes, and defers to an
    `EndpointSafetyChecker` port (infra DNS-resolving adapter; HTTPS-only, no private/loopback/

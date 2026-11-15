@@ -21,10 +21,19 @@ use crate::service::App;
 ///   Absent or empty → pushes are off entirely; the code is built but inert.
 ///   Present-and-malformed → fail-fast at boot.
 /// - `BOMA_VAPID_SUBJECT` — `mailto:…` or `https:…`; the VAPID `sub` claim.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VapidConfig {
     private_key: String,
     subject: String,
+}
+
+impl std::fmt::Debug for VapidConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The private key is never printed: not in traces, not in failures, not by accident.
+        f.debug_struct("VapidConfig")
+            .field("subject", &self.subject)
+            .finish_non_exhaustive()
+    }
 }
 
 impl VapidConfig {

@@ -763,3 +763,52 @@ mod tests {
         assert_eq!(config.telemetry.format, LogFormat::Json);
     }
 }
+
+#[cfg(test)]
+mod vapid_tests {
+
+    #[test]
+    fn req_064_without_a_vapid_key_the_push_config_is_inert() {
+        let collected: std::collections::BTreeMap<String, String> =
+            Vec::new().into_iter().collect();
+        let config = boma_app::push::VapidConfig::from_env(&collected);
+        assert!(matches!(config, Ok(None)));
+    }
+
+    #[test]
+    fn req_064_a_malformed_vapid_key_fails_fast() {
+        let collected: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::from([(
+                "BOMA_VAPID_PRIVATE_KEY".to_owned(),
+                "not-a-key".to_owned(),
+            )]);
+        let config = boma_app::push::VapidConfig::from_env(&collected);
+        assert!(
+            config.is_err(),
+            "a bad VAPID key fails fast, never silently disables"
+        );
+    }
+
+    #[test]
+    fn req_064_a_valid_pem_vapid_key_indexes_the_public_key() {
+        let test_key = include_str!("../tests/fixtures/vapid-test-key.pem");
+        let collected: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::from([
+                ("BOMA_VAPID_PRIVATE_KEY".to_owned(), test_key.to_owned()),
+                (
+                    "BOMA_VAPID_SUBJECT".to_owned(),
+                    "mailto:boma-tests@example.com".to_owned(),
+                ),
+            ]);
+        let config = boma_app::push::VapidConfig::from_env(&collected);
+        let config = config
+            .expect("the test key indexes cleanly")
+            .expect("the config builds");
+        let public = config.public_key_base64url().expect("public key derives");
+        assert!(
+            public
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        );
+    }
+}
