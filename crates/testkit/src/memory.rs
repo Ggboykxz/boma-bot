@@ -1461,7 +1461,8 @@ impl UserStore for MemoryUserStore {
         let Some(row) = state.users.iter_mut().find(|row| row.user.id == *user_id) else {
             return Err(AppError::NotFound);
         };
-        row.password_hash = password_hash.to_owned();
+        row.password_hash.clear();
+        row.password_hash.push_str(password_hash);
         Ok(())
     }
 }
@@ -1563,6 +1564,38 @@ impl Default for MemorySpaceStore {
 
 #[async_trait::async_trait]
 impl SpaceStore for MemorySpaceStore {
+    async fn name_of(&self, space_id: &SpaceId) -> Result<Option<String>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .spaces
+            .iter()
+            .find(|row| &row.space.id == space_id)
+            .map(|row| row.space.name.clone()))
+    }
+
+    async fn add_member(
+        &self,
+        space_id: &SpaceId,
+        user_id: &UserId,
+        role: SpaceRole,
+        _now: &str,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        if state
+            .memberships
+            .iter()
+            .any(|row| row.space_id == *space_id && row.user_id == *user_id)
+        {
+            return Err(AppError::Conflict);
+        }
+        state.memberships.push(MembershipRow {
+            space_id: space_id.clone(),
+            user_id: user_id.clone(),
+            role,
+        });
+        Ok(())
+    }
+
     async fn spaces_of(&self, user_id: &UserId) -> Result<Vec<Space>, AppError> {
         let state = read(&self.state);
         let mut seen = std::collections::HashSet::new();
@@ -2623,6 +2656,17 @@ impl Default for MemoryToolStore {
 
 #[async_trait::async_trait]
 impl InvitationStore for MemoryInvitationStore {
+    async fn accept(&self, id: &boma_domain::InviteId, _now: &str) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        if let Some(row) = state
+            .invitations
+            .iter_mut()
+            .find(|row| row.invitation.id == *id)
+        {
+            row.invitation.pending = false;
+        }
+        Ok(())
+    }
     async fn create(&self, invitation: NewInvitation) -> Result<Invitation, AppError> {
         let mut state = write(&self.state);
         if state
@@ -2639,6 +2683,7 @@ impl InvitationStore for MemoryInvitationStore {
             role: invitation.role,
             expires_at: invitation.expires_at.clone(),
             pending: true,
+            inviter_user_id: invitation.inviter_user_id.clone(),
         };
         state.invitations.push(InvitationRow {
             invitation: stored.clone(),

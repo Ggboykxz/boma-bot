@@ -158,6 +158,7 @@ pub(crate) struct InvitationRow {
     pub(crate) role: String,
     pub(crate) expires_at: String,
     pub(crate) status: String,
+    pub(crate) inviter_user_id: Option<String>,
 }
 
 /// A row of `cards`.
@@ -371,6 +372,10 @@ pub(crate) fn invitation(row: InvitationRow) -> Result<boma_app::ports::Invitati
         role: SpaceRole::parse(&row.role)?,
         expires_at: row.expires_at,
         pending: row.status == "pending",
+        inviter_user_id: row
+            .inviter_user_id
+            .map(boma_domain::UserId::new)
+            .transpose()?,
     })
 }
 

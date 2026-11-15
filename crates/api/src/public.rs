@@ -1464,6 +1464,81 @@ pub async fn account_import(
     }
 }
 
+// M10 — invite preview (REQ-042)
+// ---------------------------------------------------------------------------
+
+/// How many times an ip may preview an invite per hour (D-01, D-04).
+const INVITE_PREVIEW_WINDOW_SECONDS: u64 = 60 * 60;
+/// The per-IP hourly cap.
+const INVITE_PREVIEW_MAX: u64 = 60;
+
+/// `GET /api/v1/invites/{token}` — what the invite says, for the page that carries the link (REQ-042).
+///
+/// The token itself is the capability: this is the invitee's view. The same refusal answers for an
+/// absent, revoked or expired token — the page never learns which it was. Rate limited per IP.
+pub async fn invite_preview(
+    State(state): State<AppState>,
+    ClientAddr(peer): ClientAddr,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Response {
+    let client_ip =
+        crate::client::resolve_client_ip(peer, &headers, state.http().trusted_proxies());
+    let key = format!("invite-preview:{client_ip}");
+    match usecases::hit_rate_limit(state.app(), &key, INVITE_PREVIEW_WINDOW_SECONDS).await {
+        Ok(decision) if decision.count > INVITE_PREVIEW_MAX => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    (header::CONTENT_TYPE, "application/json"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                r#"{"error":"Too many requests. Try again later."}"#,
+            )
+                .into_response();
+        }
+        Ok(_) => {}
+        Err(error) => return ApiError::from(error).into_response(),
+    }
+
+    match usecases::invite_preview(state.app(), &token).await {
+        Ok(preview) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+                (
+                    header::HeaderName::from_static("x-robots-tag"),
+                    "noindex, nofollow",
+                ),
+                (header::REFERRER_POLICY, "no-referrer"),
+            ],
+            serde_json::json!({
+                "spaceName": preview.space_name,
+                "inviterName": preview.inviter_name,
+                "role": preview.role.as_str(),
+                "expiresAt": preview.expires_at,
+            })
+            .to_string(),
+        )
+            .into_response(),
+        Err(_error) => (
+            StatusCode::NOT_FOUND,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+                (
+                    header::HeaderName::from_static("x-robots-tag"),
+                    "noindex, nofollow",
+                ),
+                (header::REFERRER_POLICY, "no-referrer"),
+            ],
+            r#"{"error":"Not found."}"#,
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{host_of, summarize_violation};
@@ -1500,3 +1575,5 @@ mod tests {
         assert!(!text.contains("abc123"));
     }
 }
+
+// ---------------------------------------------------------------------------

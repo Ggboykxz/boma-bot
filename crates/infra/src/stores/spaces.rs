@@ -10,7 +10,7 @@
 //!   ([`boma_domain::SystemReason::Authentication`], "look a person up before a tenant exists").
 
 use boma_app::{AppError, ports::SpaceStore};
-use boma_domain::{Space, SpaceId, SystemReason, UserId};
+use boma_domain::{Space, SpaceId, SpaceRole, SystemReason, UserId};
 use sqlx::PgPool;
 
 use super::rows::{self, MembershipRow, SpaceRow};
@@ -32,6 +32,66 @@ impl PostgresSpaceStore {
 
 #[async_trait::async_trait]
 impl SpaceStore for PostgresSpaceStore {
+    async fn name_of(&self, space_id: &SpaceId) -> Result<Option<String>, AppError> {
+        let space_id_str = space_id.as_str().to_owned();
+        let row = tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::Authentication,
+            |conn| {
+                Box::pin(async move {
+                    sqlx::query_scalar::<_, String>("SELECT name FROM spaces WHERE id = $1")
+                        .bind(&space_id_str)
+                        .fetch_optional(&mut *conn)
+                        .await
+                        .map_err(tenant::unavailable)
+                })
+            },
+        )
+        .await?;
+        Ok(row)
+    }
+
+    async fn add_member(
+        &self,
+        space_id: &SpaceId,
+        user_id: &UserId,
+        role: SpaceRole,
+        now: &str,
+    ) -> Result<(), AppError> {
+        let space_id = space_id.as_str().to_owned();
+        let user_id = user_id.as_str().to_owned();
+        let now = now.to_owned();
+        tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::Authentication,
+            |conn| {
+                Box::pin(async move {
+                    let result = sqlx::query(
+                        "INSERT INTO space_members (space_id, user_id, role, created_at)
+                         VALUES ($1, $2, $3, $4::timestamptz)
+                         ON CONFLICT (space_id, user_id) DO NOTHING",
+                    )
+                    .bind(&space_id)
+                    .bind(&user_id)
+                    .bind(match role {
+                        SpaceRole::Owner => "owner",
+                        SpaceRole::Admin => "admin",
+                        SpaceRole::Member => "member",
+                    })
+                    .bind(&now)
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(tenant::unavailable)?;
+                    if result.rows_affected() == 0 {
+                        return Err(AppError::Conflict);
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
     async fn spaces_of(&self, user_id: &UserId) -> Result<Vec<Space>, AppError> {
         let rows = tenant::as_system(
             &self.pool,

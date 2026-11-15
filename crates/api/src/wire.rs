@@ -1803,3 +1803,36 @@ mod tests {
         assert_eq!(json["completedAt"], serde_json::Value::Null);
     }
 }
+
+/// The body of `invitations.accept` (REQ-042): the opaque token exactly as it appeared in the link.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InvitationAcceptRequest {
+    /// The invitation token, held only by the invitee.
+    pub token: String,
+}
+
+/// The reply of `invitations.accept` (REQ-042).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvitationAcceptReply {
+    /// The space the caller now belongs to.
+    pub space_id: String,
+}
+
+/// The public reply of `GET /api/v1/invites/{token}` (REQ-042).
+///
+/// The inviter's display name, the space's name, the role and the expiry — nothing else. An
+/// anonymous visitor learns only what the link itself would tell them by existing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvitationPublicPreview {
+    /// The name of the space the invitee is joining.
+    pub space_name: String,
+    /// The display name of the inviter, when it was recorded.
+    pub inviter_name: Option<String>,
+    /// The role the invitee is about to take.
+    pub role: String,
+    /// When the invitation stops being usable.
+    pub expires_at: String,
+}

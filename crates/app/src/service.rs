@@ -255,6 +255,8 @@ pub struct Services {
     /// Whether `GET /metrics` answers (BOMA_METRICS). Off by default; the endpoint is absent,
     /// not degraded, when the flag is absent (REQ-054).
     pub metrics_enabled: bool,
+    /// Whether the one-time invitation link is written to the process output (BOMA_SPACES_PRINT_INVITE_LINK).
+    pub print_invite_link: bool,
     /// Whether the one-time recovery link is written to the process output (BOMA_AUTH_PRINT_RESET_LINK).
     ///
     /// The default delivery channel of this deployment: it has no outbound mail, so the operator's
@@ -325,6 +327,7 @@ impl Services {
             metrics: Arc::new(crate::metrics::Metrics::new()),
             metrics_enabled: false,
             print_recovery_link: false,
+            print_invite_link: false,
             slack: None,
             messaging_enabled: false,
             public_base_url: "http://127.0.0.1:3000".to_owned(),
@@ -388,6 +391,13 @@ impl Services {
     #[must_use]
     pub fn with_scim_option(mut self, token: Option<String>) -> Self {
         self.scim_token = token.map(secrecy::SecretString::from);
+        self
+    }
+
+    /// Builds the services with the invite-link printing enabled (REQ-042).
+    #[must_use]
+    pub fn with_print_invite_link(mut self, enabled: bool) -> Self {
+        self.print_invite_link = enabled;
         self
     }
 

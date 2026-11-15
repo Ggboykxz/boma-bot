@@ -225,6 +225,7 @@ pub async fn invite(
     let space_id = context.space_id().ok_or(AppError::NotFound)?;
     let token = app.services.tokens.generate()?;
     let token_hash = app.services.tokens.hash(&token)?;
+    let inviter_id = context.user_id().cloned();
     let invitation = app
         .stores
         .invitations
@@ -235,9 +236,18 @@ pub async fn invite(
             token_hash,
             role,
             expires_at: app.services.clock.now_plus_seconds(ttl_seconds),
+            inviter_user_id: inviter_id,
             created_at: app.services.clock.now(),
         })
         .await?;
+    if app.services.print_invite_link {
+        let link = format!("{}/invite?token={}", app.services.public_base_url, token);
+        tracing::warn!(
+            inviter = %context.user_id().map_or("-", |user| user.as_str()),
+            invite_url = %link,
+            "BOMA_SPACES_PRINT_INVITE_LINK=true: the one-time invitation link for one recipient"
+        );
+    }
     Ok(InvitationCreated {
         id: invitation.id,
         expires_at: invitation.expires_at,
@@ -8046,6 +8056,128 @@ pub async fn scim_set_active(
     Ok(ScimPatchOutcome {
         user,
         active: deactivated_at.is_none(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Invitations accept + preview (REQ-042)
+// ---------------------------------------------------------------------------
+
+/// The public shape of an invitation, for the anonymous `/invite?token=<token>` page (REQ-042).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitationPreviewOutcome {
+    /// The name of the space the invitee is joining.
+    pub space_name: String,
+    /// The display name of the person who invited them, when recorded.
+    pub inviter_name: Option<String>,
+    /// The role they are about to take.
+    pub role: boma_domain::SpaceRole,
+    /// When the invitation stops being usable.
+    pub expires_at: String,
+}
+
+/// The outcome of `invitations.accept` (REQ-042).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitationAcceptedOutcome {
+    /// The space the caller now belongs to.
+    pub space_id: boma_domain::SpaceId,
+}
+
+/// The public answer for one invitation token (REQ-042).
+///
+/// A missing, used or expired token reads back the same uniform not-found — the page tells an
+/// anonymous visitor nothing about who exists or which spaces exist.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn invite_preview(app: &App, token: &str) -> Result<InvitationPreviewOutcome, AppError> {
+    let hash = app.services.tokens.hash(token)?;
+    let Some(invitation) = app.stores.invitations.find_by_token_hash(&hash).await? else {
+        return Err(AppError::NotFound);
+    };
+    if !invitation.pending || invitation.expires_at.as_str() <= app.services.clock.now().as_str() {
+        return Err(AppError::NotFound);
+    }
+    let space_name = app
+        .stores
+        .spaces
+        .name_of(&invitation.space_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let inviter_name = match &invitation.inviter_user_id {
+        Some(inviter_id) => app
+            .stores
+            .users
+            .find(inviter_id)
+            .await?
+            .map(|user| user.name),
+        None => None,
+    };
+    Ok(InvitationPreviewOutcome {
+        space_name,
+        inviter_name,
+        role: invitation.role,
+        expires_at: invitation.expires_at,
+    })
+}
+
+/// Accepts the invitation the caller holds the token for (REQ-042).
+///
+/// The email of the caller must match the one the invitation names; anything else refuses, and an
+/// already-accepted invitation refuses as well.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the link is unknown, expired or used, or when the caller's
+/// address does not match the invited one; and an error when a store cannot answer.
+pub async fn invite_accept(
+    app: &App,
+    context: &TenantContext,
+    token: &str,
+) -> Result<InvitationAcceptedOutcome, AppError> {
+    let user_id = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    let hash = app.services.tokens.hash(token)?;
+    let Some(invitation) = app.stores.invitations.find_by_token_hash(&hash).await? else {
+        return Err(AppError::NotFound);
+    };
+    if !invitation.pending || invitation.expires_at.as_str() <= app.services.clock.now().as_str() {
+        return Err(AppError::NotFound);
+    }
+    let caller = app
+        .stores
+        .users
+        .find(&user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if caller.email != invitation.email {
+        // The rule is: the invitation is for one address. Another signed-in member is a stranger,
+        // and the refusal never says the address on the invitation matches anything.
+        return Err(AppError::NotFound);
+    }
+
+    // Idempotent path: the membership exists already, so accepting it here means nothing new.
+    if let Some(_role) = app
+        .stores
+        .spaces
+        .membership(&invitation.space_id, &user_id)
+        .await?
+    {
+        let now = app.services.clock.now();
+        let _ = app.stores.invitations.accept(&invitation.id, &now).await;
+        return Ok(InvitationAcceptedOutcome {
+            space_id: invitation.space_id,
+        });
+    }
+
+    let now = app.services.clock.now();
+    app.stores
+        .spaces
+        .add_member(&invitation.space_id, &user_id, invitation.role, &now)
+        .await?;
+    app.stores.invitations.accept(&invitation.id, &now).await?;
+    Ok(InvitationAcceptedOutcome {
+        space_id: invitation.space_id,
     })
 }
 

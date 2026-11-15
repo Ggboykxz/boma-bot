@@ -998,6 +998,7 @@ Each of these was a real bug in the M0 scaffold, found by running the toolchain:
 | Id | What | Why | Where enforced |
 |---|---|---|---|
 | DEV-01 | `/healthz` and `/readyz` exist as aliases of `/health` and `/ready` | AGENTS.md mandates those names; the spec's contract is `/health` and `/ready` | `crates/api/src/router.rs`; aliases are absent from the OpenAPI document and `tests/contract.rs` asserts that |
+| DEV-02 | `/invite/:token` is `/invite?token=<token>` | a static export cannot pre-render one page per invitation token; the query form works identically in dev and production | `spec/08-ui-ux.md`, `apps/web/app/invite/page.tsx` |
 
 Any other externally visible difference would be a DEVIATION needing owner approval; none is known.
 

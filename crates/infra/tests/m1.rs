@@ -796,6 +796,7 @@ async fn req_042_invitations_are_created_and_looked_up_by_token() {
             token_hash: hash.clone(),
             role: boma_domain::SpaceRole::Member,
             expires_at: ttl.clone(),
+            inviter_user_id: None,
             created_at: app.services.clock.now(),
         })
         .await

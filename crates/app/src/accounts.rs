@@ -203,39 +203,6 @@ impl Accounts {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{SignIn, SignUp};
-    use boma_domain::DomainError;
-
-    #[test]
-    fn req_040_a_malformed_address_is_refused_before_any_store_is_touched() {
-        let request = SignUp {
-            email: "not-an-address".to_owned(),
-            password: "correct horse battery".to_owned(),
-            name: "Ada".to_owned(),
-            locale: "en-US".to_owned(),
-        };
-        let error = boma_domain::Email::new(request.email).expect_err("the address is refused");
-        assert!(matches!(error, DomainError::InvalidEmail(_)));
-    }
-
-    #[test]
-    fn req_040_a_weak_password_is_refused() {
-        assert!(boma_domain::validate_password("short").is_err());
-        assert!(boma_domain::validate_password("long enough password").is_ok());
-    }
-
-    #[test]
-    fn req_041_a_sign_in_request_carries_only_the_pair_of_secrets() {
-        let request = SignIn {
-            email: "person@example.com".to_owned(),
-            password: "correct horse battery".to_owned(),
-        };
-        assert_eq!(request.email, "person@example.com");
-    }
-}
-
 /// How long a recovery link stays usable (REQ-040).
 pub const RECOVERY_TTL_SECONDS: i64 = 30 * 60;
 
@@ -362,4 +329,37 @@ pub async fn reset_password(
         .await;
     let accounts = Accounts::new(app.clone(), session_ttl_seconds);
     accounts.grant_session(user).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SignIn, SignUp};
+    use boma_domain::DomainError;
+
+    #[test]
+    fn req_040_a_malformed_address_is_refused_before_any_store_is_touched() {
+        let request = SignUp {
+            email: "not-an-address".to_owned(),
+            password: "correct horse battery".to_owned(),
+            name: "Ada".to_owned(),
+            locale: "en-US".to_owned(),
+        };
+        let error = boma_domain::Email::new(request.email).expect_err("the address is refused");
+        assert!(matches!(error, DomainError::InvalidEmail(_)));
+    }
+
+    #[test]
+    fn req_040_a_weak_password_is_refused() {
+        assert!(boma_domain::validate_password("short").is_err());
+        assert!(boma_domain::validate_password("long enough password").is_ok());
+    }
+
+    #[test]
+    fn req_041_a_sign_in_request_carries_only_the_pair_of_secrets() {
+        let request = SignIn {
+            email: "person@example.com".to_owned(),
+            password: "correct horse battery".to_owned(),
+        };
+        assert_eq!(request.email, "person@example.com");
+    }
 }

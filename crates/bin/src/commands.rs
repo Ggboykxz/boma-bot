@@ -64,6 +64,7 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         config.metrics,
         config.scim.token.clone(),
         config.print_reset_link,
+        config.print_invite_link,
     )?;
     let state = AppState::new(
         readiness,
@@ -116,6 +117,7 @@ fn build_app(
     config_metrics: bool,
     config_scim_token: Option<String>,
     config_print_reset_link: bool,
+    config_print_invite_link: bool,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -229,7 +231,8 @@ fn build_app(
             )
             .with_metrics(config_metrics)
             .with_scim_option(config_scim_token)
-            .with_print_recovery_link(config_print_reset_link);
+            .with_print_recovery_link(config_print_reset_link)
+            .with_print_invite_link(config_print_invite_link);
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -272,6 +275,7 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         config.metrics,
         config.scim.token.clone(),
         config.print_reset_link,
+        config.print_invite_link,
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

@@ -7864,9 +7864,11 @@ mod password_recovery_tests {
             .expect("the request is accepted");
         assert_eq!(test.database().password_reset_count(), 1);
         let events = test.database().audit().events();
-        assert!(events
-            .iter()
-            .any(|event| event.kind == "security.password_recovery_issued"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "security.password_recovery_issued")
+        );
 
         // A wrong token is the same refusal either way.
         let refused = boma_app::usecases::reset_password(
@@ -7913,9 +7915,11 @@ mod password_recovery_tests {
         assert!(new.is_ok(), "the new password works");
 
         let events = test.database().audit().events();
-        assert!(events
-            .iter()
-            .any(|event| event.kind == "security.password_recovery_completed"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "security.password_recovery_completed")
+        );
     }
 
     #[tokio::test]
@@ -7947,5 +7951,202 @@ mod password_recovery_tests {
         .await
         .expect_err("a replay is refused");
         assert!(matches!(replay, boma_app::AppError::Rule(_)));
+    }
+}
+
+#[cfg(test)]
+mod invitation_tests {
+    // REQ-042 — the invite round trip: the token is the credential, the address binds it.
+
+    use super::TestApp;
+    use boma_app::ports::Clock as _;
+
+    #[tokio::test]
+    async fn req_042_an_invitation_adds_the_invitee_as_a_member() {
+        let test = TestApp::builder()
+            .tokens(vec!["invite-token-golden".to_owned()])
+            .build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let invitee = test
+            .seed_user("invitee@example.com", "correct horse battery")
+            .await
+            .expect("the invitee exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        let created = boma_app::usecases::invite(
+            test.app(),
+            &context,
+            "invitee@example.com",
+            boma_domain::SpaceRole::Member,
+            3600,
+        )
+        .await
+        .expect("the invitation is issued");
+        assert_ne!(created.id.as_str(), "");
+
+        // The anonymous preview carries only what the token authorizes.
+        let preview = boma_app::usecases::invite_preview(test.app(), "invite-token-golden")
+            .await
+            .expect("the preview answers");
+        assert_eq!(preview.space_name, "Golden space");
+        assert_eq!(preview.inviter_name.as_deref(), Some("owner"));
+        assert_eq!(preview.role, boma_domain::SpaceRole::Member);
+
+        let caller = TestApp::member_context(&space_id, &invitee);
+        let accepted =
+            boma_app::usecases::invite_accept(test.app(), &caller, "invite-token-golden")
+                .await
+                .expect("the invitation is accepted");
+        assert_eq!(accepted.space_id, space_id);
+
+        let role = test
+            .app()
+            .stores
+            .spaces
+            .membership(&space_id, &invitee)
+            .await
+            .expect("the store answers");
+        assert_eq!(role, Some(boma_domain::SpaceRole::Member));
+    }
+
+    #[tokio::test]
+    async fn req_042_a_different_address_is_refused_and_learns_nothing() {
+        let test = TestApp::builder()
+            .tokens(vec!["invite-token-secret".to_owned()])
+            .build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let stranger = test
+            .seed_user("stranger@example.com", "correct horse battery")
+            .await
+            .expect("the stranger exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        boma_app::usecases::invite(
+            test.app(),
+            &context,
+            "invitee@example.com",
+            boma_domain::SpaceRole::Member,
+            3600,
+        )
+        .await
+        .expect("the invitation is issued");
+
+        let caller = TestApp::member_context(&space_id, &stranger);
+        let refused = boma_app::usecases::invite_accept(test.app(), &caller, "invite-token-secret")
+            .await
+            .expect_err("a different address is refused");
+        assert!(matches!(refused, boma_app::AppError::NotFound));
+        let membership = test
+            .app()
+            .stores
+            .spaces
+            .membership(&space_id, &stranger)
+            .await
+            .expect("the store answers");
+        assert_eq!(membership, None, "the refused invitee is not a member");
+    }
+
+    #[tokio::test]
+    async fn req_042_accepting_twice_consumes_the_invitation_once() {
+        let test = TestApp::builder()
+            .tokens(vec!["invite-token-used".to_owned()])
+            .build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let invitee = test
+            .seed_user("invitee@example.com", "correct horse battery")
+            .await
+            .expect("the invitee exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        boma_app::usecases::invite(
+            test.app(),
+            &context,
+            "invitee@example.com",
+            boma_domain::SpaceRole::Member,
+            3600,
+        )
+        .await
+        .expect("the invitation is issued");
+
+        let caller = TestApp::member_context(&space_id, &invitee);
+        boma_app::usecases::invite_accept(test.app(), &caller, "invite-token-used")
+            .await
+            .expect("the first accept works");
+        let replay =
+            boma_app::usecases::invite_accept(test.app(), &caller, "invite-token-used").await;
+        assert!(replay.is_err(), "the link dies after the first accept");
+    }
+
+    #[tokio::test]
+    async fn req_042_an_already_member_accepts_without_error_but_is_not_re_inserted() {
+        let test = TestApp::builder()
+            .tokens(vec!["invite-token-member".to_owned()])
+            .build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let invitee = test
+            .seed_user("invitee@example.com", "correct horse battery")
+            .await
+            .expect("the invitee exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+
+        // The invitee was added while the invite was pending: accepting must not conflict.
+        let now = test.clock().now();
+        test.app()
+            .stores
+            .spaces
+            .add_member(&space_id, &invitee, boma_domain::SpaceRole::Member, &now)
+            .await
+            .expect("the membership pre-exists");
+
+        let context = TestApp::member_context(&space_id, &owner);
+        boma_app::usecases::invite(
+            test.app(),
+            &context,
+            "invitee@example.com",
+            boma_domain::SpaceRole::Member,
+            3600,
+        )
+        .await
+        .expect("the invitation is issued");
+
+        let caller = TestApp::member_context(&space_id, &invitee);
+        boma_app::usecases::invite_accept(test.app(), &caller, "invite-token-member")
+            .await
+            .expect("an already-member accept is idempotent");
+        let role = test
+            .app()
+            .stores
+            .spaces
+            .membership(&space_id, &invitee)
+            .await
+            .expect("the store answers");
+        assert_eq!(role, Some(boma_domain::SpaceRole::Member));
     }
 }

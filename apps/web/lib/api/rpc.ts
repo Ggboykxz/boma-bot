@@ -885,3 +885,40 @@ async function throwErr(response: Response): Promise<never> {
     response.status,
   );
 }
+
+
+/** The body of `invitations.accept` (REQ-042). */
+export interface InvitationAcceptReply {
+  spaceId: string;
+}
+
+/** `invitations.accept` — joins the space the token names. */
+export function invitationsAccept(
+  request: { token: string },
+  signal?: AbortSignal,
+): Promise<InvitationAcceptReply> {
+  return call<InvitationAcceptReply>("invitations", "accept", request, signal);
+}
+
+/** The public preview of `GET /api/v1/invites/{token}`. */
+export interface InvitationPublicPreview {
+  spaceName: string;
+  inviterName: string | null;
+  role: string;
+  expiresAt: string;
+}
+
+/** `GET /api/v1/invites/{token}` — the anonymous invite page's view (REQ-042). */
+export async function invitationPreview(
+  token: string,
+  signal?: AbortSignal,
+): Promise<InvitationPublicPreview> {
+  const response = await fetch(`${apiBase()}/api/v1/invites/${encodeURIComponent(token)}`, {
+    credentials: "omit",
+    ...(signal ? { signal } : {}),
+  });
+  if (!response.ok) {
+    throw new RpcError("NOT_FOUND", "Not found.", response.status);
+  }
+  return (await response.json()) as InvitationPublicPreview;
+}

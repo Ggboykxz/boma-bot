@@ -241,6 +241,8 @@ pub struct NewInvitation {
     pub role: SpaceRole,
     /// When it expires.
     pub expires_at: String,
+    /// Who issued the invitation; `None` for rows written before it was recorded (REQ-042).
+    pub inviter_user_id: Option<UserId>,
     /// When it was created.
     pub created_at: String,
 }
@@ -260,6 +262,8 @@ pub struct Invitation {
     pub expires_at: String,
     /// Whether it is still pending.
     pub pending: bool,
+    /// Who issued the invitation; `None` for rows written before it was recorded (REQ-042).
+    pub inviter_user_id: Option<UserId>,
 }
 
 /// A row of the activity projection (REQ-011).
@@ -519,6 +523,29 @@ pub trait SpaceStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn spaces_of(&self, user_id: &UserId) -> Result<Vec<Space>, AppError>;
+
+    /// The name of one space, system-scoped; the invite preview page is anonymous.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn name_of(&self, space_id: &SpaceId) -> Result<Option<String>, AppError>;
+
+    /// Records one membership (REQ-042).
+    ///
+    /// System-scoped: the caller is the invitation's invitee, acting for themselves.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the membership already exists, and an error when the
+    /// database cannot answer.
+    async fn add_member(
+        &self,
+        space_id: &SpaceId,
+        user_id: &UserId,
+        role: SpaceRole,
+        now: &str,
+    ) -> Result<(), AppError>;
 
     /// The member ids of one space, memberships only (no invited rows).
     ///
@@ -975,6 +1002,13 @@ pub trait InvitationStore: Send + Sync {
     ///
     /// Returns an error when the database cannot answer.
     async fn find_by_token_hash(&self, token_hash: &[u8]) -> Result<Option<Invitation>, AppError>;
+
+    /// Accepts the invitation named by `id`; the transition happens once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn accept(&self, id: &boma_domain::InviteId, now: &str) -> Result<(), AppError>;
 }
 
 /// Hands events to the live subscribers.

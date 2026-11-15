@@ -39,19 +39,19 @@ use crate::{
         ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
         ExportStartReply, ExportStatusReply, HeldDropReply, HeldListReply, HeldMailView,
         HeldReleaseReply, InstallGenericReply, InstallTelegramReply, InstallUrlReply,
-        InstallationsReply, InvitationReply, MailPolicyReply, MailPolicyView,
-        MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply,
-        McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
-        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
-        MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
-        ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
-        ModelsCatalogReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
-        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
-        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
-        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SecurityEventsReply,
-        SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply,
-        TeachSkillReply, ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply,
-        TicketView,
+        InstallationsReply, InvitationAcceptReply, InvitationAcceptRequest, InvitationReply,
+        MailPolicyReply, MailPolicyView, MarketplaceInstallReply, MarketplaceListReply,
+        MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply, McpServerView,
+        McpServersListReply, McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply,
+        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply,
+        MessagingInstallationView, MessagingRemoveReply, ModelConnectReply, ModelCredentialView,
+        ModelCredentialsReply, ModelPreferenceReply, ModelsCatalogReply, PagesGetReply,
+        PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView, ReactReply,
+        RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView, RoutineWriteReply,
+        RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply, SecretSetReply,
+        SecretView, SecretsReply, SecurityEventsReply, SendReply, SkillReply, SkillView,
+        SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply, ThreadHeadReply,
+        TicketCommentReply, TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -108,6 +108,8 @@ pub mod namespaces {
     pub const ACCOUNT: &str = "account";
     /// Admin: members, invitations, server-level access grants and the plugin-submission review (REQ-058).
     pub const ADMIN: &str = "admin";
+    /// Invitations: the token-gated acceptance path (REQ-042).
+    pub const INVITATIONS: &str = "invitations";
 }
 
 /// Every procedure this deployment serves.
@@ -219,6 +221,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::ADMIN, "grants.revoke"),
         (namespaces::ADMIN, "plugins.list"),
         (namespaces::ADMIN, "plugins.decide"),
+        (namespaces::INVITATIONS, "accept"),
     ]
 }
 
@@ -599,6 +602,9 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::ADMIN, "plugins.decide") => admin_plugins_decide(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::INVITATIONS, "accept") => invitations_accept(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -3524,5 +3530,26 @@ async fn admin_plugins_decide(
     .await?;
     Ok(AdminPluginDecideReply {
         status: request.decision,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M10 — invitations (REQ-042)
+// ---------------------------------------------------------------------------
+
+/// `invitations.accept` — joins the space the token names (REQ-042).
+///
+/// A used, expired or malformed token answers the same refusal it always did; the invitee signs
+/// in first, the link binds the caller's address. An already-member caller is accepted without
+/// error, so a re-click shows the room rather than a puzzling refusal.
+async fn invitations_accept(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<InvitationAcceptReply, ApiError> {
+    let request: InvitationAcceptRequest = parse(&body)?;
+    let outcome = usecases::invite_accept(state.app(), &auth.actor.context, &request.token).await?;
+    Ok(InvitationAcceptReply {
+        space_id: outcome.space_id.as_str().to_owned(),
     })
 }

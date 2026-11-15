@@ -33,6 +33,24 @@ impl PostgresInvitationStore {
 
 #[async_trait::async_trait]
 impl InvitationStore for PostgresInvitationStore {
+    async fn accept(&self, id: &boma_domain::InviteId, _now: &str) -> Result<(), AppError> {
+        let id = id.as_str().to_owned();
+        tenant::as_system(
+            &self.pool,
+            boma_domain::SystemReason::Authentication,
+            |conn| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE invitations SET status = 'accepted' WHERE id = $1")
+                        .bind(&id)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(tenant::unavailable)?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
     async fn create(
         &self,
         invitation: NewInvitation,
@@ -42,10 +60,10 @@ impl InvitationStore for PostgresInvitationStore {
         tenant::in_space(&self.pool, &space_id, |conn| {
             Box::pin(async move {
                 let row = sqlx::query_as::<_, InvitationRow>(
-                    "INSERT INTO invitations (id, space_id, email, token_hash, role, expires_at, status, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, 'pending', $7::timestamptz)
+                    "INSERT INTO invitations (id, space_id, email, token_hash, role, expires_at, status, inviter_user_id, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6::timestamptz, 'pending', $7, $8::timestamptz)
                      RETURNING id, space_id, email, role,
-                               boma.rfc3339(expires_at) AS expires_at, status",
+                               boma.rfc3339(expires_at) AS expires_at, status, inviter_user_id",
                 )
                 .bind(invitation.id.as_str())
                 .bind(invitation.space_id.as_str())
@@ -53,6 +71,7 @@ impl InvitationStore for PostgresInvitationStore {
                 .bind(invitation.token_hash)
                 .bind(invitation.role.as_str())
                 .bind(&invitation.expires_at)
+                .bind(invitation.inviter_user_id.as_ref().map(boma_domain::UserId::as_str))
                 .bind(&invitation.created_at)
                 .fetch_one(&mut *conn)
                 .await
@@ -73,7 +92,7 @@ impl InvitationStore for PostgresInvitationStore {
             Box::pin(async move {
                 sqlx::query_as::<_, InvitationRow>(
                     "SELECT id, space_id, email, role,
-                            boma.rfc3339(expires_at) AS expires_at, status
+                            boma.rfc3339(expires_at) AS expires_at, status, inviter_user_id
                      FROM invitations
                      WHERE token_hash = $1
                      ORDER BY created_at DESC

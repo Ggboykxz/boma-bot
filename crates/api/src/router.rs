@@ -92,6 +92,10 @@ pub fn router(state: AppState) -> Router {
             post(public::csp_report).route_layer(DefaultBodyLimit::max(17 * 1024)),
         )
         .route(
+            "/api/v1/invites/{token}",
+            get(public::invite_preview),
+        )
+        .route(
             "/api/v1/me/exports/{id}",
             get(public::account_export_download),
         )

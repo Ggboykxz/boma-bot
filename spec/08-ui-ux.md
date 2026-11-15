@@ -23,7 +23,7 @@ Design constraints that apply everywhere:
 | `/` | Root: redirects to `/app` when signed in, otherwise the sign-in screen | public |
 | `/sign-in`, `/sign-up` | Authentication | public |
 | `/forgot-password`, `/reset-password` | Password recovery | public |
-| `/invite/:token` | Accept an invitation (sign-in or sign-up inline) | token |
+| `/invite?token=<token>` | Accept an invitation (sign-in or sign-up inline) | token |
 | `/onboarding/:step?` | First-run setup: create space, first bot, connect a model | signed in, no space yet |
 | `/app` | Shell with the selected bot's thread | signed in |
 | `/app/:botId` | Shell, thread of one bot | signed in |
@@ -59,9 +59,10 @@ screen must say so plainly rather than silently granting power.
 **`/forgot-password` / `/reset-password`** — identical response whether or not the address exists. The
 reset screen validates token and password locally before submitting, then signs the user in.
 
-**`/invite/:token`** — shows the space name and the inviter, then either signs the person in or lets
+**`/invite?token=<token>`** — shows the space name and the inviter, then either signs the person in or lets
 them create an account, then accepts the invitation. Expired or revoked tokens show a specific message
-and a way to request a new invitation.
+and a way to request a new invitation. The token travels as a query parameter, not a route parameter:
+the app is a static export (ADR-013), and a different token per invitee cannot be pre-rendered.
 
 **`/onboarding/:step?`** — three steps, each independently skippable except leaving a space without a
 model: (1) name the space, (2) create the first bot with a name and one sentence of purpose,

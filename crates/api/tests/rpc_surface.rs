@@ -113,9 +113,10 @@ async fn post(
         .uri(path)
         .header("content-type", "application/json");
     if let Some(caller) = caller {
-        builder = builder
-            .header(header::COOKIE, &caller.cookie)
-            .header("x-space-id", &caller.space_id);
+        builder = builder.header(header::COOKIE, &caller.cookie);
+        if !caller.space_id.is_empty() {
+            builder = builder.header("x-space-id", &caller.space_id);
+        }
     }
     let request = builder
         .body(Body::from(body.to_string()))
@@ -4288,7 +4289,11 @@ async fn req_040_the_recovery_link_round_trips_over_http_and_returns_a_session()
         .oneshot(request)
         .await
         .expect("the router answers");
-    assert_eq!(response.status(), StatusCode::OK, "the response never says whether the address exists");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the response never says whether the address exists"
+    );
 
     let request = Request::builder()
         .method("POST")
@@ -4328,4 +4333,170 @@ async fn req_040_the_recovery_link_round_trips_over_http_and_returns_a_session()
         .await
         .expect("the router answers");
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+// ---------------------------------------------------------------------------
+// M10 — invitation acceptance over the RPC surface (REQ-042)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_042_accepting_the_invite_over_rpc_joins_the_space() {
+    let test_app = TestApp::builder()
+        .tokens(vec![
+            "invite-rpc-token".to_owned(),
+            "session-token-rpc-invite".to_owned(),
+        ])
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let invitee = test_app
+        .seed_user("invitee@example.com", "correct horse battery")
+        .await
+        .expect("the invitee exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+
+    // The owner mints the invitation through the same use case the RPC uses; the token queue
+    // hands the invite mint first.
+    let context = TestApp::member_context(&space_id, &owner);
+    boma_app::usecases::invite(
+        test_app.app(),
+        &context,
+        "invitee@example.com",
+        boma_domain::SpaceRole::Member,
+        3600,
+    )
+    .await
+    .expect("the invitation is issued");
+
+    // The invitee signs in as the address the invitation names, then accepts over HTTP.
+    let caller = Caller {
+        cookie: sign_in_as(&test_app, "invitee@example.com").await,
+        space_id: String::new(),
+    };
+    let response = post(
+        state(&test_app),
+        "/rpc/invitations/accept",
+        Some(&caller),
+        serde_json::json!({"token": "invite-rpc-token"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["spaceId"], serde_json::json!(space_id.as_str()));
+
+    let role = test_app
+        .app()
+        .stores
+        .spaces
+        .membership(&space_id, &invitee)
+        .await
+        .expect("the store answers");
+    assert_eq!(role, Some(boma_domain::SpaceRole::Member));
+}
+
+#[tokio::test]
+async fn req_042_a_stranger_token_is_refused_over_rpc() {
+    let test_app = TestApp::builder()
+        .tokens(vec![
+            "invite-rpc-unknown".to_owned(),
+            "session-token-rpc-stranger".to_owned(),
+        ])
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let invitee = test_app
+        .seed_user("invitee@example.com", "correct horse battery")
+        .await
+        .expect("the invitee exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+
+    let context = TestApp::member_context(&space_id, &owner);
+    boma_app::usecases::invite(
+        test_app.app(),
+        &context,
+        "invitee@example.com",
+        boma_domain::SpaceRole::Member,
+        3600,
+    )
+    .await
+    .expect("the invitation is issued");
+
+    let caller = Caller {
+        cookie: sign_in_as(&test_app, "invitee@example.com").await,
+        space_id: String::new(),
+    };
+    let response = post(
+        state(&test_app),
+        "/rpc/invitations/accept",
+        Some(&caller),
+        serde_json::json!({"token": "not-the-token"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let _ = invitee;
+}
+
+#[tokio::test]
+async fn req_042_the_public_preview_answers_only_with_the_names_and_the_expiry() {
+    let test_app = TestApp::builder()
+        .tokens(vec!["invite-public-preview".to_owned()])
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+
+    let context = TestApp::member_context(&space_id, &owner);
+    boma_app::usecases::invite(
+        test_app.app(),
+        &context,
+        "invitee@example.com",
+        boma_domain::SpaceRole::Member,
+        3600,
+    )
+    .await
+    .expect("the invitation is issued");
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/invites/invite-public-preview")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["spaceName"], serde_json::json!("Golden space"));
+    assert_eq!(body["inviterName"], serde_json::json!("owner"));
+    assert_eq!(body["role"], serde_json::json!("member"));
+    assert!(body["expiresAt"].is_string());
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/invites/no-such-token")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(state(&test_app))
+        .oneshot(request)
+        .await
+        .expect("the router answers");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = json(response).await;
+    assert_eq!(body["error"], serde_json::json!("Not found."));
 }

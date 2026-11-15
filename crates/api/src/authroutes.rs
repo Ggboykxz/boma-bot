@@ -127,6 +127,11 @@ pub struct SessionReply {
 /// The response is the same either way (spec §8.2): it never says whether the address is
 /// registered. A malformed address, an unknown address and an existing account all answer
 /// `200 {ok: true}`.
+///
+/// # Errors
+///
+/// Returns the envelope the error maps to when the body is malformed, when the rate limiter
+/// trips, or when a store cannot answer.
 pub async fn forgot_password(
     State(state): State<AppState>,
     ClientAddr(peer): ClientAddr,
@@ -143,7 +148,7 @@ pub async fn forgot_password(
     )
     .await?;
     let request: ForgotPasswordRequest = parse(&body)?;
-    let _ = usecases::request_password_reset(state.app(), &request.email).await?;
+    usecases::request_password_reset(state.app(), &request.email).await?;
     Ok((
         axum::http::StatusCode::OK,
         [
@@ -159,6 +164,11 @@ pub async fn forgot_password(
 ///
 /// The link is single-use; either it is refused in the same words as an absent one, or the person
 /// is signed in with the new password.
+///
+/// # Errors
+///
+/// Returns the envelope the error maps to when the body is malformed, when the rate limiter
+/// trips, when the link is invalid, expired or already used, or when a store cannot answer.
 pub async fn reset_password(
     State(state): State<AppState>,
     ClientAddr(peer): ClientAddr,
