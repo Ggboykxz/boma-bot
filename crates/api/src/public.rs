@@ -642,3 +642,83 @@ pub async fn messaging_slack_callback(
         Err(_) => messaging_deny(),
     }
 }
+
+/// The body cap of a billing webhook: Stripe events are small, and a bigger body is a forgery
+/// attempt, not a subscription (REQ-051).
+const BILLING_WEBHOOK_MAX_BYTES: usize = 64 * 1024;
+
+/// `POST /api/v1/billing/webhook` — the payment provider's call after a checkout (REQ-051).
+///
+/// The provider proves itself with `Stripe-Signature`. Every failure answers the same uniform
+/// `404` the other public surfaces do, so a caller cannot tell "billing is not configured" from
+/// "the signature is wrong" from "this space does not exist". A verified event asks the use case
+/// to apply it; unknown events are acknowledged and ignored.
+pub async fn billing_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let deny = || {
+        (
+            StatusCode::NOT_FOUND,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error": "Not found."}"#,
+        )
+            .into_response()
+    };
+    if !state.app().services.billing_enabled {
+        return deny();
+    }
+    if body.len() > BILLING_WEBHOOK_MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            r#"{"error": "The event is too large"}"#,
+        )
+            .into_response();
+    }
+    let Some(signature) = headers
+        .get("stripe-signature")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return deny();
+    };
+    // The signed timestamp is inside the header; the use case re-reads it and refuses a stale one.
+    let timestamp = parse_signature_timestamp(signature);
+    let Some(timestamp) = timestamp else {
+        return deny();
+    };
+    match usecases::billing_webhook(state.app(), signature, &timestamp, &body).await {
+        Ok(outcome) => (
+            StatusCode::OK,
+            [
+                (HeaderName::from_static("content-type"), "application/json"),
+                (HeaderName::from_static("cache-control"), "no-store"),
+            ],
+            serde_json::json!({
+                "received": true,
+                "activated": outcome.activated,
+                "plan": outcome.plan,
+            })
+            .to_string(),
+        )
+            .into_response(),
+        Err(_) => deny(),
+    }
+}
+
+/// Reads the `t=` entry out of a `Stripe-Signature` header, for the use case's own check.
+fn parse_signature_timestamp(header: &str) -> Option<String> {
+    header.split(',').find_map(|part| {
+        part.trim()
+            .strip_prefix("t=")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
+}

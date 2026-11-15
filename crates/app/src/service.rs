@@ -10,13 +10,13 @@ use boma_domain::{Bot, Message, Run, Thread, User};
 use crate::{
     error::AppError,
     ports::{
-        AccountStore, ArtifactStore, AuditStore, BotStore, CardStore, Clock, ComputerStore,
-        ConnectorStore, EffectStore, EventPublisher, EventStore, IdGenerator, InvitationStore,
-        MailStore, McpServerStore, MemoryStore, MessageStore, MessagingStore, PageStore,
-        PasswordHasher, PendingToolCallStore, PluginInstallStore, PluginSubmissionStore,
-        RateLimitStore, ReactionStore, ReadStateStore, RosterStore, RoutineStore, RunStore,
-        ScreenCapabilityStore, SecretStore, SessionStore, SkillStore, SpaceStore, ThreadStore,
-        TicketStore, TokenGenerator, ToolStore, UserStore,
+        AccountStore, ArtifactStore, AuditStore, BillingStore, BotStore, CardStore, Clock,
+        ComputerStore, ConnectorStore, EffectStore, EventPublisher, EventStore, IdGenerator,
+        InvitationStore, MailStore, McpServerStore, MemoryStore, MessageStore, MessagingStore,
+        ModelStore, PageStore, PasswordHasher, PendingToolCallStore, PluginInstallStore,
+        PluginSubmissionStore, RateLimitStore, ReactionStore, ReadStateStore, RosterStore,
+        RoutineStore, RunStore, ScreenCapabilityStore, SecretStore, SessionStore, SkillStore,
+        SpaceStore, ThreadStore, TicketStore, TokenGenerator, ToolStore, UserStore,
     },
 };
 
@@ -71,6 +71,10 @@ pub struct Stores {
     pub mail: Arc<dyn MailStore>,
     /// The messaging installations and their external threads (REQ-048).
     pub messaging: Arc<dyn MessagingStore>,
+    /// The model credentials and the person's preference (REQ-052).
+    pub models: Arc<dyn ModelStore>,
+    /// The spending limit, the payments and the subscription (REQ-018, REQ-051).
+    pub billing: Arc<dyn BillingStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -135,6 +139,8 @@ impl Stores {
         routines: Arc<dyn RoutineStore>,
         computers: Arc<dyn ComputerStore>,
         screen_capabilities: Arc<dyn ScreenCapabilityStore>,
+        models: Arc<dyn ModelStore>,
+        billing: Arc<dyn BillingStore>,
     ) -> Self {
         Self {
             accounts,
@@ -161,6 +167,8 @@ impl Stores {
             pages,
             mail,
             messaging,
+            models,
+            billing,
             tickets,
             effects,
             tools,
@@ -231,6 +239,17 @@ pub struct Services {
     /// The out-of-band artifact bytes (REQ-036). Content-addressed; a test doubles it with a
     /// RAM map, a deployment wires the filesystem store.
     pub artifact_content: Arc<dyn crate::ports::ArtifactContentStore>,
+    /// The model credential probe (REQ-052): a test doubles it, a deployment wires the HTTP
+    /// client.
+    pub model_transport: Arc<dyn crate::ports::ModelTransport>,
+    /// The checkout provider (REQ-051); `None` means checkouts refuse with a clear error.
+    pub billing_provider: Option<Arc<dyn crate::ports::BillingProvider>>,
+    /// The billing webhook secret (`BOMA_BILLING_WEBHOOK_SECRET`); without it the webhook
+    /// cannot verify anything and every call is uniform 401.
+    pub billing_webhook_secret: Option<secrecy::SecretString>,
+    /// Whether the billing surface exists (`BOMA_BILLING`). Off by default: without the flag
+    /// the billing routes and procedures answer 404, signed in or not.
+    pub billing_enabled: bool,
 }
 
 impl Services {
@@ -249,6 +268,7 @@ impl Services {
         oauth_client: Arc<dyn crate::ports::OAuthClient>,
         artifact_content: Arc<dyn crate::ports::ArtifactContentStore>,
         messaging_transport: Arc<dyn crate::ports::MessagingTransport>,
+        model_transport: Arc<dyn crate::ports::ModelTransport>,
     ) -> Self {
         Self {
             publisher,
@@ -267,6 +287,10 @@ impl Services {
             oauth_client,
             artifact_content,
             messaging_transport,
+            model_transport,
+            billing_provider: None,
+            billing_webhook_secret: None,
+            billing_enabled: false,
             slack: None,
             messaging_enabled: false,
             public_base_url: "http://127.0.0.1:3000".to_owned(),
@@ -330,6 +354,20 @@ impl Services {
     #[must_use]
     pub fn with_slack(mut self, slack: Option<crate::ports::SlackAppConfig>) -> Self {
         self.slack = slack;
+        self
+    }
+
+    /// Builds the services with the billing surface and its settings attached (REQ-051).
+    #[must_use]
+    pub fn with_billing(
+        mut self,
+        enabled: bool,
+        provider: Option<Arc<dyn crate::ports::BillingProvider>>,
+        webhook_secret: Option<secrecy::SecretString>,
+    ) -> Self {
+        self.billing_enabled = enabled;
+        self.billing_provider = provider;
+        self.billing_webhook_secret = webhook_secret;
         self
     }
 

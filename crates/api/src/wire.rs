@@ -1318,6 +1318,125 @@ pub struct SecretForgetReply {
     pub removed: bool,
 }
 
+/// One model row of `models.catalog` (REQ-052, golden `models-catalog`).
+///
+/// Exactly the golden's four fields: the catalogue says what the deployment reaches, and nothing
+/// about keys or account identifiers (the note in `spec/golden/models-catalog.json`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogModelView {
+    /// The model identifier.
+    pub id: String,
+    /// A name a person can read.
+    pub name: String,
+    /// The context window in tokens.
+    pub context_window: u64,
+    /// The roles the model supports.
+    pub roles: Vec<String>,
+}
+
+/// One provider of `models.catalog` (REQ-052).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogProviderView {
+    /// The provider id.
+    pub id: String,
+    /// A name a person can read.
+    pub name: String,
+    /// The models of this deployment on that provider.
+    pub models: Vec<CatalogModelView>,
+}
+
+/// The reply of `models.catalog` (REQ-052, golden `models-catalog`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsCatalogReply {
+    /// The providers, in the deployment's declaration order.
+    pub providers: Vec<CatalogProviderView>,
+}
+
+/// One connected credential, as `models.credentials` lists it (REQ-052).
+///
+/// The key itself is never listed: the reply says which providers are connected and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCredentialView {
+    /// The provider.
+    pub provider: String,
+    /// `connected`.
+    pub status: String,
+    /// When it was connected.
+    pub created_at: String,
+}
+
+/// The reply of `models.credentials` (REQ-052).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCredentialsReply {
+    /// The connected providers.
+    pub credentials: Vec<ModelCredentialView>,
+}
+
+/// The reply of `models.connect` and `models.disconnect` (REQ-052).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConnectReply {
+    /// The provider that is now connected, or was forgotten.
+    pub provider: String,
+    /// Whether the operation left a credential connected (`false` for a forgotten absent one).
+    pub connected: bool,
+}
+
+/// The reply of `models.preferences.get` and `models.preferences.set` (REQ-052).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPreferenceReply {
+    /// The person's model key, or `null` for the deployment default.
+    pub model_key: Option<String>,
+}
+
+/// The reply of `billing.status` (REQ-051).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BillingStatusReply {
+    /// `free` or `pro`.
+    pub plan: String,
+    /// `active`, `canceled` or `past_due`.
+    pub status: String,
+    /// The credits the checkout seeded, in minor units.
+    pub credits_minor_units: i64,
+    /// When the current period ends, when known.
+    pub current_period_end: Option<String>,
+    /// Whether this deployment can open a checkout.
+    pub checkout_allowed: bool,
+}
+
+/// The reply of `billing.checkout` (REQ-051).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BillingCheckoutReply {
+    /// The URL the member's browser opens.
+    pub url: String,
+    /// The provider's reference for the session.
+    pub provider_ref: String,
+}
+
+/// The reply of `billing.limit.get` and `billing.limit.set` (REQ-018).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpendingLimitReply {
+    /// Whether the cap is enforced.
+    pub enabled: bool,
+    /// The ISO currency of the cap.
+    pub currency: String,
+    /// The cap in minor units.
+    pub cap_minor_units: i64,
+    /// What the space spent this calendar month, in minor units.
+    pub spent_minor_units: i64,
+    /// What remains, or `null` when the cap is disabled.
+    pub remaining_minor_units: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use boma_domain::{Block, MessageId, MessageRole, RunId, ThreadId};

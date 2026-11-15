@@ -75,6 +75,10 @@ pub fn router(state: AppState) -> Router {
             get(public::messaging_slack_callback),
         )
         .route(
+            "/api/v1/billing/webhook",
+            post(public::billing_webhook).route_layer(DefaultBodyLimit::max(65 * 1024)),
+        )
+        .route(
             "/api/v1/assets/page-runtime.js",
             get(pages::page_runtime_js),
         )

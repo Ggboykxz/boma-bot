@@ -3439,3 +3439,441 @@ async fn world_with_slack_missing() -> (
         transport,
     )
 }
+
+// ---------------------------------------------------------------------------
+// M8 — models (REQ-052)
+// ---------------------------------------------------------------------------
+
+async fn world_with_models() -> (World, std::sync::Arc<boma_testkit::ScriptedModelTransport>) {
+    let transport = std::sync::Arc::new(boma_testkit::ScriptedModelTransport::new());
+    let test_app = TestApp::builder()
+        .model_transport(std::sync::Arc::clone(&transport))
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Models space")
+        .await
+        .expect("the space exists");
+    let (bot_id, thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    (
+        World {
+            app: test_app,
+            caller: Caller {
+                cookie,
+                space_id: space_id.as_str().to_owned(),
+            },
+            bot_id: bot_id.as_str().to_owned(),
+            thread_id: thread_id.as_str().to_owned(),
+        },
+        transport,
+    )
+}
+
+#[tokio::test]
+async fn req_052_models_catalog_has_the_golden_shape_and_carries_no_key() {
+    let (world, _transport) = world_with_models().await;
+    let response = post(
+        state(&world.app),
+        "/rpc/models/catalog",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    // The golden's four fields and nothing else: a catalogue entry is id, name, context window,
+    // roles. No keys, no account identifiers (spec/golden/models-catalog.json). The world
+    // declares one model per provider, and the catalogue follows the declaration — not the
+    // indicative price table in the domain.
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "providers": [
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "models": [
+                        { "id": "gpt-5", "name": "GPT-5", "contextWindow": 400_000, "roles": ["chat"] },
+                    ],
+                },
+                {
+                    "id": "anthropic",
+                    "name": "Anthropic",
+                    "models": [
+                        { "id": "claude-sonnet", "name": "Claude Sonnet", "contextWindow": 200_000, "roles": ["chat"] },
+                    ],
+                }
+            ]
+        })
+    );
+}
+
+#[tokio::test]
+async fn req_052_connect_disconnect_and_preferences_round_trip() {
+    let (world, transport) = world_with_models().await;
+    let app_state = state(&world.app);
+
+    let connected = post(
+        app_state.clone(),
+        "/rpc/models/connect",
+        Some(&world.caller),
+        serde_json::json!({ "provider": "anthropic", "apiKey": "sk-ant-test-key" }),
+    )
+    .await;
+    assert_eq!(connected.status(), StatusCode::OK);
+    assert_eq!(
+        json(connected).await,
+        serde_json::json!({ "provider": "anthropic", "connected": true })
+    );
+    // The probe really called the provider, with the key, and never returns it.
+    let calls = transport.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "https://api.anthropic.com/v1/models");
+    assert!(calls[0].1.iter().any(|(name, _)| name == "x-api-key"));
+
+    let listed = post(
+        app_state.clone(),
+        "/rpc/models/credentials",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = json(listed).await;
+    assert_eq!(listed["credentials"].as_array().expect("an array").len(), 1);
+    assert_eq!(listed["credentials"][0]["provider"], "anthropic");
+    assert_eq!(listed["credentials"][0]["status"], "connected");
+    let text = listed.to_string();
+    assert!(!text.contains("sk-ant-test-key"), "the key is never listed");
+
+    let set = post(
+        app_state.clone(),
+        "/rpc/models/preferences.set",
+        Some(&world.caller),
+        serde_json::json!({ "modelKey": "openai/gpt-5" }),
+    )
+    .await;
+    assert_eq!(set.status(), StatusCode::OK);
+    assert_eq!(
+        json(set).await,
+        serde_json::json!({ "modelKey": "openai/gpt-5" })
+    );
+
+    let got = post(
+        app_state.clone(),
+        "/rpc/models/preferences.get",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        json(got).await,
+        serde_json::json!({ "modelKey": "openai/gpt-5" })
+    );
+
+    let unreachable = post(
+        app_state.clone(),
+        "/rpc/models/preferences.set",
+        Some(&world.caller),
+        serde_json::json!({ "modelKey": "mystery/qwen-99" }),
+    )
+    .await;
+    assert_eq!(unreachable.status(), StatusCode::BAD_REQUEST);
+
+    let cleared = post(
+        app_state.clone(),
+        "/rpc/models/preferences.set",
+        Some(&world.caller),
+        serde_json::json!({ "modelKey": null }),
+    )
+    .await;
+    assert_eq!(json(cleared).await, serde_json::json!({ "modelKey": null }));
+
+    let disconnected = post(
+        app_state,
+        "/rpc/models/disconnect",
+        Some(&world.caller),
+        serde_json::json!({ "provider": "anthropic" }),
+    )
+    .await;
+    assert_eq!(disconnected.status(), StatusCode::OK);
+    assert_eq!(
+        json(disconnected).await,
+        serde_json::json!({ "provider": "anthropic", "connected": false })
+    );
+}
+
+#[tokio::test]
+async fn req_052_a_refused_key_answers_bad_request_with_the_providers_reason() {
+    let transport =
+        std::sync::Arc::new(boma_testkit::ScriptedModelTransport::with_responses(vec![
+            Err(boma_app::ports::ModelTransportError::Http {
+                status: 401,
+                body: r#"{"error":"invalid x-api-key"}"#.to_owned(),
+            }),
+        ]));
+    let test_app = TestApp::builder()
+        .model_transport(std::sync::Arc::clone(&transport))
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Models space")
+        .await
+        .expect("the space exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let response = post(
+        state(&test_app),
+        "/rpc/models/connect",
+        Some(&caller),
+        serde_json::json!({ "provider": "anthropic", "apiKey": "bad-key" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json(response).await;
+    let error = body["error"].as_str().expect("a message");
+    assert!(error.contains("401"), "the status is named: {error}");
+    assert!(
+        error.contains("invalid x-api-key"),
+        "the provider's own words are shown: {error}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M8 — billing (REQ-018, REQ-051)
+// ---------------------------------------------------------------------------
+
+async fn world_with_billing() -> (World, std::sync::Arc<boma_testkit::ScriptedBillingProvider>) {
+    let provider = std::sync::Arc::new(boma_testkit::ScriptedBillingProvider::new());
+    let test_app = TestApp::builder()
+        .billing(true)
+        .billing_provider(std::sync::Arc::clone(&provider))
+        .billing_webhook_secret("whsec_test_secret_1234567890")
+        .build();
+    let user_id = test_app
+        .seed_user("person@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    let space_id = test_app
+        .seed_space(&user_id, "Billing space")
+        .await
+        .expect("the space exists");
+    let (bot_id, thread_id) = test_app
+        .seed_bot(&space_id, &user_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let cookie = sign_in_as(&test_app, "person@example.com").await;
+    (
+        World {
+            app: test_app,
+            caller: Caller {
+                cookie,
+                space_id: space_id.as_str().to_owned(),
+            },
+            bot_id: bot_id.as_str().to_owned(),
+            thread_id: thread_id.as_str().to_owned(),
+        },
+        provider,
+    )
+}
+
+#[tokio::test]
+async fn req_051_the_billing_surface_is_absent_without_the_flag() {
+    let world = world().await;
+    let app_state = state(&world.app);
+    for procedure in ["status", "checkout", "limit.get", "limit.set"] {
+        let response = post(
+            app_state.clone(),
+            &format!("/rpc/billing/{procedure}"),
+            Some(&world.caller),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "billing.{procedure}"
+        );
+    }
+    // And the webhook route does not answer a caller at all.
+    let response = raw_post(
+        app_state,
+        "/api/v1/billing/webhook",
+        None,
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        json(response).await,
+        serde_json::json!({ "error": "Not found." })
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the round trip is the test
+async fn req_018_and_051_the_plan_the_checkout_and_the_limit_round_trip() {
+    let (world, provider) = world_with_billing().await;
+    let app_state = state(&world.app);
+
+    let status = post(
+        app_state.clone(),
+        "/rpc/billing/status",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status.status(), StatusCode::OK);
+    let status = json(status).await;
+    assert_eq!(status["plan"], "free");
+    assert_eq!(status["status"], "active");
+    assert_eq!(status["creditsMinorUnits"], 0);
+    assert_eq!(status["checkoutAllowed"], true);
+
+    let checkout = post(
+        app_state.clone(),
+        "/rpc/billing/checkout",
+        Some(&world.caller),
+        serde_json::json!({ "plan": "pro" }),
+    )
+    .await;
+    assert_eq!(checkout.status(), StatusCode::OK);
+    assert_eq!(
+        json(checkout).await,
+        serde_json::json!({
+            "url": "https://checkout.example.com/scripted",
+            "providerRef": "cs_scripted",
+        })
+    );
+    assert_eq!(provider.calls().len(), 1);
+
+    let set = post(
+        app_state.clone(),
+        "/rpc/billing/limit.set",
+        Some(&world.caller),
+        serde_json::json!({
+            "enabled": true,
+            "currency": "usd",
+            "capMinorUnits": 5000,
+        }),
+    )
+    .await;
+    assert_eq!(set.status(), StatusCode::OK);
+    assert_eq!(
+        json(set).await,
+        serde_json::json!({
+            "enabled": true,
+            "currency": "USD",
+            "capMinorUnits": 5000,
+            "spentMinorUnits": 0,
+            "remainingMinorUnits": 5000,
+        })
+    );
+
+    let get = post(
+        app_state,
+        "/rpc/billing/limit.get",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(json(get).await["remainingMinorUnits"], 5000);
+}
+
+/// Signs a billing webhook body the way Stripe does.
+fn signed_webhook(secret: &str, body: &[u8], timestamp: &str) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).expect("any length");
+    mac.update(timestamp.as_bytes());
+    mac.update(b".");
+    mac.update(body);
+    let digest = mac.finalize().into_bytes();
+    let digest = digest.iter().fold(String::new(), |mut acc, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{byte:02x}");
+        acc
+    });
+    format!("t={timestamp},v1={digest}")
+}
+
+#[tokio::test]
+async fn req_051_the_webhook_is_uniformly_denied_until_its_signature_verifies() {
+    let (world, _provider) = world_with_billing().await;
+    let space_id = world.caller.space_id.clone();
+    let timestamp =
+        boma_app::usecases::unix_seconds(boma_testkit::scripts::DEFAULT_INSTANT).to_string();
+    let body = serde_json::json!({
+        "type": "checkout.session.completed",
+        "data": { "object": {
+            "id": "cs_live_1",
+            "client_reference_id": space_id,
+            "metadata": { "space_id": space_id },
+        }},
+    })
+    .to_string();
+
+    let deny = |signature: &str| {
+        let app_state = state(&world.app);
+        let signature = signature.to_owned();
+        let body = body.clone();
+        async move {
+            let request = Request::builder()
+                .method("POST")
+                .uri("/api/v1/billing/webhook")
+                .header("content-type", "application/json")
+                .header("stripe-signature", signature)
+                .body(Body::from(body))
+                .expect("the request builds");
+            router(app_state)
+                .oneshot(request)
+                .await
+                .expect("the router answers")
+        }
+    };
+
+    let response = deny("t=1,v1=deadbeef").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        json(response).await,
+        serde_json::json!({ "error": "Not found." })
+    );
+
+    let response = deny("garbage").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let signature = signed_webhook("whsec_test_secret_1234567890", body.as_bytes(), &timestamp);
+    let response = deny(&signature).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["received"], true);
+    assert_eq!(body["activated"], true);
+    assert_eq!(body["plan"], "pro");
+
+    let status = post(
+        state(&world.app),
+        "/rpc/billing/status",
+        Some(&world.caller),
+        serde_json::json!({}),
+    )
+    .await;
+    let status = json(status).await;
+    assert_eq!(status["plan"], "pro");
+    assert_eq!(
+        status["creditsMinorUnits"],
+        boma_app::usecases::PRO_SEEDED_CREDITS_MINOR
+    );
+}

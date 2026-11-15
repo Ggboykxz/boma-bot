@@ -552,6 +552,16 @@ struct State {
     pages: Vec<PageRow>,
     /// The immutable page versions (REQ-037).
     page_versions: Vec<PageVersionRow>,
+    /// The model credentials (REQ-052).
+    model_credentials: Vec<ModelCredentialRow>,
+    /// The person's model preferences (REQ-052).
+    user_model_preferences: Vec<UserModelPreferenceRow>,
+    /// The spending limits (REQ-018).
+    spending_limits: Vec<SpendingLimitRow>,
+    /// The recorded payments (REQ-018).
+    purchase_payments: Vec<PurchasePaymentRow>,
+    /// The subscriptions (REQ-051).
+    subscriptions: Vec<SubscriptionRow>,
     /// The messaging installations (REQ-048).
     messaging_installations: Vec<MessagingInstallationRow>,
     /// The pending Slack install handshakes (REQ-048).
@@ -833,6 +843,18 @@ impl MemoryDatabase {
     #[must_use]
     pub fn messaging(&self) -> MemoryMessagingStore {
         MemoryMessagingStore::new(self)
+    }
+
+    /// The store of model credentials and the person's preference (REQ-052).
+    #[must_use]
+    pub fn models(&self) -> MemoryModelStore {
+        MemoryModelStore::new(self)
+    }
+
+    /// The store of the money spine (REQ-018, REQ-051).
+    #[must_use]
+    pub fn billing(&self) -> MemoryBillingStore {
+        MemoryBillingStore::new(self)
     }
 
     /// The store of effects.
@@ -7177,4 +7199,516 @@ fn uuid_simple() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     format!("{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// One stored model credential (REQ-052); functional double, the plaintext stands in is not sealed.
+#[derive(Debug, Clone)]
+struct ModelCredentialRow {
+    /// The space the credential belongs to.
+    space_id: SpaceId,
+    /// The provider.
+    provider: String,
+    /// `connected`.
+    status: String,
+    /// When it was connected.
+    created_at: String,
+}
+
+/// One person's model preference (REQ-052).
+#[derive(Debug, Clone)]
+struct UserModelPreferenceRow {
+    /// The person.
+    user_id: UserId,
+    /// The model key.
+    model_key: String,
+    /// When it last changed.
+    #[allow(dead_code)]
+    updated_at: String,
+}
+
+/// The spending limit of one space (REQ-018).
+#[derive(Debug, Clone)]
+struct SpendingLimitRow {
+    /// The space the limit belongs to.
+    space_id: SpaceId,
+    /// Whether the cap is enforced.
+    enabled: bool,
+    /// The currency.
+    currency: String,
+    /// The cap in minor units.
+    cap_minor_units: i64,
+    /// When it last changed.
+    updated_at: String,
+}
+
+/// One recorded payment (REQ-018).
+#[derive(Debug, Clone)]
+struct PurchasePaymentRow {
+    /// The payment's id.
+    id: String,
+    /// The space the purchase belongs to.
+    space_id: SpaceId,
+    /// Who approved it.
+    #[allow(dead_code)]
+    user_id: UserId,
+    /// The approval card, when any.
+    #[allow(dead_code)]
+    card_id: Option<String>,
+    /// What was bought.
+    #[allow(dead_code)]
+    item: String,
+    /// The price in minor units.
+    amount_minor_units: i64,
+    /// The currency.
+    currency: String,
+    /// When it was recorded.
+    created_at: String,
+}
+
+/// One subscription (REQ-051).
+#[derive(Debug, Clone)]
+struct SubscriptionRow {
+    /// The space the subscription belongs to.
+    space_id: SpaceId,
+    /// `free` or `pro`.
+    plan: String,
+    /// The status.
+    status: String,
+    /// The provider's reference.
+    provider_ref: Option<String>,
+    /// The credits seeded.
+    credits_minor_units: i64,
+    /// When the current period ends.
+    current_period_end: Option<String>,
+    /// When it last changed.
+    #[allow(dead_code)]
+    updated_at: String,
+}
+
+fn free_subscription() -> boma_app::ports::SubscriptionState {
+    boma_app::ports::SubscriptionState {
+        plan: "free".to_owned(),
+        status: "active".to_owned(),
+        provider_ref: None,
+        credits_minor_units: 0,
+        current_period_end: None,
+    }
+}
+
+/// The store of model credentials and the person's preference (REQ-052).
+#[derive(Debug, Clone)]
+pub struct MemoryModelStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryModelStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The connected providers of the space, for assertions (REQ-052).
+    #[must_use]
+    pub fn connected(&self, context: &TenantContext) -> Vec<String> {
+        let state = read(&self.state);
+        match context {
+            TenantContext::Member { space_id, .. } => state
+                .model_credentials
+                .iter()
+                .filter(|row| row.space_id == *space_id && row.status == "connected")
+                .map(|row| row.provider.clone())
+                .collect(),
+            TenantContext::System { .. } => Vec::new(),
+        }
+    }
+}
+
+impl Default for MemoryModelStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ModelStore for MemoryModelStore {
+    async fn put_credential(
+        &self,
+        context: &TenantContext,
+        credential: boma_app::ports::NewModelCredential,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        if let Some(row) = state
+            .model_credentials
+            .iter_mut()
+            .find(|row| row.space_id == space_id && row.provider == credential.provider)
+        {
+            "connected".clone_into(&mut row.status);
+            row.created_at = credential.created_at;
+            return Ok(());
+        }
+        state.model_credentials.push(ModelCredentialRow {
+            space_id,
+            provider: credential.provider,
+            status: "connected".to_owned(),
+            created_at: credential.created_at,
+        });
+        Ok(())
+    }
+
+    async fn forget_credential(
+        &self,
+        context: &TenantContext,
+        provider: &str,
+    ) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let mut state = write(&self.state);
+        let Some(position) = state
+            .model_credentials
+            .iter()
+            .position(|row| row.space_id == space_id && row.provider == provider)
+        else {
+            return Ok(false);
+        };
+        state.model_credentials.remove(position);
+        Ok(true)
+    }
+
+    async fn list_credentials(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_app::ports::ModelCredential>, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(Vec::new()),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .model_credentials
+            .iter()
+            .filter(|row| row.space_id == space_id && row.status == "connected")
+            .map(|row| boma_app::ports::ModelCredential {
+                provider: row.provider.clone(),
+                status: row.status.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect())
+    }
+
+    async fn has_credential(
+        &self,
+        context: &TenantContext,
+        provider: &str,
+    ) -> Result<bool, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(false),
+        };
+        let state = read(&self.state);
+        Ok(state.model_credentials.iter().any(|row| {
+            row.space_id == space_id && row.provider == provider && row.status == "connected"
+        }))
+    }
+
+    async fn preference(&self, context: &TenantContext) -> Result<Option<String>, AppError> {
+        let user_id = match context {
+            TenantContext::Member { user_id, .. } => user_id.clone(),
+            TenantContext::System { .. } => return Ok(None),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .user_model_preferences
+            .iter()
+            .find(|row| row.user_id == user_id)
+            .map(|row| row.model_key.clone()))
+    }
+
+    async fn set_preference(
+        &self,
+        context: &TenantContext,
+        model_key: Option<&str>,
+    ) -> Result<(), AppError> {
+        let user_id = match context {
+            TenantContext::Member { user_id, .. } => user_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        match model_key {
+            Some(key) => {
+                if let Some(row) = state
+                    .user_model_preferences
+                    .iter_mut()
+                    .find(|row| row.user_id == user_id)
+                {
+                    key.clone_into(&mut row.model_key);
+                    return Ok(());
+                }
+                state.user_model_preferences.push(UserModelPreferenceRow {
+                    user_id,
+                    model_key: key.to_owned(),
+                    updated_at: "2026-01-01T00:00:00Z".to_owned(),
+                });
+            }
+            None => state
+                .user_model_preferences
+                .retain(|row| row.user_id != user_id),
+        }
+        Ok(())
+    }
+}
+
+/// The store of the money spine (REQ-018, REQ-051).
+#[derive(Debug, Clone)]
+pub struct MemoryBillingStore {
+    state: Arc<RwLock<State>>,
+}
+
+impl MemoryBillingStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+        }
+    }
+
+    /// The payments the space recorded, for assertions (REQ-018).
+    #[must_use]
+    pub fn payments(&self, context: &TenantContext) -> Vec<boma_app::ports::NewPurchasePayment> {
+        let state = read(&self.state);
+        match context {
+            TenantContext::Member { space_id, .. } => state
+                .purchase_payments
+                .iter()
+                .filter(|row| row.space_id == *space_id)
+                .map(|row| boma_app::ports::NewPurchasePayment {
+                    id: row.id.clone(),
+                    user_id: row.user_id.clone(),
+                    card_id: row.card_id.clone(),
+                    item: row.item.clone(),
+                    amount_minor_units: row.amount_minor_units,
+                    currency: row.currency.clone(),
+                    created_at: row.created_at.clone(),
+                })
+                .collect(),
+            TenantContext::System { .. } => Vec::new(),
+        }
+    }
+}
+
+impl Default for MemoryBillingStore {
+    fn default() -> Self {
+        Self::new(default_database())
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::BillingStore for MemoryBillingStore {
+    async fn limit(
+        &self,
+        context: &TenantContext,
+    ) -> Result<boma_app::ports::SpendingLimit, AppError> {
+        let default = || boma_app::ports::SpendingLimit {
+            enabled: false,
+            currency: "USD".to_owned(),
+            cap_minor_units: 0,
+            updated_at: String::new(),
+        };
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(default()),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .spending_limits
+            .iter()
+            .find(|row| row.space_id == space_id)
+            .map_or_else(default, |row| boma_app::ports::SpendingLimit {
+                enabled: row.enabled,
+                currency: row.currency.clone(),
+                cap_minor_units: row.cap_minor_units,
+                updated_at: row.updated_at.clone(),
+            }))
+    }
+
+    async fn set_limit(
+        &self,
+        context: &TenantContext,
+        enabled: bool,
+        currency: &str,
+        cap_minor_units: i64,
+    ) -> Result<boma_app::ports::SpendingLimit, AppError> {
+        let currency = currency.trim().to_ascii_uppercase();
+        if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the currency must be a three-letter code (USD, EUR, …)".to_owned(),
+            )));
+        }
+        if cap_minor_units < 0 {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the cap cannot be negative".to_owned(),
+            )));
+        }
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let updated_at = {
+            let mut state = write(&self.state);
+            let updated_at = "2026-01-01T00:00:00Z".to_owned();
+            if let Some(row) = state
+                .spending_limits
+                .iter_mut()
+                .find(|row| row.space_id == space_id)
+            {
+                row.enabled = enabled;
+                row.currency.clone_from(&currency);
+                row.cap_minor_units = cap_minor_units;
+                updated_at.clone_into(&mut row.updated_at);
+            } else {
+                state.spending_limits.push(SpendingLimitRow {
+                    space_id,
+                    enabled,
+                    currency: currency.clone(),
+                    cap_minor_units,
+                    updated_at: updated_at.clone(),
+                });
+            }
+            updated_at
+        };
+        Ok(boma_app::ports::SpendingLimit {
+            enabled,
+            currency,
+            cap_minor_units,
+            updated_at,
+        })
+    }
+
+    async fn remaining_allowance(
+        &self,
+        context: &TenantContext,
+        month_prefix: &str,
+    ) -> Result<Option<i64>, AppError> {
+        let limit = self.limit(context).await?;
+        if !limit.enabled {
+            return Ok(None);
+        }
+        let spent = self.spent_in_month(context, month_prefix).await?;
+        Ok(Some((limit.cap_minor_units - spent).max(0)))
+    }
+
+    async fn spent_in_month(
+        &self,
+        context: &TenantContext,
+        month_prefix: &str,
+    ) -> Result<i64, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(0),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .purchase_payments
+            .iter()
+            .filter(|row| row.space_id == space_id && row.created_at.starts_with(month_prefix))
+            .map(|row| row.amount_minor_units)
+            .sum())
+    }
+
+    async fn record_payment(
+        &self,
+        context: &TenantContext,
+        payment: boma_app::ports::NewPurchasePayment,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        state.purchase_payments.push(PurchasePaymentRow {
+            id: payment.id,
+            space_id,
+            user_id: payment.user_id,
+            card_id: payment.card_id,
+            item: payment.item,
+            amount_minor_units: payment.amount_minor_units,
+            currency: payment.currency,
+            created_at: payment.created_at,
+        });
+        Ok(())
+    }
+
+    async fn subscription(
+        &self,
+        context: &TenantContext,
+    ) -> Result<boma_app::ports::SubscriptionState, AppError> {
+        let space_id = match context {
+            TenantContext::Member { space_id, .. } => space_id.clone(),
+            TenantContext::System { .. } => return Ok(free_subscription()),
+        };
+        let state = read(&self.state);
+        Ok(state
+            .subscriptions
+            .iter()
+            .find(|row| row.space_id == space_id)
+            .map_or_else(free_subscription, |row| {
+                boma_app::ports::SubscriptionState {
+                    plan: row.plan.clone(),
+                    status: row.status.clone(),
+                    provider_ref: row.provider_ref.clone(),
+                    credits_minor_units: row.credits_minor_units,
+                    current_period_end: row.current_period_end.clone(),
+                }
+            }))
+    }
+
+    async fn activate_subscription(
+        &self,
+        context: &TenantContext,
+        subscription: boma_app::ports::NewSubscription,
+    ) -> Result<(), AppError> {
+        let space_id = match context {
+            TenantContext::System { .. } => {
+                SpaceId::new(subscription.space_id.clone()).map_err(|_| AppError::Unavailable)?
+            }
+            TenantContext::Member { space_id, .. }
+                if space_id.as_str() == subscription.space_id =>
+            {
+                space_id.clone()
+            }
+            TenantContext::Member { .. } => return Err(AppError::NotFound),
+        };
+        let mut state = write(&self.state);
+        if let Some(row) = state
+            .subscriptions
+            .iter_mut()
+            .find(|row| row.space_id == space_id)
+        {
+            row.plan = subscription.plan;
+            row.status = subscription.status;
+            row.provider_ref = subscription.provider_ref;
+            row.credits_minor_units = subscription.credits_minor_units;
+            row.current_period_end = subscription.current_period_end;
+            return Ok(());
+        }
+        state.subscriptions.push(SubscriptionRow {
+            space_id,
+            plan: subscription.plan,
+            status: subscription.status,
+            provider_ref: subscription.provider_ref,
+            credits_minor_units: subscription.credits_minor_units,
+            current_period_end: subscription.current_period_end,
+            updated_at: subscription.created_at,
+        });
+        Ok(())
+    }
 }

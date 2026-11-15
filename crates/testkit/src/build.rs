@@ -257,6 +257,8 @@ fn name_of(email: &Email) -> String {
 /// Every script is optional: an application built without one still works, with deterministic
 /// fallbacks.
 #[derive(Clone)]
+// The builder is the harness's knob list, one bool per deployment flag a test turns on.
+#[allow(clippy::struct_excessive_bools)]
 pub struct TestAppBuilder {
     /// The identifiers the application mints, in order.
     ids: Vec<String>,
@@ -293,6 +295,14 @@ pub struct TestAppBuilder {
     slack: Option<(String, String, String)>,
     /// The scripted messaging transport (REQ-048); one is scripted for every platform call.
     messaging_transport: Option<Arc<crate::ScriptedMessagingTransport>>,
+    /// Whether the billing surface exists (REQ-051).
+    billing: bool,
+    /// The scripted checkout provider (REQ-051).
+    billing_provider: Option<Arc<crate::ScriptedBillingProvider>>,
+    /// The webhook secret the tests sign with (REQ-051).
+    billing_webhook_secret: Option<String>,
+    /// The scripted model credential probe (REQ-052).
+    model_transport: Option<Arc<crate::ScriptedModelTransport>>,
 }
 
 impl Default for TestAppBuilder {
@@ -315,6 +325,10 @@ impl Default for TestAppBuilder {
             messaging: false,
             slack: None,
             messaging_transport: None,
+            billing: false,
+            billing_provider: None,
+            billing_webhook_secret: None,
+            model_transport: None,
         }
     }
 }
@@ -437,6 +451,34 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with the billing surface enabled (REQ-051).
+    #[must_use]
+    pub fn billing(mut self, enabled: bool) -> Self {
+        self.billing = enabled;
+        self
+    }
+
+    /// Builds the application with a scripted checkout provider (REQ-051).
+    #[must_use]
+    pub fn billing_provider(mut self, provider: Arc<crate::ScriptedBillingProvider>) -> Self {
+        self.billing_provider = Some(provider);
+        self
+    }
+
+    /// Builds the application with the webhook secret tests sign with (REQ-051).
+    #[must_use]
+    pub fn billing_webhook_secret(mut self, secret: &str) -> Self {
+        self.billing_webhook_secret = Some(secret.to_owned());
+        self
+    }
+
+    /// Builds the application with a scripted model credential probe (REQ-052).
+    #[must_use]
+    pub fn model_transport(mut self, transport: Arc<crate::ScriptedModelTransport>) -> Self {
+        self.model_transport = Some(transport);
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -500,6 +542,8 @@ impl TestAppBuilder {
             Arc::new(database.routines()),
             Arc::new(database.computers()),
             Arc::new(database.screen_capabilities()),
+            Arc::new(database.models()),
+            Arc::new(database.billing()),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -529,6 +573,9 @@ impl TestAppBuilder {
             self.messaging_transport
                 .clone()
                 .unwrap_or_else(|| Arc::new(crate::ScriptedMessagingTransport::new())),
+            self.model_transport
+                .clone()
+                .unwrap_or_else(|| Arc::new(crate::ScriptedModelTransport::new())),
         )
         .with_connectors(
             self.connector_runner
@@ -543,14 +590,24 @@ impl TestAppBuilder {
             }
         }))
         .with_messaging(self.messaging)
-        .with_slack(self.slack.clone().map(
-            |(client_id, client_secret, signing_secret)| boma_app::ports::SlackAppConfig {
-                client_id,
-                client_secret: secrecy::SecretString::from(client_secret),
-                signing_secret: secrecy::SecretString::from(signing_secret),
-                redirect_uri: boma_app::usecases::MESSAGING_SLACK_CALLBACK_URI.to_owned(),
-            },
-        ));
+        .with_slack(
+            self.slack
+                .clone()
+                .map(|(client_id, client_secret, signing_secret)| {
+                    boma_app::ports::SlackAppConfig {
+                        client_id,
+                        client_secret: secrecy::SecretString::from(client_secret),
+                        signing_secret: secrecy::SecretString::from(signing_secret),
+                        redirect_uri: boma_app::usecases::MESSAGING_SLACK_CALLBACK_URI.to_owned(),
+                    }
+                }),
+        )
+        .with_billing(
+            self.billing,
+            self.billing_provider
+                .map(|provider| provider as Arc<dyn boma_app::ports::BillingProvider>),
+            self.billing_webhook_secret.map(secrecy::SecretString::from),
+        );
         let services = if let Some(runtime) = self.runtime {
             services.with_computers(runtime as Arc<dyn boma_app::ports::ComputerRuntime>)
         } else if self.computers {
@@ -6410,5 +6467,800 @@ mod messaging_tests {
         // The scripted clock answers for 2026-01-01T00:00:00Z; parse it the same way the ingress does.
         let now = test.app().services.clock.now();
         boma_app::usecases::unix_seconds(&now).to_string()
+    }
+}
+
+#[cfg(test)]
+mod models_tests {
+    // REQ-052 — the model catalogue and BYOK credentials.
+
+    use std::sync::Arc;
+
+    use super::TestApp;
+
+    async fn world(test: &TestApp) -> boma_domain::TenantContext {
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        TestApp::member_context(&space.id, &user_id)
+    }
+
+    #[tokio::test]
+    async fn req_052_the_catalogue_lists_the_deployment_and_no_keys() {
+        let test = TestApp::builder().build();
+        let context = world(&test).await;
+        let catalog = boma_app::usecases::models_catalog(test.app(), &context)
+            .await
+            .expect("the catalogue answers");
+        assert_eq!(catalog.providers.len(), 2);
+        assert_eq!(catalog.providers[0].id, "openai");
+        assert_eq!(catalog.providers[0].models[0].id, "gpt-5");
+        assert_eq!(catalog.credentials.len(), 0);
+        // Nothing in the reply is a key or an account identifier.
+        let json = serde_json::to_string(&catalog.providers).expect("it serialises");
+        assert!(!json.contains("apiKey"));
+        assert!(!json.contains("sk-"));
+    }
+
+    #[tokio::test]
+    async fn req_052_a_connected_key_is_validated_live_then_listed_without_its_value() {
+        let transport = Arc::new(crate::ScriptedModelTransport::new());
+        let test = TestApp::builder()
+            .model_transport(Arc::clone(&transport))
+            .build();
+        let context = world(&test).await;
+        boma_app::usecases::models_connect(
+            test.app(),
+            &context,
+            "anthropic",
+            secrecy::SecretString::from("sk-ant-secret-value"),
+        )
+        .await
+        .expect("the provider accepts the key");
+
+        let calls = transport.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "https://api.anthropic.com/v1/models");
+        assert!(calls[0].1.iter().any(|(name, _)| name == "x-api-key"));
+        // The transport saw the value; the store and every read path never hand it back.
+        let credentials = boma_app::usecases::models_credentials(test.app(), &context)
+            .await
+            .expect("the credentials answer");
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[0].provider, "anthropic");
+        assert_eq!(credentials[0].status, "connected");
+        let listed = credentials
+            .iter()
+            .fold(String::new(), |mut acc, credential| {
+                use std::fmt::Write as _;
+                let _ = write!(
+                    acc,
+                    "{}{}{}",
+                    credential.provider, credential.status, credential.created_at
+                );
+                acc
+            });
+        assert!(!listed.contains("sk-ant-secret-value"));
+    }
+
+    #[tokio::test]
+    async fn req_052_a_refused_key_is_reported_with_the_providers_reason_and_stores_nothing() {
+        let transport = Arc::new(crate::ScriptedModelTransport::with_responses(vec![Err(
+            boma_app::ports::ModelTransportError::Http {
+                status: 401,
+                body: r#"{"error":{"message":"invalid x-api-key"}}"#.to_owned(),
+            },
+        )]));
+        let test = TestApp::builder()
+            .model_transport(Arc::clone(&transport))
+            .build();
+        let context = world(&test).await;
+        let error = boma_app::usecases::models_connect(
+            test.app(),
+            &context,
+            "anthropic",
+            secrecy::SecretString::from("bad-key"),
+        )
+        .await
+        .expect_err("the provider refuses the key");
+        let refusal_text = error.to_string();
+        assert!(
+            refusal_text.contains("401"),
+            "the status is named: {refusal_text}"
+        );
+        assert!(
+            refusal_text.contains("invalid x-api-key"),
+            "the reason is named: {refusal_text}"
+        );
+        let credentials = boma_app::usecases::models_credentials(test.app(), &context)
+            .await
+            .expect("the credentials answer");
+        assert_eq!(credentials.len(), 0, "nothing is stored on a refusal");
+    }
+
+    #[tokio::test]
+    async fn req_052_an_unknown_provider_is_refused_without_a_network_call() {
+        let transport = Arc::new(crate::ScriptedModelTransport::new());
+        let test = TestApp::builder()
+            .model_transport(Arc::clone(&transport))
+            .build();
+        let context = world(&test).await;
+        boma_app::usecases::models_connect(
+            test.app(),
+            &context,
+            "mystery",
+            secrecy::SecretString::from("key"),
+        )
+        .await
+        .expect_err("an unknown provider cannot be validated");
+        assert_eq!(transport.calls().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn req_052_disconnecting_forgets_the_key_and_reconnecting_replaces_it() {
+        let test = TestApp::builder().build();
+        let context = world(&test).await;
+        for key in ["key-one", "key-two"] {
+            boma_app::usecases::models_connect(
+                test.app(),
+                &context,
+                "openai",
+                secrecy::SecretString::from(key),
+            )
+            .await
+            .expect("the provider accepts the key");
+        }
+        let credentials = boma_app::usecases::models_credentials(test.app(), &context)
+            .await
+            .expect("the credentials answer");
+        assert_eq!(credentials.len(), 1, "one row per provider");
+        assert!(
+            boma_app::usecases::models_disconnect(test.app(), &context, "openai")
+                .await
+                .expect("the store answers")
+        );
+        assert_eq!(
+            boma_app::usecases::models_credentials(test.app(), &context)
+                .await
+                .expect("the credentials answer")
+                .len(),
+            0
+        );
+        assert!(
+            !boma_app::usecases::models_disconnect(test.app(), &context, "openai")
+                .await
+                .expect("forgetting an absent key succeeds"),
+            "forgetting an absent key removes nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_052_the_persons_preference_is_set_read_and_cleared_and_must_be_reachable() {
+        let test = TestApp::builder().build();
+        let context = world(&test).await;
+        assert_eq!(
+            boma_app::usecases::models_preference(test.app(), &context)
+                .await
+                .expect("the preference answers"),
+            None
+        );
+        let set =
+            boma_app::usecases::models_set_preference(test.app(), &context, Some("openai/gpt-5"))
+                .await
+                .expect("the key is reachable");
+        assert_eq!(set.as_deref(), Some("openai/gpt-5"));
+        assert_eq!(
+            boma_app::usecases::models_preference(test.app(), &context)
+                .await
+                .expect("the preference answers")
+                .as_deref(),
+            Some("openai/gpt-5")
+        );
+        boma_app::usecases::models_set_preference(test.app(), &context, Some("mystery/qwen-99"))
+            .await
+            .expect_err("an unreachable model is refused, never silently downgraded");
+        assert_eq!(
+            boma_app::usecases::models_set_preference(test.app(), &context, None)
+                .await
+                .expect("clearing is allowed"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn req_052_a_members_preference_is_the_model_their_run_executes_on() {
+        let test = TestApp::builder().build();
+        let context = world(&test).await;
+        boma_app::usecases::models_set_preference(test.app(), &context, Some("openai/gpt-5"))
+            .await
+            .expect("the key is reachable");
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let sent = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: created.bot.id.as_str().to_owned(),
+                text: "Hello.".to_owned(),
+                client_nonce: Some("nonce-m8-preference".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is accepted");
+        let run = test
+            .app()
+            .stores
+            .runs
+            .find(&context, &sent.run.id)
+            .await
+            .expect("the store answers")
+            .expect("the run exists");
+        assert_eq!(run.model_provider.as_deref(), Some("openai"));
+        assert_eq!(run.model_id.as_deref(), Some("gpt-5"));
+        assert!(!run.model_pinned, "a preference is not a pin");
+    }
+}
+
+#[cfg(test)]
+mod billing_tests {
+    // REQ-018 + REQ-051 — spending limits, purchase requests, subscriptions.
+
+    use std::sync::Arc;
+
+    use boma_app::ports::BillingStore as _;
+
+    use super::TestApp;
+
+    const WEBHOOK_SECRET: &str = "whsec_test_secret_1234567890";
+
+    async fn world(
+        billing: bool,
+    ) -> (
+        TestApp,
+        boma_domain::TenantContext,
+        Arc<crate::ScriptedBillingProvider>,
+    ) {
+        let provider = Arc::new(crate::ScriptedBillingProvider::new());
+        let mut builder = TestApp::builder().fixed_clock("2026-01-01T00:00:00Z");
+        if billing {
+            builder = builder
+                .billing(true)
+                .billing_provider(Arc::clone(&provider))
+                .billing_webhook_secret(WEBHOOK_SECRET);
+        }
+        let test = builder.build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        (test, context, provider)
+    }
+
+    #[tokio::test]
+    async fn req_018_the_limit_is_disabled_by_default_and_set_then_read() {
+        let (test, context, _) = world(false).await;
+        let limit = boma_app::usecases::spending_limit_get(test.app(), &context)
+            .await
+            .expect("the limit answers");
+        assert!(!limit.enabled);
+        assert_eq!(limit.remaining_minor_units, None);
+
+        let set = boma_app::usecases::spending_limit_set(test.app(), &context, true, "eur", 5_000)
+            .await
+            .expect("the limit is set");
+        assert!(set.enabled);
+        assert_eq!(set.currency, "EUR", "the currency is normalised");
+        assert_eq!(set.cap_minor_units, 5_000);
+        assert_eq!(set.spent_minor_units, 0);
+        assert_eq!(set.remaining_minor_units, Some(5_000));
+    }
+
+    #[tokio::test]
+    async fn req_018_a_negative_cap_or_a_bad_currency_is_refused() {
+        let (test, context, _) = world(false).await;
+        boma_app::usecases::spending_limit_set(test.app(), &context, true, "USD", -1)
+            .await
+            .expect_err("a negative cap is refused");
+        boma_app::usecases::spending_limit_set(test.app(), &context, true, "dollars", 100)
+            .await
+            .expect_err("a non-ISO currency is refused");
+    }
+
+    /// The identity of one purchase a test parks: the run, the bot, the thread and the call.
+    struct PurchaseSite<'a> {
+        run: &'a boma_domain::RunId,
+        bot: &'a boma_domain::BotId,
+        thread: &'a boma_domain::ThreadId,
+        call: &'a str,
+    }
+
+    /// Parks one purchase call on its approval card, then answers the card.
+    async fn approve_purchase(
+        test: &TestApp,
+        context: &boma_domain::TenantContext,
+        site: PurchaseSite<'_>,
+        arguments: serde_json::Value,
+        answer: &str,
+    ) -> boma_app::ports::AnswerCardOutcome {
+        let claimed = boma_app::usecases::ClaimedRun {
+            run: test
+                .app()
+                .stores
+                .runs
+                .find(context, site.run)
+                .await
+                .expect("the store answers")
+                .expect("the run exists"),
+            bot: test
+                .app()
+                .stores
+                .bots
+                .find(context, site.bot)
+                .await
+                .expect("the store answers")
+                .expect("the bot exists"),
+            thread: test
+                .app()
+                .stores
+                .threads
+                .find(context, site.thread)
+                .await
+                .expect("the store answers")
+                .expect("the thread exists"),
+        };
+        boma_app::usecases::park_tool_calls(
+            test.app(),
+            context,
+            &claimed,
+            vec![boma_app::ports::ToolCallRequest {
+                id: site.call.to_owned(),
+                name: "purchase.request".to_owned(),
+                arguments,
+            }],
+        )
+        .await
+        .expect("the purchase parks for approval");
+        let messages = test
+            .app()
+            .stores
+            .messages
+            .page(context, site.thread, None, 20)
+            .await
+            .expect("the page answers")
+            .messages;
+        let card_id = messages
+            .into_iter()
+            .flat_map(|message| message.blocks.into_iter())
+            .find_map(|block| match block {
+                boma_domain::Block::Card { card_id, .. } => Some(card_id),
+                _ => None,
+            })
+            .expect("an approval card is part of the thread");
+        boma_app::usecases::answer_card(test.app(), context, &card_id, answer)
+            .await
+            .expect("the card is answered")
+    }
+
+    async fn purchase_world() -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_app::usecases::BotCreated,
+        boma_domain::ThreadId,
+        boma_domain::RunId,
+    ) {
+        let (test, context, _) = world(false).await;
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Shopper", None, None)
+            .await
+            .expect("the bot is created");
+        let thread = test
+            .app()
+            .stores
+            .threads
+            .for_bot(&context, &created.bot.id)
+            .await
+            .expect("the store answers")
+            .expect("the thread exists");
+        let run = test
+            .app()
+            .stores
+            .runs
+            .create(boma_app::ports::NewRun {
+                id: boma_domain::RunId::new("run_m8_purchase").expect("an id is accepted"),
+                space_id: context.space_id().expect("a member context").clone(),
+                bot_id: created.bot.id.clone(),
+                thread_id: thread.id.clone(),
+                user_id: created.bot.user_id.clone(),
+                trigger: boma_domain::RunTrigger::User,
+                client_nonce: None,
+                source_message_id: None,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+                model_provider: None,
+                model_id: None,
+                model_pinned: false,
+                parent_run_id: None,
+                routine_id: None,
+            })
+            .await
+            .expect("the run exists");
+        (test, context, created, thread.id, run.id)
+    }
+
+    #[tokio::test]
+    async fn req_018_a_purchase_is_a_card_and_the_payment_exists_only_after_approval() {
+        let (test, context, created, thread_id, run_id) = purchase_world().await;
+        let arguments = serde_json::json!({
+            "item": "A year of uptime",
+            "amountMinorUnits": 1_200,
+            "currency": "usd",
+        });
+        let answered = approve_purchase(
+            &test,
+            &context,
+            PurchaseSite {
+                run: &run_id,
+                bot: &created.bot.id,
+                thread: &thread_id,
+                call: "call_m8_purchase",
+            },
+            arguments,
+            "approve",
+        )
+        .await;
+        assert!(answered.effect_recorded);
+        let payments = test.database().billing().payments(&context);
+        assert_eq!(payments.len(), 1);
+        assert_eq!(payments[0].item, "A year of uptime");
+        assert_eq!(payments[0].amount_minor_units, 1_200);
+        assert_eq!(payments[0].currency, "USD");
+        assert_eq!(payments[0].user_id, *context.user_id().expect("a member"));
+
+        // The spend is now month to date, and the limit sees it.
+        let limit = boma_app::usecases::spending_limit_get(test.app(), &context)
+            .await
+            .expect("the limit answers");
+        assert_eq!(limit.spent_minor_units, 1_200);
+    }
+
+    #[tokio::test]
+    async fn req_018_refusing_the_card_records_no_payment() {
+        let (test, context, created, thread_id, run_id) = purchase_world().await;
+        approve_purchase(
+            &test,
+            &context,
+            PurchaseSite {
+                run: &run_id,
+                bot: &created.bot.id,
+                thread: &thread_id,
+                call: "call_m8_refused",
+            },
+            serde_json::json!({
+                "item": "A year of uptime",
+                "amountMinorUnits": 1_200,
+                "currency": "USD",
+            }),
+            "reject",
+        )
+        .await;
+        assert_eq!(test.database().billing().payments(&context).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn req_018_the_cap_refuses_a_request_over_what_remains_with_a_visible_reason() {
+        let (test, context, created, _, _) = purchase_world().await;
+        boma_app::usecases::spending_limit_set(test.app(), &context, true, "USD", 1_000)
+            .await
+            .expect("the limit is set");
+        let refused = boma_app::usecases::dispatch_tool(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            &boma_app::ports::ToolCallRequest {
+                id: "call_m8_over".to_owned(),
+                name: "purchase.request".to_owned(),
+                arguments: serde_json::json!({
+                    "item": "A big machine",
+                    "amountMinorUnits": 100_001,
+                    "currency": "USD",
+                }),
+            },
+        )
+        .await
+        .expect("the dispatch answers");
+        assert!(!refused.ok, "the cap refuses the call");
+        assert_eq!(
+            refused
+                .body
+                .get("limitReached")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        let refusal_text = refused
+            .body
+            .get("error")
+            .and_then(serde_json::Value::as_str);
+        assert!(refusal_text.is_some_and(|text| text.contains("spending limit")));
+        assert_eq!(test.database().billing().payments(&context).len(), 0);
+    }
+
+    #[tokio::test]
+    async fn req_018_a_request_inside_the_cap_parks_for_approval() {
+        let (test, context, created, _, _) = purchase_world().await;
+        boma_app::usecases::spending_limit_set(test.app(), &context, true, "USD", 1_000)
+            .await
+            .expect("the limit is set");
+        let allowed = boma_app::usecases::dispatch_tool(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            &boma_app::ports::ToolCallRequest {
+                id: "call_m8_inside".to_owned(),
+                name: "purchase.request".to_owned(),
+                arguments: serde_json::json!({
+                    "item": "A small machine",
+                    "amountMinorUnits": 999,
+                    "currency": "USD",
+                }),
+            },
+        )
+        .await
+        .expect("the dispatch answers");
+        assert!(allowed.ok);
+        assert_eq!(
+            allowed
+                .body
+                .get("approval")
+                .and_then(serde_json::Value::as_str),
+            Some("required")
+        );
+    }
+
+    #[tokio::test]
+    async fn req_018_an_approved_purchase_rechecks_the_cap_and_refuses_what_no_longer_fits() {
+        let (test, context, created, thread_id, run_id) = purchase_world().await;
+        boma_app::usecases::spending_limit_set(test.app(), &context, true, "USD", 1_000)
+            .await
+            .expect("the limit is set");
+        // Another purchase spends the room between the call and the approval.
+        test.database()
+            .billing()
+            .record_payment(
+                &context,
+                boma_app::ports::NewPurchasePayment {
+                    id: "pay_m8_other".to_owned(),
+                    user_id: context.user_id().expect("a member").clone(),
+                    card_id: None,
+                    item: "Something else".to_owned(),
+                    amount_minor_units: 1_000,
+                    currency: "USD".to_owned(),
+                    created_at: "2026-01-01T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the payment is recorded");
+        approve_purchase(
+            &test,
+            &context,
+            PurchaseSite {
+                run: &run_id,
+                bot: &created.bot.id,
+                thread: &thread_id,
+                call: "call_m8_recheck",
+            },
+            serde_json::json!({
+                "item": "A small machine",
+                "amountMinorUnits": 999,
+                "currency": "USD",
+            }),
+            "approve",
+        )
+        .await;
+        assert_eq!(
+            test.database().billing().payments(&context).len(),
+            1,
+            "only the earlier payment exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_051_a_space_is_free_by_default_and_billing_reports_it() {
+        let (test, context, _) = world(true).await;
+        let status = boma_app::usecases::billing_status(test.app(), &context)
+            .await
+            .expect("the status answers");
+        assert_eq!(status.plan, "free");
+        assert_eq!(status.status, "active");
+        assert_eq!(status.credits_minor_units, 0);
+        assert!(status.checkout_allowed, "a provider is configured");
+    }
+
+    #[tokio::test]
+    async fn req_051_a_checkout_opens_for_the_pro_plan_only() {
+        let (test, context, provider) = world(true).await;
+        let checkout = boma_app::usecases::billing_checkout(test.app(), &context, "pro")
+            .await
+            .expect("the checkout opens");
+        assert_eq!(checkout.url, "https://checkout.example.com/scripted");
+        assert_eq!(checkout.provider_ref, "cs_scripted");
+        let calls = provider.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].2, "pro");
+        boma_app::usecases::billing_checkout(test.app(), &context, "enterprise")
+            .await
+            .expect_err("only pro is sold");
+    }
+
+    #[tokio::test]
+    async fn req_051_a_checkout_without_a_provider_is_refused_clearly() {
+        let (test, context, _) = world(false).await;
+        let error = boma_app::usecases::billing_checkout(test.app(), &context, "pro")
+            .await
+            .expect_err("no provider is configured");
+        assert!(error.to_string().contains("not configured"));
+    }
+
+    /// Signs one webhook body the way Stripe does.
+    fn signed(body: &[u8], timestamp: &str) -> String {
+        use hmac::{Hmac, KeyInit, Mac};
+        let mut mac =
+            Hmac::<sha2::Sha256>::new_from_slice(WEBHOOK_SECRET.as_bytes()).expect("any length");
+        mac.update(timestamp.as_bytes());
+        mac.update(b".");
+        mac.update(body);
+        let digest = mac.finalize().into_bytes();
+        let digest = digest.iter().fold(String::new(), |mut acc, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        });
+        format!("t={timestamp},v1={digest}")
+    }
+
+    #[tokio::test]
+    async fn req_051_a_verified_checkout_webhook_activates_the_subscription_and_seeds_credits() {
+        let (test, context, _) = world(true).await;
+        let space_id = context
+            .space_id()
+            .expect("a member context")
+            .as_str()
+            .to_owned();
+        // The clock is 2026-01-01T00:00:00Z.
+        let timestamp = boma_app::usecases::unix_seconds("2026-01-01T00:00:00Z").to_string();
+        let body = serde_json::json!({
+            "type": "checkout.session.completed",
+            "data": { "object": {
+                "id": "cs_live_1",
+                "subscription": "sub_live_1",
+                "client_reference_id": space_id,
+                "metadata": { "space_id": space_id, "plan": "pro" },
+            }},
+        })
+        .to_string();
+        let signature = signed(body.as_bytes(), &timestamp);
+        let outcome = boma_app::usecases::billing_webhook(
+            test.app(),
+            &signature,
+            &timestamp,
+            body.as_bytes(),
+        )
+        .await
+        .expect("the signature verifies");
+        assert!(outcome.activated);
+        assert_eq!(outcome.plan.as_deref(), Some("pro"));
+
+        let status = boma_app::usecases::billing_status(test.app(), &context)
+            .await
+            .expect("the status answers");
+        assert_eq!(status.plan, "pro");
+        assert_eq!(status.status, "active");
+        assert_eq!(
+            status.credits_minor_units,
+            boma_app::usecases::PRO_SEEDED_CREDITS_MINOR
+        );
+    }
+
+    #[tokio::test]
+    async fn req_051_a_wrong_signature_a_stale_timestamp_or_an_unknown_event_changes_nothing() {
+        let (test, context, _) = world(true).await;
+        let space_id = context
+            .space_id()
+            .expect("a member context")
+            .as_str()
+            .to_owned();
+        let timestamp = boma_app::usecases::unix_seconds("2026-01-01T00:00:00Z").to_string();
+        let body = serde_json::json!({
+            "type": "checkout.session.completed",
+            "data": { "object": { "id": "cs_live_1", "client_reference_id": space_id } },
+        })
+        .to_string();
+        boma_app::usecases::billing_webhook(
+            test.app(),
+            "t=1,v1=deadbeef",
+            &timestamp,
+            body.as_bytes(),
+        )
+        .await
+        .expect_err("a wrong signature is refused");
+        // A stale but correct signature is refused too.
+        let stale = signed(body.as_bytes(), "1799999700");
+        boma_app::usecases::billing_webhook(test.app(), &stale, "1799999700", body.as_bytes())
+            .await
+            .expect_err("a stale signature is refused");
+        let status = boma_app::usecases::billing_status(test.app(), &context)
+            .await
+            .expect("the status answers");
+        assert_eq!(status.plan, "free");
+
+        // A verified event this product does not act on is acknowledged and ignored.
+        let other = serde_json::json!({ "type": "customer.created" }).to_string();
+        let signature = signed(other.as_bytes(), &timestamp);
+        let outcome = boma_app::usecases::billing_webhook(
+            test.app(),
+            &signature,
+            &timestamp,
+            other.as_bytes(),
+        )
+        .await
+        .expect("the event is acknowledged");
+        assert!(!outcome.activated);
+        assert_eq!(
+            boma_app::usecases::billing_status(test.app(), &context)
+                .await
+                .expect("the status answers")
+                .plan,
+            "free"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_051_on_a_billing_deployment_the_free_plan_cannot_purchase() {
+        let (test, context, _) = world(true).await;
+        let created = boma_app::usecases::create_bot(test.app(), &context, "Shopper", None, None)
+            .await
+            .expect("the bot is created");
+        let refused = boma_app::usecases::dispatch_tool(
+            test.app(),
+            &context,
+            created.bot.id.as_str(),
+            &boma_app::ports::ToolCallRequest {
+                id: "call_m8_free_plan".to_owned(),
+                name: "purchase.request".to_owned(),
+                arguments: serde_json::json!({
+                    "item": "A small machine",
+                    "amountMinorUnits": 10,
+                    "currency": "USD",
+                }),
+            },
+        )
+        .await
+        .expect("the dispatch answers");
+        assert!(!refused.ok);
+        assert_eq!(
+            refused
+                .body
+                .get("upgradeRequired")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
     }
 }

@@ -2,18 +2,18 @@
 
 ## Current milestone
 
-**Before-M5 — complete.** All three phases landed and pushed (`d9762a4` [P1],
-`7ebd427`+`1a19a24` [P2], `38e886a` [P3, BYOK]). Migration 0024 fixed the shared-memory FK
-defect end to end (`9dca0cc`). 258 tests green at every push.
+**M8 — complete.** Three slices committed and pushed (REQ-018, REQ-051, REQ-052); CI watched to
+green at every push. ADR-023 records the decisions and the deviations from ADR-012.
 
 **M-completed plan (in order, nothing skipped, nothing started early).**
 - M5 — Integrations: REQ-032 (connector catalogue + per-space installs), REQ-033 (MCP remote +
   opt-in stdio), REQ-034 (plugins, no-local-code), REQ-035 (skills, SHOULD), REQ-046 (write-only
   secrets), plus deferred defects D-05 (MCP private endpoints, per-space allow-list + audit event),
-  D-06 (plugin submissions require an account + shared counter).
-- M6 — Artifacts, pages, board: REQ-036/037/038/039 + D-03 (magic-byte sniff).
-- M7 — Channels: REQ-047 (inbound mail), REQ-048 (messaging), REQ-050 (bot webhooks).
-- M8 — Money and models: REQ-018 (caps + purchase card), REQ-051 (billing credits), REQ-052 (model catalogue).
+  D-06 (plugin submissions require an account + shared counter). **Complete.**
+- M6 — Artifacts, pages, board: REQ-036/037/038/039 + D-03 (magic-byte sniff). **Complete.**
+- M7 — Channels: REQ-047 (inbound mail), REQ-048 (messaging), REQ-050 (bot webhooks). **Complete.**
+- M8 — Money and models: REQ-018 (caps + purchase card), REQ-051 (billing credits), REQ-052 (model
+  catalogue). **Complete.**
 - M9 — Operate: REQ-044 (export/import/delete), REQ-045 (audit JSONL, security events, SCIM),
   REQ-054 (structured logs + metrics + CSP reports), REQ-058 (admin surfaces).
 - M10 — UI complete + desktop: REQ-055 (all screens from `spec/08-ui-ux.md`, 7 UI goldens, axe,
@@ -25,6 +25,61 @@ REQ-010 (group chats) and REQ-011 (activity view) arrive with M11 alongside thei
 as written in `docs/PLAN.md`. Deferred REQ-049 (COULD) and REQ-056 (mobile) stay out, recorded.
 Every milestone ships test-first at the API/use-case level, then PG/functional proof, then docs +
 STATE; gates re-run at each push (fmt, clippy -D warnings, cargo test workspace).
+
+**M8 — complete. Committed in this revision (one commit carrying the three requirements);
+REQ-049 stays deferred by its COULD classification. ADR-023 records the decisions and the
+deviations from ADR-012.** Answers the owner's M8 go ("go", "continu").
+
+1. **REQ-052 (model catalogue and credentials, MUST) — PARTIAL by decision (ADR-023).** Done:
+   `models.catalog` (the golden's four fields: id, name, contextWindow, roles; derived from the
+   deployment's `DeploymentModels::reachable`, declaration order; indicative price table; unknown
+   keys listed, never dropped); `models.connect` / `models.disconnect` (live validation against the
+   provider — OpenAI/OpenRouter Bearer, Anthropic `x-api-key`, Ollama unauthenticated; a refusal
+   answers `400` with the provider's own words; the key is sealed under the space DEK and is never
+   readable again; unknown providers are refused without a network call); `models.credentials`
+   (connected + provider + when; never the key); `models.preferences.get|set` (per-person, applied
+   to runs the person starts, not a pin; an unreachable key is refused visibly, clearing returns to
+   the deployment default).
+   **Named gaps, not done in M8, by ADR-023:** the OAuth leg of REQ-052 ("OAuth logins for providers
+   that offer them"), account-level credit metering (runs do not debit credits; the pro balance
+   shown by `billing.status` is a seeded number), and pricing certainty (the catalogue's prices are
+   indicative for the spend gate, never an invoice). The `models-catalog` golden stays `pending`
+   with the reason recorded in `golden-status.json`.
+2. **REQ-018 (spending limits and purchase requests, MUST).** `purchase.request` is a
+   `Spend`-class builtin tool; the cap is enforced in the dispatch path, in the model's own turn,
+   with a visible reason (`limitReached: true`) and again at approval (time and balance may have
+   moved). A free-plan space on a billing deployment is refused with `upgradeRequired: true`. The
+   approval card is the purchase; the payment row exists only after approval; rejecting is a no-op
+   for the ledger. `billing.limit.get|set` round-trips the month cap (ISO currency normalized);
+  `billing.limit.get` reports the month-to-date spend from `purchase_payments`. Tests: refusal over
+   remaining room, approval-after-spend re-check, exactly-once payment, free-plan refusal.
+3. **REQ-051 (billing, credits and plan limits, SHOULD).** `BOMA_BILLING=true` makes the surface
+   exist: `billing.status` (plan, status, credits, renewal, whether checkout is possible),
+   `billing.checkout` (a Stripe Checkout session for the `pro` plan only; `pro` signed and
+   verified web-hook: `POST /api/v1/billing/webhook`, HMAC-SHA256 `t=,v1=`, ±300 s, 64 KiB cap,
+   uniform 404 on every failure — configured-but-wrong, unconfigured, stale, free host — unknown
+   events acknowledged and ignored). A verified `checkout.session.completed` activates the space's
+   subscription to `pro`/`active` and seeds `PRO_SEEDED_CREDITS_MINOR = 25_000` (illustrative
+   $250; amounts are the operator's to set when real billing exists — ADR-023). `/ready` reports
+   `billing: <provider>` or `"unconfigured"` only when billing is on; off, it reports nothing and
+   every billing route, namespace and webhook is uniformly absent (404).
+   **Deviations from ADR-012's first draft (ADR-023):** no append-only credit ledger — the
+   payment table is append-only; the balance is a mutable column;
+   feature gating exists only for purchases; manual credit grants are not implemented. Stripe keys
+   are all-or-nothing (`BOMA_BILLING_PROVIDER`, `BOMA_BILLING_STRIPE_SECRET`,
+   `BOMA_BILLING_STRIPE_PRICE_PRO`, `BOMA_BILLING_WEBHOOK_SECRET` together or not at all —
+   a half-configured deployment refuses to boot).
+
+**Evidence:** migrations `0043_models.sql` (model_credentials, user_model_preferences) and
+`0044_money.sql` (space_spending_limits, purchase_payments, subscriptions; RLS everywhere);
+unit model+billing suites in `crates/domain/src`, `crates/testkit/src/build.rs` (20 tests);
+RPC surface in `crates/api/tests/rpc_surface.rs` (6 tests); the sealed credential and the
+cross-space denial of payments/subscriptions are proved against the unprivileged probe role in
+`crates/infra/tests/m1.rs::req_018_051_052_credentials_limits_payments_and_subscriptions_stay_in_their_space`.
+
+**Before-M5 — complete.** All three phases landed and pushed (`d9762a4` [P1],
+`7ebd427`+`1a19a24` [P2], `38e886a` [P3, BYOK]). Migration 0024 fixed the shared-memory FK
+defect end to end (`9dca0cc`). 258 tests green at every push.
 
 **M5 — in flight. Five slices committed: REQ-046 (secrets, `835d8e7`), REQ-034 slice 1
 (plugin submissions, `bc03d1e`), REQ-035 (skills, `d56f248`), REQ-033 (MCP servers, `494d194` +
@@ -967,6 +1022,7 @@ recommendation stands.
 | DEC-08 | Computer providers | Docker supervisor + desktop host | 009 |
 | DEC-09 | Billing scope | Limits native, provider behind a port | 012 |
 | DEC-10 | Secrets encryption | Envelope, rotatable master key | 008 |
+| DEC-17 | REQ-052's credit-metering leg (runs debit the seeded pro balance) and its OAuth per-provider login leg; REQ-051's feature gating beyond purchases. Land them now, at M11 hardening (with a proposal), or never in v1? | M11, with a proposal; never silently | 023 |
 | DEC-11 | Locales at v1 | en + fr + he | 014 |
 | DEC-12 | Asset reuse | Nothing visual reused | 015 |
 | DEC-13 | Keep RPC procedure names | Yes, for the documented ones | 003 |

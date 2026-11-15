@@ -105,7 +105,12 @@ fn app_with_scripts(
             Arc::new(PostgresMemoryStore::new(pool.clone())),
             Arc::new(PostgresRoutineStore::new(pool.clone())),
             Arc::new(PostgresComputerStore::new(pool.clone())),
-            Arc::new(PostgresScreenCapabilityStore::new(pool)),
+            Arc::new(PostgresScreenCapabilityStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresModelStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
         ),
         boma_app::Services::new(
             publisher,
@@ -131,6 +136,7 @@ fn app_with_scripts(
                 .expect("the artifact root"),
             ),
             Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
+            Arc::new(boma_testkit::ScriptedModelTransport::new()),
         ),
     )
 }
@@ -2320,7 +2326,12 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                 Arc::new(PostgresMemoryStore::new(pool.clone())),
                 Arc::new(PostgresRoutineStore::new(pool.clone())),
                 Arc::new(PostgresComputerStore::new(pool.clone())),
-                Arc::new(PostgresScreenCapabilityStore::new(pool)),
+                Arc::new(PostgresScreenCapabilityStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresModelStore::new(
+                    pool.clone(),
+                    boma_infra::SecretBox::ephemeral(),
+                )),
+                Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
             ),
             boma_app::Services::new(
                 publisher,
@@ -2340,6 +2351,7 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                         .expect("the artifact root"),
                 ),
                 Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
+                Arc::new(boma_testkit::ScriptedModelTransport::new()),
             ),
         )
     };
@@ -2848,6 +2860,11 @@ async fn req_048_a_messaging_install_and_ingress_round_trip_through_postgres() {
             Arc::new(PostgresRoutineStore::new(pool.clone())),
             Arc::new(PostgresComputerStore::new(pool.clone())),
             Arc::new(PostgresScreenCapabilityStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresModelStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
         ),
         boma_app::Services::new(
             publisher,
@@ -2867,6 +2884,7 @@ async fn req_048_a_messaging_install_and_ingress_round_trip_through_postgres() {
                     .expect("the artifact root"),
             ),
             Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
+            Arc::new(boma_testkit::ScriptedModelTransport::new()),
         )
         .with_messaging(true),
     );
@@ -3019,4 +3037,204 @@ async fn req_048_a_messaging_install_and_ingress_round_trip_through_postgres() {
         .await
         .expect("rows removed");
     common::cleanup(&pool, "msg4801").await;
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // the probe walks every money surface in one narrative
+async fn req_018_051_052_credentials_limits_payments_and_subscriptions_stay_in_their_space() {
+    let fresh = common::fresh_database().await;
+    let pool = fresh.database.pool().clone();
+    let fixture = common::fixture(&pool, "mny5201").await;
+    let other = common::fixture(&pool, "mny5202").await;
+    let context = fixture.context.clone();
+    let other_space = other.context.clone();
+    // The tenant pool acts as the unprivileged role: the row level security applies to it.
+    let tenant = common::tenant_pool(&fresh.database).await;
+    let models =
+        boma_infra::PostgresModelStore::new(tenant.clone(), boma_infra::SecretBox::ephemeral());
+    let billing = boma_infra::PostgresBillingStore::new(tenant);
+
+    // A credential is sealed under the space key: the row holds ciphertext, never the key.
+    models
+        .put_credential(
+            &context,
+            NewModelCredential {
+                provider: "anthropic".to_owned(),
+                api_key: secrecy::SecretString::from("sk-ant-pg-secret-value"),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the credential is sealed");
+    let (ciphertext, nonce): (Vec<u8>, Vec<u8>) = sqlx::query_as(
+        "SELECT ciphertext, nonce FROM model_credentials WHERE space_id = $1 AND provider = $2",
+    )
+    .bind(fixture.space_id.as_str())
+    .bind("anthropic")
+    .fetch_one(&pool)
+    .await
+    .expect("the credential row answers");
+    assert!(
+        !ciphertext
+            .windows(b"sk-ant-pg-secret-value".len())
+            .any(|window| window == b"sk-ant-pg-secret-value"),
+        "the key is never stored in the clear"
+    );
+    assert!(!nonce.is_empty(), "a sealed value carries its nonce");
+
+    // The owning space sees it; another space neither lists nor forgets it.
+    assert!(
+        models
+            .has_credential(&context, "anthropic")
+            .await
+            .expect("the check answers")
+    );
+    assert!(
+        !models
+            .has_credential(&other_space, "anthropic")
+            .await
+            .expect("the check answers"),
+        "the other space does not see the credential"
+    );
+    assert_eq!(
+        models
+            .list_credentials(&other_space)
+            .await
+            .expect("the list answers")
+            .len(),
+        0
+    );
+    assert!(
+        !models
+            .forget_credential(&other_space, "anthropic")
+            .await
+            .expect("the removal answers"),
+        "the other space cannot forget a row it cannot see"
+    );
+    assert_eq!(
+        models
+            .list_credentials(&context)
+            .await
+            .expect("the list answers")
+            .len(),
+        1
+    );
+
+    // The preference belongs to the person, not to one space: a second membership reuses it.
+    sqlx::query(
+        "INSERT INTO space_members (space_id, user_id, role, created_at)
+         VALUES ($1, $2, 'member', $3::timestamptz)",
+    )
+    .bind(other.space_id.as_str())
+    .bind(fixture.user_id.as_str())
+    .bind("2026-01-01T00:00:00Z")
+    .execute(&pool)
+    .await
+    .expect("the person joins the other space");
+    let same_person_elsewhere = TenantContext::Member {
+        space_id: other.space_id.clone(),
+        user_id: fixture.user_id.clone(),
+    };
+    models
+        .set_preference(&context, Some("openai/gpt-5"))
+        .await
+        .expect("the preference is stored");
+    assert_eq!(
+        models
+            .preference(&same_person_elsewhere)
+            .await
+            .expect("the preference answers"),
+        Some("openai/gpt-5".to_owned())
+    );
+    assert_eq!(
+        models
+            .preference(&other_space)
+            .await
+            .expect("another person has no preference"),
+        None
+    );
+
+    // The limit and the payments are the space's alone.
+    billing
+        .set_limit(&context, true, "USD", 5_000)
+        .await
+        .expect("the limit is stored");
+    let other_limit = billing
+        .limit(&other_space)
+        .await
+        .expect("the limit answers");
+    assert!(!other_limit.enabled, "the other space keeps the default");
+    assert_eq!(
+        billing
+            .remaining_allowance(&context, "2026-01")
+            .await
+            .expect("the allowance answers"),
+        Some(5_000)
+    );
+    billing
+        .record_payment(
+            &context,
+            NewPurchasePayment {
+                id: "mny5201pay".to_owned(),
+                user_id: fixture.user_id.clone(),
+                card_id: None,
+                item: "A year of uptime".to_owned(),
+                amount_minor_units: 1_200,
+                currency: "USD".to_owned(),
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the payment is recorded");
+    assert_eq!(
+        billing
+            .spent_in_month(&context, "2026-01")
+            .await
+            .expect("the spend answers"),
+        1_200
+    );
+    assert_eq!(
+        billing
+            .spent_in_month(&other_space, "2026-01")
+            .await
+            .expect("the other spend answers"),
+        0,
+        "the payment belongs to one space"
+    );
+
+    // A verified subscription is one space's, and the other stays free.
+    let system = TenantContext::System {
+        reason: boma_domain::SystemReason::WebhookDelivery,
+        user_id: None,
+    };
+    billing
+        .activate_subscription(
+            &system,
+            NewSubscription {
+                space_id: fixture.space_id.as_str().to_owned(),
+                plan: "pro".to_owned(),
+                status: "active".to_owned(),
+                provider_ref: Some("sub_pg_1".to_owned()),
+                credits_minor_units: 25_000,
+                current_period_end: None,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .await
+        .expect("the subscription is written");
+    let own = billing
+        .subscription(&context)
+        .await
+        .expect("the subscription answers");
+    assert_eq!(own.plan, "pro");
+    assert_eq!(own.credits_minor_units, 25_000);
+    let others = billing
+        .subscription(&other_space)
+        .await
+        .expect("the other subscription answers");
+    assert_eq!(others.plan, "free");
+    assert_eq!(others.credits_minor_units, 0);
+
+    common::cleanup(&pool, "mny5201").await;
+    common::cleanup(&pool, "mny5202").await;
 }

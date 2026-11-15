@@ -12,8 +12,10 @@
 pub mod account;
 pub mod artifact;
 pub mod audit;
+pub mod billing;
 pub mod bot;
 pub mod card;
+pub mod catalog;
 pub mod computer;
 pub mod connector;
 pub mod error;
@@ -40,10 +42,17 @@ pub use artifact::{
     validate_artifact_name,
 };
 pub use audit::AuditKind;
+pub use billing::{
+    StripeSignature, WEBHOOK_MAX_SKEW_SECONDS, parse_stripe_signature, verify_stripe_signature,
+};
 pub use bot::Bot;
 pub use card::{
     Card, CardId, CardKind, CardStatus, ExternalEffect, PendingToolCallStatus, ToolEffect,
     ToolKind, ToolSpec,
+};
+pub use catalog::{
+    CatalogModel, CatalogProvider, CredentialShape, ModelPrice, ProviderEndpoint, catalogue_for,
+    price_of, provider_endpoint, provider_name,
 };
 pub use computer::{
     Computer, ComputerId, ComputerStatus, MAX_CPU_LIMIT, MAX_IDLE_MINUTES, MAX_MEMORY_LIMIT_MB,

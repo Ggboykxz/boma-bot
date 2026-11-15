@@ -7,15 +7,16 @@ use boma_api::{AppState, router};
 use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountStore,
-    PostgresArtifactStore, PostgresAuditStore, PostgresBotStore, PostgresCardStore,
-    PostgresComputerStore, PostgresConnectorStore, PostgresEffectStore, PostgresEventStore,
-    PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore, PostgresMemoryStore,
-    PostgresMessageStore, PostgresMessagingStore, PostgresPageStore, PostgresPendingToolCallStore,
-    PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
-    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
-    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
-    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore,
-    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresArtifactStore, PostgresAuditStore, PostgresBillingStore, PostgresBotStore,
+    PostgresCardStore, PostgresComputerStore, PostgresConnectorStore, PostgresEffectStore,
+    PostgresEventStore, PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore,
+    PostgresMemoryStore, PostgresMessageStore, PostgresMessagingStore, PostgresModelStore,
+    PostgresPageStore, PostgresPendingToolCallStore, PostgresPluginInstallStore,
+    PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
+    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
+    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSkillStore,
+    PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore, PostgresToolStore,
+    PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -56,6 +57,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
         config.capabilities.messaging,
         config.slack.clone(),
         config.public_base_url.clone(),
+        config.billing.enabled,
+        config.billing.provider(),
+        config.billing.webhook_secret.clone(),
     )?;
     let state = AppState::new(
         readiness,
@@ -101,6 +105,9 @@ fn build_app(
     config_messaging: bool,
     config_slack: Option<boma_app::ports::SlackAppConfig>,
     config_public_base_url: String,
+    config_billing: bool,
+    config_billing_provider: Option<std::sync::Arc<dyn boma_app::ports::BillingProvider>>,
+    config_billing_webhook_secret: Option<String>,
 ) -> anyhow::Result<App> {
     let pool = database.pool().clone();
     let publisher = Arc::new(BroadcastPublisher::default());
@@ -133,6 +140,9 @@ fn build_app(
         boma_infra::HttpMessagingTransport::new()
             .context("the messaging transport could not be built")?,
     );
+    let model_transport = Arc::new(
+        boma_infra::HttpModelTransport::new().context("the model transport could not be built")?,
+    );
     Ok(App::new(
         Stores::new(
             Arc::new(PostgresAccountStore::new(pool.clone())),
@@ -162,13 +172,16 @@ fn build_app(
             Arc::new(PostgresTicketStore::new(pool.clone())),
             Arc::new(PostgresMailStore::new(pool.clone())),
             Arc::new(PostgresMessagingStore::new(pool.clone(), secrets_vault()?)),
+            // REQ-052 / REQ-018 / REQ-051: the money spine, sealed like a secret.
             Arc::new(PostgresReactionStore::new(pool.clone())),
             Arc::new(PostgresReadStateStore::new(pool.clone())),
             Arc::new(PostgresRosterStore::new(pool.clone())),
             Arc::new(PostgresMemoryStore::new(pool.clone())),
             Arc::new(PostgresRoutineStore::new(pool.clone())),
             Arc::new(PostgresComputerStore::new(pool.clone())),
-            Arc::new(PostgresScreenCapabilityStore::new(pool)),
+            Arc::new(PostgresScreenCapabilityStore::new(pool.clone())),
+            Arc::new(PostgresModelStore::new(pool.clone(), secrets_vault()?)),
+            Arc::new(PostgresBillingStore::new(pool.clone())),
         ),
         {
             let services = Services::new(
@@ -189,6 +202,7 @@ fn build_app(
                 oauth_client,
                 artifact_content,
                 messaging_transport,
+                model_transport,
             )
             .with_connectors(connector_runner)
             .with_stdio_commands(stdio_allowed)
@@ -196,7 +210,12 @@ fn build_app(
             .with_email_inbound(config_email_inbound)
             .with_messaging(config_messaging)
             .with_slack(config_slack)
-            .with_public_base_url(config_public_base_url);
+            .with_public_base_url(config_public_base_url)
+            .with_billing(
+                config_billing,
+                config_billing_provider,
+                config_billing_webhook_secret.map(secrecy::SecretString::from),
+            );
             match computer {
                 Some(runtime) => services.with_computers(runtime),
                 None => services,
@@ -233,6 +252,9 @@ pub async fn worker(config: Config) -> anyhow::Result<()> {
         config.capabilities.messaging,
         config.slack.clone(),
         config.public_base_url.clone(),
+        config.billing.enabled,
+        config.billing.provider(),
+        config.billing.webhook_secret.clone(),
     )?);
     let dispatcher_app = Arc::clone(&app);
     // The BYOK provider, when the deployment is configured with one (REQ-015);

@@ -1,6 +1,7 @@
-# ADR-012 — Billing scope for v1: interfaces and plan limits, payment provider behind a port, deferred
+# ADR-012 — Billing scope for v1: spending limits native, payment provider behind a port
 
-Status: proposed (awaiting owner go) — this is DEC-09
+Status: accepted (2026-11-15 — REQ-018/051/052 milestone M8 opened with the owner's go). The shape
+is settled in ADR-023; this records the scope choice.
 
 ## Context
 
@@ -30,17 +31,24 @@ spend freely; the payment provider integration itself is SHOULD. There is no cus
 
 ## Decision
 
-Option 1. Money is integer minor units everywhere; credits are micros; every ledger table is
-append-only with a balance projection. `SpendingLimit` is enforced before a paid tool call, and an
-over-cap request produces the purchase card from REQ-018. The `PaymentProvider` port has `checkout`,
-`subscription_status` and `verify_webhook`; the default implementation returns
-`billing_unavailable`, which `/readyz` reports so the UI hides paid plans instead of failing at
-checkout.
+Option 1. Money is integer minor units everywhere; credits are an amount in minor units.
+`SpendingLimit` is enforced before a paid purchase call, and an over-limit request produces the
+REQ-018 card from the model's own turn; the cap is enforced a second time at approval. The
+`BillingProvider` port has `create_checkout` behind it; a deployment that does not configure one
+reports no billing capability, the whole billing surface is 404 and the product runs fully on the
+free plan. As built in ADR-023: Stripe is the wired provider (`BOMA_BILLING_PROVIDER=stripe`),
+the webhook proves itself by HMAC-SHA256, and credits seed on verified checkout. The `PaymentProvider`
+name in this ADR is the same port, renamed when it was written down in code.
 
 ## Consequences
 
-- No card data, no PCI surface, no live keys in the first release.
-- The webhook endpoint still exists and is specified (512 KiB cap, signature verification,
-  idempotent per event id) so turning on a provider is configuration plus an adapter.
-- Credits can be granted manually (operator/admin procedure) for early users without pretending the
-  billing loop is complete.
+- No card data, no PCI surface and no TLS peer beyond the deployment's own provider endpoint in
+  the default build.
+- The webhook endpoint exists and is specified exactly once: `POST /api/v1/billing/webhook`,
+  64 KiB cap, HMAC-SHA256 signature verification, ±300 s clock window, uniform 404 on every
+  failure (ADR-023). Unknown events are acknowledged and ignored.
+- Credits are visibly seeded by a verified checkout (`PRO_SEEDED_CREDITS_MINOR`, illustrative) so
+  the paid plan's value is observable; consumed usage and a ledger are a proposal, not this ADR.
+- Several items in this ADR's Decision are deliberately narrowed in ADR-023 (the "append-only
+  ledger" is `purchase_payments` + the mutable credit balance; feature gating lands only for
+  purchases; `/readyz` reports the billing capability only when configured).

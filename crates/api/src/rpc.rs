@@ -15,7 +15,7 @@ use axum::{
     routing::post,
 };
 use base64::Engine as _;
-use boma_app::usecases;
+use boma_app::{AppError, usecases};
 use boma_domain::SpaceRole;
 use serde::Deserialize;
 
@@ -26,7 +26,8 @@ use crate::{
     wire::{
         AnswerReply, ArtifactCreateReply, ArtifactGetReply, ArtifactListSpaceReply,
         ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply, ArtifactView,
-        BoardsGetReply, BotReply, BotsListReply, CancelReply, ComputerOpenScreenReply,
+        BillingCheckoutReply, BillingStatusReply, BoardsGetReply, BotReply, BotsListReply,
+        CancelReply, CatalogModelView, CatalogProviderView, ComputerOpenScreenReply,
         ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
         ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
         ConnectionsRemoveReply, ConnectorView, ConversationView, ConversationsReply, HeldDropReply,
@@ -36,12 +37,13 @@ use crate::{
         McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
         MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
         MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
-        PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
-        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
-        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
-        SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply, SkillView, SkillsReply,
-        SnoozeReply, SpaceReply, TeachSkillReply, ThreadHeadReply, TicketCommentReply,
-        TicketCommentView, TicketReply, TicketView,
+        ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
+        ModelsCatalogReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
+        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
+        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
+        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SendReply, SkillReply,
+        SkillView, SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply,
+        ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -83,6 +85,11 @@ pub mod namespaces {
     pub const MAIL: &str = "mail";
     /// Messaging: the platform installations and their conversations (REQ-048).
     pub const MESSAGING: &str = "messaging";
+    /// Models: the catalogue, BYOK credentials and the person's preference (REQ-052).
+    pub const MODELS: &str = "models";
+    /// Billing: the plan, the checkout, the spending limit (REQ-018, REQ-051). Absent when the
+    /// deployment does not offer billing.
+    pub const BILLING: &str = "billing";
 }
 
 /// Every procedure this deployment serves.
@@ -169,6 +176,16 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::MESSAGING, "list"),
         (namespaces::MESSAGING, "remove"),
         (namespaces::MESSAGING, "conversations"),
+        (namespaces::MODELS, "catalog"),
+        (namespaces::MODELS, "credentials"),
+        (namespaces::MODELS, "connect"),
+        (namespaces::MODELS, "disconnect"),
+        (namespaces::MODELS, "preferences.get"),
+        (namespaces::MODELS, "preferences.set"),
+        (namespaces::BILLING, "status"),
+        (namespaces::BILLING, "checkout"),
+        (namespaces::BILLING, "limit.get"),
+        (namespaces::BILLING, "limit.set"),
     ]
 }
 
@@ -238,6 +255,10 @@ async fn rpc_inner(
     }
     // The messaging surface is absent unless the deployment enabled it (REQ-048): 404, not 403.
     if namespace.as_str() == namespaces::MESSAGING && !state.app().services.messaging_enabled {
+        return ApiError::not_found().into_response();
+    }
+    // So is the billing surface (REQ-051): a deployment without a payment provider sells nothing.
+    if namespace.as_str() == namespaces::BILLING && !state.app().services.billing_enabled {
         return ApiError::not_found().into_response();
     }
 
@@ -473,6 +494,36 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::MESSAGING, "conversations") => messaging_conversations(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MODELS, "catalog") => models_catalog(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MODELS, "credentials") => models_credentials(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MODELS, "connect") => models_connect(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MODELS, "disconnect") => models_disconnect(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MODELS, "preferences.get") => models_preferences_get(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MODELS, "preferences.set") => models_preferences_set(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BILLING, "status") => billing_status(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BILLING, "checkout") => billing_checkout(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BILLING, "limit.get") => billing_limit_get(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BILLING, "limit.set") => billing_limit_set(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -2871,5 +2922,248 @@ async fn messaging_conversations(
                 created_at: conversation.created_at,
             })
             .collect(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M8 — models (REQ-052)
+// ---------------------------------------------------------------------------
+
+/// `models.catalog` — what this deployment reaches, shaped exactly as the golden
+/// (`spec/golden/models-catalog.json`): providers, models, context windows, roles. No keys, no
+/// account identifiers: whether a provider is usable is `models.credentials` (REQ-052).
+async fn models_catalog(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<ModelsCatalogReply, ApiError> {
+    let catalog = usecases::models_catalog(state.app(), &auth.actor.context).await?;
+    Ok(ModelsCatalogReply {
+        providers: catalog
+            .providers
+            .iter()
+            .map(|provider| CatalogProviderView {
+                id: provider.id.clone(),
+                name: provider.name.clone(),
+                models: provider
+                    .models
+                    .iter()
+                    .map(|model| CatalogModelView {
+                        id: model.id.clone(),
+                        name: model.name.clone(),
+                        context_window: model.context_window,
+                        roles: model.roles.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    })
+}
+
+/// `models.credentials` — the providers this space connected (REQ-052).
+async fn models_credentials(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<ModelCredentialsReply, ApiError> {
+    let credentials = usecases::models_credentials(state.app(), &auth.actor.context).await?;
+    Ok(ModelCredentialsReply {
+        credentials: credentials
+            .into_iter()
+            .map(|credential| ModelCredentialView {
+                provider: credential.provider,
+                status: credential.status,
+                created_at: credential.created_at,
+            })
+            .collect(),
+    })
+}
+
+/// The body of `models.connect`. No `Debug`: the key must never reach a log line.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelsConnectRequest {
+    /// The provider to connect.
+    provider: String,
+    /// The key the member pasted from the provider's console.
+    api_key: String,
+}
+
+/// `models.connect` — validate a key live, then seal it for the space (REQ-052).
+///
+/// A provider that refuses the key answers `400` with the provider's own reason: the member just
+/// pasted it, so the reason is theirs to see, and nothing internal is added to it.
+async fn models_connect(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ModelConnectReply, ApiError> {
+    let request: ModelsConnectRequest = parse(&body)?;
+    if request.api_key.trim().is_empty() {
+        return Err(ApiError::explained(
+            "the provider key cannot be empty".to_owned(),
+        ));
+    }
+    match usecases::models_connect(
+        state.app(),
+        &auth.actor.context,
+        &request.provider,
+        secrecy::SecretString::from(request.api_key),
+    )
+    .await
+    {
+        Ok(outcome) => Ok(ModelConnectReply {
+            provider: outcome.provider,
+            connected: true,
+        }),
+        Err(AppError::Rule(error)) => Err(ApiError::explained(error.to_string())),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The body of `models.disconnect`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelsDisconnectRequest {
+    /// The provider to forget.
+    provider: String,
+}
+
+/// `models.disconnect` — forget one provider's key (REQ-052). Absent is a success.
+async fn models_disconnect(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ModelConnectReply, ApiError> {
+    let request: ModelsDisconnectRequest = parse(&body)?;
+    let removed =
+        usecases::models_disconnect(state.app(), &auth.actor.context, &request.provider).await?;
+    Ok(ModelConnectReply {
+        provider: request.provider.trim().to_ascii_lowercase(),
+        connected: !removed,
+    })
+}
+
+/// `models.preferences.get` — the person's standing model choice (REQ-052).
+async fn models_preferences_get(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<ModelPreferenceReply, ApiError> {
+    let model_key = usecases::models_preference(state.app(), &auth.actor.context).await?;
+    Ok(ModelPreferenceReply { model_key })
+}
+
+/// The body of `models.preferences.set`. A null clears the preference.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelsPreferenceRequest {
+    /// The model key to pin, or `null` to return to the deployment default.
+    model_key: Option<String>,
+}
+
+/// `models.preferences.set` — pin the model this person's runs execute on (REQ-052).
+async fn models_preferences_set(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ModelPreferenceReply, ApiError> {
+    let request: ModelsPreferenceRequest = parse(&body)?;
+    let model_key = usecases::models_set_preference(
+        state.app(),
+        &auth.actor.context,
+        request.model_key.as_deref(),
+    )
+    .await?;
+    Ok(ModelPreferenceReply { model_key })
+}
+
+// ---------------------------------------------------------------------------
+// M8 — billing (REQ-018, REQ-051)
+// ---------------------------------------------------------------------------
+
+/// `billing.status` — the plan, the credits, the renewal (REQ-051).
+async fn billing_status(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<BillingStatusReply, ApiError> {
+    let status = usecases::billing_status(state.app(), &auth.actor.context).await?;
+    Ok(BillingStatusReply {
+        plan: status.plan,
+        status: status.status,
+        credits_minor_units: status.credits_minor_units,
+        current_period_end: status.current_period_end,
+        checkout_allowed: status.checkout_allowed,
+    })
+}
+
+/// The body of `billing.checkout`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BillingCheckoutRequest {
+    /// The plan to buy.
+    plan: String,
+}
+
+/// `billing.checkout` — open a checkout session for one plan (REQ-051).
+async fn billing_checkout(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<BillingCheckoutReply, ApiError> {
+    let request: BillingCheckoutRequest = parse(&body)?;
+    let checkout =
+        usecases::billing_checkout(state.app(), &auth.actor.context, &request.plan).await?;
+    Ok(BillingCheckoutReply {
+        url: checkout.url,
+        provider_ref: checkout.provider_ref,
+    })
+}
+
+/// `billing.limit.get` — the cap and the month-to-date spend (REQ-018).
+async fn billing_limit_get(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<SpendingLimitReply, ApiError> {
+    let limit = usecases::spending_limit_get(state.app(), &auth.actor.context).await?;
+    Ok(SpendingLimitReply {
+        enabled: limit.enabled,
+        currency: limit.currency,
+        cap_minor_units: limit.cap_minor_units,
+        spent_minor_units: limit.spent_minor_units,
+        remaining_minor_units: limit.remaining_minor_units,
+    })
+}
+
+/// The body of `billing.limit.set`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BillingLimitRequest {
+    /// Whether the cap is enforced.
+    enabled: bool,
+    /// The ISO currency of the cap.
+    currency: String,
+    /// The cap in minor units of that currency.
+    cap_minor_units: i64,
+}
+
+/// `billing.limit.set` — create or replace the space's cap (REQ-018).
+async fn billing_limit_set(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<SpendingLimitReply, ApiError> {
+    let request: BillingLimitRequest = parse(&body)?;
+    let limit = usecases::spending_limit_set(
+        state.app(),
+        &auth.actor.context,
+        request.enabled,
+        &request.currency,
+        request.cap_minor_units,
+    )
+    .await?;
+    Ok(SpendingLimitReply {
+        enabled: limit.enabled,
+        currency: limit.currency,
+        cap_minor_units: limit.cap_minor_units,
+        spent_minor_units: limit.spent_minor_units,
+        remaining_minor_units: limit.remaining_minor_units,
     })
 }

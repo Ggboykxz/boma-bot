@@ -4,6 +4,8 @@
 //! message that is safe to show. Internal detail — a driver error, a stack trace, another tenant's
 //! id — never crosses this boundary.
 
+use std::borrow::Cow;
+
 use axum::{
     Json,
     http::{StatusCode, header},
@@ -64,7 +66,7 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiError {
     code: ErrorCode,
-    message: &'static str,
+    message: Cow<'static, str>,
     status: StatusCode,
 }
 
@@ -77,8 +79,22 @@ impl ApiError {
     pub const fn new(code: ErrorCode, message: &'static str) -> Self {
         Self {
             code,
-            message,
+            message: Cow::Borrowed(message),
             status: code.status(),
+        }
+    }
+
+    /// A `400` that explains itself in words this endpoint has checked.
+    ///
+    /// The fixed messages above are the rule; this constructor exists for the rare failure whose
+    /// reason is a *third party's* own words (a provider refusing a model key, REQ-052), already
+    /// bounded and never built from anything internal.
+    #[must_use]
+    pub fn explained(message: String) -> Self {
+        Self {
+            code: ErrorCode::BadRequest,
+            message: Cow::Owned(message),
+            status: StatusCode::BAD_REQUEST,
         }
     }
 
@@ -134,7 +150,7 @@ impl ApiError {
     pub const fn computers_unavailable() -> Self {
         Self {
             code: ErrorCode::ComputersUnavailable,
-            message: "Computers are not available in this deployment.",
+            message: Cow::Borrowed("Computers are not available in this deployment."),
             status: StatusCode::SERVICE_UNAVAILABLE,
         }
     }
@@ -148,7 +164,7 @@ impl ApiError {
     pub const fn unavailable() -> Self {
         Self {
             code: ErrorCode::Internal,
-            message: "A dependency is unavailable.",
+            message: Cow::Borrowed("A dependency is unavailable."),
             status: StatusCode::SERVICE_UNAVAILABLE,
         }
     }
@@ -161,8 +177,8 @@ impl ApiError {
 
     /// The safe message.
     #[must_use]
-    pub const fn message(&self) -> &'static str {
-        self.message
+    pub fn message(&self) -> &str {
+        self.message.as_ref()
     }
 
     /// The status this failure is reported with.
@@ -197,7 +213,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let body = ErrorBody {
             code: self.code,
-            error: self.message.to_owned(),
+            error: self.message.into_owned(),
         };
         // A cached error is a cached authorization failure; the spec forbids storing either.
         (

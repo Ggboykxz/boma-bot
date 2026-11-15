@@ -33,6 +33,7 @@ secrecy = "0.10.3"
 [dev-dependencies]
 async-trait = { workspace = true }
 boma-testkit = { workspace = true }
+hmac = { workspace = true }
 http-body-util = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

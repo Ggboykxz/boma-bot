@@ -3022,6 +3022,15 @@ pub struct EmailInboundSettings {
     pub relay_token: secrecy::SecretString,
 }
 
+/// The Stripe settings for checkout sessions (REQ-051).
+#[derive(Debug, Clone)]
+pub struct StripeBillingConfig {
+    /// The secret key used to create checkout sessions. Never logged.
+    pub secret_key: secrecy::SecretString,
+    /// The price id of the `pro` plan.
+    pub price_pro: String,
+}
+
 /// The Slack app credentials of this deployment (REQ-048).
 ///
 /// The signing secret verifies every inbound Slack request; the client id and secret are used
@@ -3297,6 +3306,316 @@ pub trait MessagingTransport: Send + Sync {
         body: &serde_json::Value,
         allow_private: bool,
     ) -> Result<u16, AppError>;
+}
+
+/// A model credential sealed per space (REQ-052). The value is sealed on write and never
+/// listed, only whether the provider is `connected`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCredential {
+    /// The provider (`anthropic`, `openai`, …).
+    pub provider: String,
+    /// `connected`.
+    pub status: String,
+    /// When it was connected.
+    pub created_at: String,
+}
+
+/// One credential to store, already validated against the provider.
+#[derive(Debug, Clone)]
+pub struct NewModelCredential {
+    /// The provider.
+    pub provider: String,
+    /// The key the member pasted; sealed by the store, never returned.
+    pub api_key: secrecy::SecretString,
+    /// When it is stored.
+    pub created_at: String,
+}
+
+/// The model credentials of a space (REQ-052).
+#[async_trait]
+pub trait ModelStore: Send + Sync {
+    /// Stores or replaces one provider's credential for the caller's space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn put_credential(
+        &self,
+        context: &TenantContext,
+        credential: NewModelCredential,
+    ) -> Result<(), AppError>;
+
+    /// Forgets one provider's credential. Forgetting an absent one succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn forget_credential(
+        &self,
+        context: &TenantContext,
+        provider: &str,
+    ) -> Result<bool, AppError>;
+
+    /// The providers of this space with a stored credential, connected ones only.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn list_credentials(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<ModelCredential>, AppError>;
+
+    /// Whether this space holds a credential for the provider (connected only).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn has_credential(
+        &self,
+        context: &TenantContext,
+        provider: &str,
+    ) -> Result<bool, AppError>;
+
+    /// The person's model preference (their default model key), if set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn preference(&self, context: &TenantContext) -> Result<Option<String>, AppError>;
+
+    /// Sets or clears the person's model preference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn set_preference(
+        &self,
+        context: &TenantContext,
+        model_key: Option<&str>,
+    ) -> Result<(), AppError>;
+}
+
+/// The spending limit of a space (REQ-018). Disabled by default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpendingLimit {
+    /// Whether the cap is enforced.
+    pub enabled: bool,
+    /// The ISO currency of the cap.
+    pub currency: String,
+    /// The cap in minor units of the currency.
+    pub cap_minor_units: i64,
+    /// When it was last changed.
+    pub updated_at: String,
+}
+
+/// The spend of the current month and how it relates to the cap (REQ-018).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpendingSummary {
+    /// Whether the cap is enforced.
+    pub enabled: bool,
+    /// The currency.
+    pub currency: String,
+    /// The cap in minor units.
+    pub cap_minor_units: i64,
+    /// What has been spent this calendar month, in minor units.
+    pub spent_minor_units: i64,
+    /// What remains, or `None` when the cap is disabled.
+    pub remaining_minor_units: Option<i64>,
+}
+
+/// One recorded payment; it exists only after an approval (REQ-018).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPurchasePayment {
+    /// The payment's id.
+    pub id: String,
+    /// Who approved it.
+    pub user_id: boma_domain::UserId,
+    /// The approval card it rides, when any.
+    pub card_id: Option<String>,
+    /// What was bought, as the request named it.
+    pub item: String,
+    /// The price in minor units.
+    pub amount_minor_units: i64,
+    /// The ISO currency.
+    pub currency: String,
+    /// When it was recorded.
+    pub created_at: String,
+}
+
+/// The subscription a space is on (REQ-051). `Free` is the default of every space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscriptionState {
+    /// `free` or `pro`.
+    pub plan: String,
+    /// `active`, `canceled` or `past_due`.
+    pub status: String,
+    /// The provider's reference for it, when the provider gave one.
+    pub provider_ref: Option<String>,
+    /// The credits the checkout seeded, in minor units.
+    pub credits_minor_units: i64,
+    /// When the current period ends, when known.
+    pub current_period_end: Option<String>,
+}
+
+/// One subscription written by a verified webhook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSubscription {
+    /// The space it activates.
+    pub space_id: String,
+    /// The plan.
+    pub plan: String,
+    /// The status.
+    pub status: String,
+    /// The provider's reference.
+    pub provider_ref: Option<String>,
+    /// The credits seeded.
+    pub credits_minor_units: i64,
+    /// When the current period ends.
+    pub current_period_end: Option<String>,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// The money spine: the spending limit, the payments, the subscription (REQ-018, REQ-051).
+#[async_trait]
+pub trait BillingStore: Send + Sync {
+    /// The space's spending limit; the disabled default when it has never been set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn limit(&self, context: &TenantContext) -> Result<SpendingLimit, AppError>;
+
+    /// Creates or replaces the space's spending limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn set_limit(
+        &self,
+        context: &TenantContext,
+        enabled: bool,
+        currency: &str,
+        cap_minor_units: i64,
+    ) -> Result<SpendingLimit, AppError>;
+
+    /// The allowance left: `cap - spent_this_month`, or `None` when the cap is disabled.
+    /// `month_prefix` is `YYYY-MM` of the calendar month being measured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn remaining_allowance(
+        &self,
+        context: &TenantContext,
+        month_prefix: &str,
+    ) -> Result<Option<i64>, AppError>;
+
+    /// What this space has spent this calendar month (`YYYY-MM` of `month_prefix`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn spent_in_month(
+        &self,
+        context: &TenantContext,
+        month_prefix: &str,
+    ) -> Result<i64, AppError>;
+
+    /// Records one payment, after its approval exists. The caller is expected to have asked
+    /// `remaining_allowance` first; this store does not second-guess it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn record_payment(
+        &self,
+        context: &TenantContext,
+        payment: NewPurchasePayment,
+    ) -> Result<(), AppError>;
+
+    /// The subscription a space is on; the free default when nothing was ever activated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn subscription(&self, context: &TenantContext) -> Result<SubscriptionState, AppError>;
+
+    /// Activates or updates the subscription of one space. System-scoped: the webhook is the
+    /// only caller (REQ-051).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot answer.
+    async fn activate_subscription(
+        &self,
+        context: &TenantContext,
+        subscription: NewSubscription,
+    ) -> Result<(), AppError>;
+}
+
+/// How the deployment reaches a payment provider for checkouts (REQ-051).
+///
+/// A test doubles it; a deployment wires Stripe when `BOMA_BILLING_PROVIDER=stripe`. The
+/// webhook needs no provider: it is an HMAC-verified call with a documented payload shape.
+#[async_trait]
+pub trait BillingProvider: Send + Sync {
+    /// Creates one checkout session for the space and plan; the browser completes it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Unavailable`] when the provider cannot create one, and an error when
+    /// the store cannot answer.
+    async fn create_checkout(
+        &self,
+        context: &TenantContext,
+        space_id: &str,
+        plan: &str,
+        success_url: &str,
+        cancel_url: &str,
+    ) -> Result<CheckoutSession, AppError>;
+}
+
+/// One checkout session handed to the browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutSession {
+    /// The URL the member's browser opens.
+    pub url: String,
+    /// The provider's reference for it.
+    pub provider_ref: String,
+}
+
+/// One outbound provider call to validate a candidate model credential (REQ-052).
+///
+/// A test doubles it; a deployment wires the HTTP client.
+#[async_trait]
+pub trait ModelTransport: Send + Sync {
+    /// GET one URL with the given auth header name and value.
+    ///
+    /// # Errors
+    ///
+    /// Returns the status code and an error body for non-2xx, so the caller can report the
+    /// provider's reason.
+    async fn get_json(
+        &self,
+        url: &str,
+        auth: &[(String, String)],
+    ) -> Result<serde_json::Value, ModelTransportError>;
+}
+
+/// Why a credential validation call failed, carrying the provider's own words when it spoke.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelTransportError {
+    /// The provider answered non-2xx; `status` and `body` are the provider's.
+    Http {
+        /// The status code.
+        status: u16,
+        /// The body, truncated.
+        body: String,
+    },
+    /// The call itself failed (network, TLS, timeout).
+    Unavailable,
 }
 
 /// A memory document carried into a provider turn (REQ-022).

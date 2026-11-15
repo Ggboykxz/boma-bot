@@ -49,6 +49,7 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
                 .expect("the artifact root"),
         ),
         Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
+        Arc::new(boma_testkit::ScriptedModelTransport::new()),
     )
     .with_computers(runtime);
     App::new(
@@ -98,7 +99,12 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             Arc::new(PostgresMemoryStore::new(pool.clone())),
             Arc::new(PostgresRoutineStore::new(pool.clone())),
             Arc::new(PostgresComputerStore::new(pool.clone())),
-            Arc::new(PostgresScreenCapabilityStore::new(pool)),
+            Arc::new(PostgresScreenCapabilityStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresModelStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
+            Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
         ),
         services,
     )

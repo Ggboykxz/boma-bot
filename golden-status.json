@@ -62,7 +62,7 @@
     "models-catalog": {
       "status": "pending",
       "req": "REQ-052",
-      "reason": "M8 - the model catalogue and BYOK credentials arrive with money and models"
+      "reason": "M8 - the capture is synthetic (provider_golden / model_golden): the served catalogue derives display metadata from the deployment's declared keys, so the fixture cannot replay byte for byte. The contract is pinned by domain and RPC tests."
     },
     "plugin-submission": {
       "status": "implemented",

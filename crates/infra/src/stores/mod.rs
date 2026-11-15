@@ -6,6 +6,7 @@
 pub mod accounts;
 pub mod artifacts;
 pub mod audit;
+pub mod billing;
 pub mod bots;
 pub mod cards;
 pub mod computer;
@@ -18,6 +19,7 @@ pub mod mcp;
 pub mod memory;
 pub mod messages;
 pub mod messaging;
+pub mod models;
 pub mod pages;
 pub mod pending_tool_calls;
 pub mod plugin_installs;

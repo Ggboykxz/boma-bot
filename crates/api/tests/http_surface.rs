@@ -111,6 +111,8 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::MemoryRoutineStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryComputerStore::default()),
                 std::sync::Arc::new(boma_testkit::MemoryScreenCapabilityStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryModelStore::default()),
+                std::sync::Arc::new(boma_testkit::MemoryBillingStore::default()),
             ),
             boma_app::Services::new(
                 std::sync::Arc::new(boma_testkit::MemoryEventPublisher::default()),
@@ -130,6 +132,7 @@ fn state(healthy: bool) -> AppState {
                 std::sync::Arc::new(boma_testkit::ScriptedOAuthClient::new()),
                 std::sync::Arc::new(boma_testkit::MemoryArtifactContentStore::default()),
                 std::sync::Arc::new(boma_testkit::ScriptedMessagingTransport::new()),
+                std::sync::Arc::new(boma_testkit::ScriptedModelTransport::new()),
             ),
         ),
     )

@@ -366,6 +366,7 @@ dependencies = [
  "boma-app",
  "boma-domain",
  "boma-testkit",
+ "hmac",
  "http-body-util",
  "secrecy",
  "serde",

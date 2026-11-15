@@ -1947,7 +1947,7 @@ pub async fn webhook_wake(
         .await?;
 
     // The model is picked before the run exists, same as a conversational turn (REQ-015).
-    let choice = model_choice_for(&bot, &app.services.models)?;
+    let choice = model_choice_for(app, &member, &bot, &app.services.models).await?;
     let run = app
         .stores
         .runs
@@ -2172,7 +2172,7 @@ pub async fn mail_inbound(
                 user_message(app, &space_id, thread_id.clone(), text, now.clone())?,
             )
             .await?;
-        let choice = model_choice_for(&bot, &app.services.models)?;
+        let choice = model_choice_for(app, &member, &bot, &app.services.models).await?;
         let run = app
             .stores
             .runs
@@ -2457,7 +2457,7 @@ pub async fn mail_held_release(
             },
         )
         .await?;
-    let choice = model_choice_for(&bot, &app.services.models)?;
+    let choice = model_choice_for(app, context, &bot, &app.services.models).await?;
     let run = app
         .stores
         .runs
@@ -3118,7 +3118,7 @@ pub async fn messaging_inbound(
             },
         )
         .await?;
-    let choice = model_choice_for(&bot, &app.services.models)?;
+    let choice = model_choice_for(app, &member, &bot, &app.services.models).await?;
     let run = app
         .stores
         .runs
@@ -3357,6 +3357,576 @@ fn validate_channel_name(name: &str) -> Result<String, AppError> {
     Ok(name)
 }
 
+// =====================================================================
+// M8 — money and models (REQ-018, REQ-051, REQ-052; ADR-023)
+// =====================================================================
+
+/// The credits a completed pro checkout seeds, in minor units ($250.00).
+///
+/// Illustrative: a deployment that sells real plans configures the amount with the price. The
+/// point is that a checkout visibly lands a balance, not that this number is a product decision.
+pub const PRO_SEEDED_CREDITS_MINOR: i64 = 25_000;
+
+/// The catalogue the deployment serves, merged with the space's credential state (REQ-052).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelsCatalog {
+    /// The providers the deployment reaches, in declaration order.
+    pub providers: Vec<boma_domain::CatalogProvider>,
+    /// The space's connected credentials; never values, never account ids (golden models-catalog).
+    pub credentials: Vec<crate::ports::ModelCredential>,
+}
+
+/// Lists what this deployment can reach, and which providers this space connected (REQ-052).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn models_catalog(app: &App, context: &TenantContext) -> Result<ModelsCatalog, AppError> {
+    let credentials = app.stores.models.list_credentials(context).await?;
+    Ok(ModelsCatalog {
+        providers: boma_domain::catalogue_for(&app.services.models),
+        credentials,
+    })
+}
+
+/// The outcome of a connect (REQ-052).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectOutcome {
+    /// The provider the key was connected for.
+    pub provider: String,
+}
+
+/// Connects a provider credential for this space (REQ-052).
+///
+/// The candidate is validated live against the provider before anything is stored — a bad key
+/// is refused with the provider's own reason, and nothing is written, per the golden's
+/// "rejected with the provider's reason". The value is sealed under the space's data key.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the provider is unknown or refuses the key,
+/// [`AppError::Unavailable`] when the provider cannot be reached, and an error when the store
+/// cannot answer.
+pub async fn models_connect(
+    app: &App,
+    context: &TenantContext,
+    provider: &str,
+    api_key: secrecy::SecretString,
+) -> Result<ConnectOutcome, AppError> {
+    let provider = provider.trim().to_ascii_lowercase();
+    if provider.is_empty()
+        || provider.len() > 32
+        || !provider
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the provider name must be lowercase letters, digits or hyphens".to_owned(),
+        )));
+    }
+    let Some(endpoint) = boma_domain::provider_endpoint(&provider) else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            format!("this deployment does not know how to reach `{provider}`"),
+        )));
+    };
+    let exposed = secrecy::ExposeSecret::expose_secret(&api_key);
+    let auth = match endpoint.shape {
+        boma_domain::CredentialShape::OpenAiCompatible => {
+            vec![("authorization".to_owned(), format!("Bearer {exposed}"))]
+        }
+        boma_domain::CredentialShape::Anthropic => vec![
+            ("x-api-key".to_owned(), exposed.to_owned()),
+            ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
+        ],
+        boma_domain::CredentialShape::Ollama => Vec::new(),
+    };
+    match app
+        .services
+        .model_transport
+        .get_json(endpoint.url, &auth)
+        .await
+    {
+        Ok(_) => {}
+        Err(crate::ports::ModelTransportError::Http { status, body }) => {
+            let reason: String = body.chars().take(200).collect();
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                format!("the provider refused the credential (HTTP {status}): {reason}"),
+            )));
+        }
+        Err(crate::ports::ModelTransportError::Unavailable) => {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the provider could not be reached; try again later".to_owned(),
+            )));
+        }
+    }
+    app.stores
+        .models
+        .put_credential(
+            context,
+            crate::ports::NewModelCredential {
+                provider: provider.clone(),
+                api_key,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(ConnectOutcome { provider })
+}
+
+/// Forgets a provider credential for this space (REQ-052). Absent is a success.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the provider name is refused, and an error when the store
+/// cannot answer.
+pub async fn models_disconnect(
+    app: &App,
+    context: &TenantContext,
+    provider: &str,
+) -> Result<bool, AppError> {
+    let provider = provider.trim().to_ascii_lowercase();
+    if provider.is_empty() || provider.len() > 64 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the provider name is empty or too long".to_owned(),
+        )));
+    }
+    app.stores
+        .models
+        .forget_credential(context, &provider)
+        .await
+}
+
+/// The space's connected providers (REQ-052).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn models_credentials(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Vec<crate::ports::ModelCredential>, AppError> {
+    app.stores.models.list_credentials(context).await
+}
+
+/// The person's model preference in this space-set deployment, or none (REQ-052).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn models_preference(
+    app: &App,
+    context: &TenantContext,
+) -> Result<Option<String>, AppError> {
+    app.stores.models.preference(context).await
+}
+
+/// Sets or clears the person's model preference (REQ-052).
+///
+/// The key must be one this deployment reaches; a pinned unreachable choice is a visible
+/// refusal (REQ-015), never a silent downgrade.
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the key is not reachable, and an error when a store cannot
+/// answer.
+pub async fn models_set_preference(
+    app: &App,
+    context: &TenantContext,
+    model_key: Option<&str>,
+) -> Result<Option<String>, AppError> {
+    if let Some(key) = model_key {
+        let key = key.trim();
+        if !app
+            .services
+            .models
+            .reachable
+            .iter()
+            .any(|candidate| candidate == key)
+        {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                format!("the model `{key}` is not reachable on this deployment"),
+            )));
+        }
+        app.stores.models.set_preference(context, Some(key)).await?;
+        return Ok(Some(key.to_owned()));
+    }
+    app.stores.models.set_preference(context, None).await?;
+    Ok(None)
+}
+
+/// The parts of a purchase request, validated once (REQ-018).
+fn purchase_parts(
+    arguments: &serde_json::Value,
+) -> Result<(String, i64, String), serde_json::Value> {
+    let item = arguments
+        .get("item")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty() && item.chars().count() <= 200)
+        .ok_or_else(
+            || serde_json::json!({ "error": "the purchase needs an `item` (1-200 characters)" }),
+        )?
+        .to_owned();
+    let amount = arguments
+        .get("amountMinorUnits")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|amount| *amount > 0)
+        .ok_or_else(|| serde_json::json!({ "error": "the purchase needs `amountMinorUnits` (integer, > 0)" }))?;
+    let currency = arguments
+        .get("currency")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .map(str::to_ascii_uppercase)
+        .filter(|currency| {
+            currency.len() == 3 && currency.bytes().all(|byte| byte.is_ascii_uppercase())
+        })
+        .ok_or_else(
+            || serde_json::json!({ "error": "the purchase needs a three-letter `currency`" }),
+        )?;
+    Ok((item, amount, currency))
+}
+
+/// The gate every purchase passes, twice: once when the tool is called, once at approval (REQ-018).
+///
+/// REQ-051 decides whether this space may buy at all; REQ-018 decides whether it can afford it
+/// this month. Both refusals carry a visible reason.
+async fn purchase_gate(
+    app: &App,
+    context: &TenantContext,
+    amount_minor_units: i64,
+    currency: &str,
+) -> Result<(), serde_json::Value> {
+    if app.services.billing_enabled {
+        let subscription =
+            app.stores.billing.subscription(context).await.map_err(
+                |_| serde_json::json!({ "error": "the billing state could not be read" }),
+            )?;
+        if subscription.plan != "pro" || subscription.status != "active" {
+            return Err(serde_json::json!({
+                "error": "this space is on the free plan; upgrade to the pro plan to make purchases",
+                "upgradeRequired": true,
+            }));
+        }
+    }
+    let month = app.services.clock.now()[..7].to_owned();
+    let remaining = app
+        .stores
+        .billing
+        .remaining_allowance(context, &month)
+        .await
+        .map_err(|_| serde_json::json!({ "error": "the spending limit could not be read" }))?;
+    if let Some(remaining) = remaining
+        && remaining < amount_minor_units
+    {
+        return Err(serde_json::json!({
+            "error": format!(
+                "the space's monthly spending limit is used up ({currency} {remaining} minor units remaining)"
+            ),
+            "limitReached": true,
+        }));
+    }
+    Ok(())
+}
+
+/// The spending limit of this space for the current month (REQ-018).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpendingLimitOutcome {
+    /// Whether the cap is enforced.
+    pub enabled: bool,
+    /// The ISO currency of the cap.
+    pub currency: String,
+    /// The cap in minor units.
+    pub cap_minor_units: i64,
+    /// What this space spent this calendar month, in minor units.
+    pub spent_minor_units: i64,
+    /// What remains, or `None` when the cap is disabled.
+    pub remaining_minor_units: Option<i64>,
+}
+
+/// Reads the space's limit and its month-to-date spend (REQ-018).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn spending_limit_get(
+    app: &App,
+    context: &TenantContext,
+) -> Result<SpendingLimitOutcome, AppError> {
+    let limit = app.stores.billing.limit(context).await?;
+    let month = app.services.clock.now()[..7].to_owned();
+    let spent = app.stores.billing.spent_in_month(context, &month).await?;
+    let remaining = limit
+        .enabled
+        .then_some(limit.cap_minor_units.saturating_sub(spent).max(0));
+    Ok(SpendingLimitOutcome {
+        enabled: limit.enabled,
+        currency: limit.currency,
+        cap_minor_units: limit.cap_minor_units,
+        spent_minor_units: spent,
+        remaining_minor_units: remaining,
+    })
+}
+
+/// Sets the space's limit (REQ-018).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the currency or the cap is refused.
+pub async fn spending_limit_set(
+    app: &App,
+    context: &TenantContext,
+    enabled: bool,
+    currency: &str,
+    cap_minor_units: i64,
+) -> Result<SpendingLimitOutcome, AppError> {
+    app.stores
+        .billing
+        .set_limit(context, enabled, currency, cap_minor_units)
+        .await?;
+    spending_limit_get(app, context).await
+}
+
+/// Records the purchase after its approval exists (REQ-018).
+async fn approved_purchase_request(
+    app: &App,
+    context: &TenantContext,
+    call: &crate::ports::PendingToolCall,
+) -> (serde_json::Value, bool) {
+    let refuse = |error: serde_json::Value| (error, false);
+    let user_id = context.user_id().cloned().ok_or_else(|| {
+        serde_json::json!({ "ok": false, "body": { "error": "a purchase needs a member's approval" } })
+    });
+    let user_id = match user_id {
+        Ok(user_id) => user_id,
+        Err(refusal) => return refuse(refusal),
+    };
+    let parts = purchase_parts(&call.arguments);
+    let (item, amount_minor_units, currency) = match parts {
+        Ok(parts) => parts,
+        Err(refusal) => return refuse(serde_json::json!({ "ok": false, "body": refusal })),
+    };
+    if let Err(refusal) = purchase_gate(app, context, amount_minor_units, &currency).await {
+        return refuse(serde_json::json!({ "ok": false, "body": refusal }));
+    }
+    let id = app.services.ids.new_id("pay");
+    let payment = crate::ports::NewPurchasePayment {
+        id: id.clone(),
+        user_id,
+        card_id: None,
+        item: item.clone(),
+        amount_minor_units,
+        currency: currency.clone(),
+        created_at: app.services.clock.now(),
+    };
+    match app.stores.billing.record_payment(context, payment).await {
+        Ok(()) => (
+            serde_json::json!({
+                "ok": true,
+                "body": {
+                    "paymentId": id,
+                    "item": item,
+                    "amountMinorUnits": amount_minor_units,
+                    "currency": currency,
+                    "status": "approved",
+                },
+            }),
+            false,
+        ),
+        Err(error) => refuse(serde_json::json!({ "ok": false, "body": {
+            "error": format!("the payment could not be recorded: {error}"),
+        } })),
+    }
+}
+
+/// The billing state of this space (REQ-051).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BillingStatusOutcome {
+    /// `free` or `pro`.
+    pub plan: String,
+    /// `active`, `canceled` or `past_due`.
+    pub status: String,
+    /// The credits the checkout seeded, in minor units.
+    pub credits_minor_units: i64,
+    /// When the current period ends, when known.
+    pub current_period_end: Option<String>,
+    /// Whether this deployment can open a checkout (a provider is configured).
+    pub checkout_allowed: bool,
+}
+
+/// Reports the plan, the credits, the renewal, and whether a checkout can open (REQ-051).
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+pub async fn billing_status(
+    app: &App,
+    context: &TenantContext,
+) -> Result<BillingStatusOutcome, AppError> {
+    let subscription = app.stores.billing.subscription(context).await?;
+    Ok(BillingStatusOutcome {
+        plan: subscription.plan,
+        status: subscription.status,
+        credits_minor_units: subscription.credits_minor_units,
+        current_period_end: subscription.current_period_end,
+        checkout_allowed: app.services.billing_provider.is_some(),
+    })
+}
+
+/// The outcome of opening a checkout (REQ-051).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutOutcome {
+    /// The URL the member's browser opens.
+    pub url: String,
+    /// The provider's reference for the session.
+    pub provider_ref: String,
+}
+
+/// Opens a checkout for one plan (REQ-051).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when `plan` is not one this deployment sells, or billing is not
+/// configured, and an error when the provider or a store cannot answer.
+pub async fn billing_checkout(
+    app: &App,
+    context: &TenantContext,
+    plan: &str,
+) -> Result<CheckoutOutcome, AppError> {
+    if plan.trim() != "pro" {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "only the `pro` plan can be checked out".to_owned(),
+        )));
+    }
+    let Some(provider) = app.services.billing_provider.as_ref() else {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "billing is not configured on this deployment".to_owned(),
+        )));
+    };
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    let base = app.services.public_base_url.trim_end_matches('/');
+    let session = provider
+        .create_checkout(
+            context,
+            space_id.as_str(),
+            "pro",
+            &format!("{base}/settings/billing?checkout=success"),
+            &format!("{base}/settings/billing?checkout=cancel"),
+        )
+        .await?;
+    Ok(CheckoutOutcome {
+        url: session.url,
+        provider_ref: session.provider_ref,
+    })
+}
+
+/// The outcome of one verified webhook call (REQ-051).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BillingWebhookOutcome {
+    /// Whether a subscription was activated or refreshed by this call.
+    pub activated: bool,
+    /// The plan that was activated, when any.
+    pub plan: Option<String>,
+}
+
+/// Verifies and applies one provider webhook (REQ-051).
+///
+/// The provider proves itself with `Stripe-Signature`; every failure answers the same uniform
+/// refusal as the other public surfaces, so the deployment's webhook secret cannot be
+/// enumerated. Unknown events are acknowledged and ignored.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the webhook secret is not configured or the
+/// signature is wrong, and an error when a store cannot answer.
+pub async fn billing_webhook(
+    app: &App,
+    signature_header: &str,
+    timestamp: &str,
+    body: &[u8],
+) -> Result<BillingWebhookOutcome, AppError> {
+    let context = TenantContext::System {
+        reason: boma_domain::SystemReason::WebhookDelivery,
+        user_id: None,
+    };
+    let Some(secret) = app.services.billing_webhook_secret.as_ref() else {
+        return Err(AppError::NotFound);
+    };
+    let secret = secrecy::ExposeSecret::expose_secret(secret);
+    let now = unix_seconds(&app.services.clock.now());
+    if !boma_domain::verify_stripe_signature(
+        secret.as_bytes(),
+        timestamp,
+        body,
+        signature_header,
+        now,
+    ) {
+        return Err(AppError::NotFound);
+    }
+    let Ok(event) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Ok(BillingWebhookOutcome {
+            activated: false,
+            plan: None,
+        });
+    };
+    if event.get("type").and_then(serde_json::Value::as_str) != Some("checkout.session.completed") {
+        return Ok(BillingWebhookOutcome {
+            activated: false,
+            plan: None,
+        });
+    }
+    let object = &event["data"]["object"];
+    let space_id = object
+        .get("metadata")
+        .and_then(|metadata| metadata.get("space_id"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            object
+                .get("client_reference_id")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_owned);
+    let Some(space_id) = space_id else {
+        return Ok(BillingWebhookOutcome {
+            activated: false,
+            plan: None,
+        });
+    };
+    let common = BillingWebhookOutcome {
+        activated: true,
+        plan: Some("pro".to_owned()),
+    };
+    let provider_ref = object
+        .get("subscription")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| object.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_owned);
+    let current_period_end = object
+        .get("current_period_end")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|seconds| time::OffsetDateTime::from_unix_timestamp(seconds).ok())
+        .and_then(|instant| {
+            instant
+                .format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        });
+    app.stores
+        .billing
+        .activate_subscription(
+            &context,
+            crate::ports::NewSubscription {
+                space_id,
+                plan: "pro".to_owned(),
+                status: "active".to_owned(),
+                provider_ref,
+                credits_minor_units: PRO_SEEDED_CREDITS_MINOR,
+                current_period_end,
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+    Ok(common)
+}
+
 /// The names and descriptions of every skill this context may load (REQ-035).
 ///
 /// # Errors
@@ -3409,10 +3979,18 @@ pub struct SendMessage {
 /// # Errors
 ///
 /// Returns [`AppError::Rule`] when the pinned model is one this deployment cannot reach.
-fn model_choice_for(
+async fn model_choice_for(
+    app: &App,
+    context: &TenantContext,
     bot: &boma_domain::Bot,
     models: &boma_domain::model::DeploymentModels,
 ) -> Result<boma_domain::model::ModelChoice, AppError> {
+    // The person's standing preference applies to their own runs; system paths keep the
+    // deployment default (REQ-052, REQ-015).
+    let person = match context {
+        TenantContext::Member { .. } => app.stores.models.preference(context).await?,
+        TenantContext::System { .. } => None,
+    };
     let preferences = boma_domain::model::ModelPreferences {
         bot: bot.model_id.clone().map(|model| {
             let provider = bot
@@ -3422,7 +4000,7 @@ fn model_choice_for(
             (format!("{provider}/{model}"), bot.model_pinned)
         }),
         space: None,
-        person: None,
+        person,
     };
     Ok(boma_domain::model::resolve(&preferences, models)?)
 }
@@ -3518,7 +4096,7 @@ pub async fn send_message(
 
     // The model is picked before the run exists (REQ-015): a pinned choice the deployment cannot
     // reach fails visibly instead of silently running elsewhere.
-    let choice = model_choice_for(&bot, &app.services.models)?;
+    let choice = model_choice_for(app, context, &bot, &app.services.models).await?;
 
     let run = app
         .stores
@@ -6357,6 +6935,7 @@ async fn execute_approved_tool(
         "skill.teach" => approved_skill_teach(app, context, call).await,
         "artifact.create" => approved_artifact_create(app, context, bot, call).await,
         "page.save" => approved_page_save(app, context, bot, call).await,
+        "purchase.request" => approved_purchase_request(app, context, call).await,
         key if key.starts_with("mcp.") => approved_mcp_call(app, context, call).await,
         "delegate.helper" => {
             let Some(prompt) = string("prompt") else {
@@ -6602,6 +7181,14 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
                     .to_owned(),
             kind: boma_domain::ToolKind::Builtin,
             effect: boma_domain::ToolEffect::Write,
+        },
+        ToolSpec {
+            key: "purchase.request".to_owned(),
+            description:
+                "Ask this space to buy something; the request becomes a card and nothing is paid before a person approves."
+                    .to_owned(),
+            kind: boma_domain::ToolKind::Builtin,
+            effect: boma_domain::ToolEffect::Spend,
         },
     ]
 }
@@ -6895,11 +7482,48 @@ pub async fn dispatch_tool(
             ok: true,
             body: serde_json::json!({ "approval": "required" }),
         }),
-        boma_domain::ToolEffect::Spend => Ok(crate::ports::ToolCallResult {
+        boma_domain::ToolEffect::Spend => dispatch_spend_tool(app, context, call).await,
+    }
+}
+
+/// Gates a spend-class call before it is ever parked for approval (REQ-018).
+///
+/// The cap and the plan are answered here, in the model's own turn, so a refusal is visible in
+/// the conversation rather than only when somebody approves the card. The approval path checks
+/// the same gate again: the window between call and approval is real time, and spend is shared.
+async fn dispatch_spend_tool(
+    app: &App,
+    context: &TenantContext,
+    call: &crate::ports::ToolCallRequest,
+) -> Result<crate::ports::ToolCallResult, AppError> {
+    let approval = serde_json::json!({ "approval": "required", "kind": "spend" });
+    if call.name != "purchase.request" {
+        return Ok(crate::ports::ToolCallResult {
             id: call.id.clone(),
             ok: true,
-            body: serde_json::json!({ "approval": "required", "kind": "spend" }),
+            body: approval,
+        });
+    }
+    match purchase_parts(&call.arguments) {
+        Err(refusal) => Ok(crate::ports::ToolCallResult {
+            id: call.id.clone(),
+            ok: false,
+            body: refusal,
         }),
+        Ok((_, amount_minor_units, currency)) => {
+            match purchase_gate(app, context, amount_minor_units, &currency).await {
+                Ok(()) => Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: true,
+                    body: approval,
+                }),
+                Err(refusal) => Ok(crate::ports::ToolCallResult {
+                    id: call.id.clone(),
+                    ok: false,
+                    body: refusal,
+                }),
+            }
+        }
     }
 }
 

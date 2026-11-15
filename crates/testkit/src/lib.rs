@@ -38,19 +38,21 @@ pub mod scripts;
 pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
     MemoryAccountStore, MemoryArtifactContentStore, MemoryArtifactStore, MemoryAuditStore,
-    MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryConnectorStore, MemoryDatabase,
-    MemoryEffectStore, MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore,
-    MemoryMailStore, MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore,
-    MemoryMessagingStore, MemoryPageStore, MemoryPendingToolCallStore, MemoryPluginInstallStore,
-    MemoryPluginSubmissionStore, MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore,
-    MemoryRosterStore, MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore,
-    MemorySecretStore, MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore,
-    MemoryTicketStore, MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall,
-    RecordedSkill, RecordedSubmission,
+    MemoryBillingStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore, MemoryConnectorStore,
+    MemoryDatabase, MemoryEffectStore, MemoryEventPublisher, MemoryEventStore,
+    MemoryInvitationStore, MemoryMailStore, MemoryMcpServerStore, MemoryMemoryStore,
+    MemoryMessageStore, MemoryMessagingStore, MemoryModelStore, MemoryPageStore,
+    MemoryPendingToolCallStore, MemoryPluginInstallStore, MemoryPluginSubmissionStore,
+    MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
+    MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,
+    MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryTicketStore,
+    MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall, RecordedSkill,
+    RecordedSubmission,
 };
 pub use scripts::{
-    ComputerAnswer, FixedHasher, ScriptedClock, ScriptedComputerRuntime, ScriptedConnectorRunner,
-    ScriptedIds, ScriptedMcpTransport, ScriptedMessagingTransport, ScriptedOAuthClient,
+    BillingCheckoutCall, ComputerAnswer, FixedHasher, ModelTransportCall, ScriptedBillingProvider,
+    ScriptedClock, ScriptedComputerRuntime, ScriptedConnectorRunner, ScriptedIds,
+    ScriptedMcpTransport, ScriptedMessagingTransport, ScriptedModelTransport, ScriptedOAuthClient,
     ScriptedPluginFetcher, ScriptedProvider, ScriptedTokens,
 };
 

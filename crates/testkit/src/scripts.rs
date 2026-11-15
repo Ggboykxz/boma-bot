@@ -1164,3 +1164,126 @@ impl boma_app::ports::MessagingTransport for ScriptedMessagingTransport {
         Ok(lock(&self.post_json_statuses).pop().unwrap_or(200))
     }
 }
+
+/// One recorded probe by [`ScriptedModelTransport`]: the absolute URL and the auth headers seen.
+pub type ModelTransportCall = (String, Vec<(String, String)>);
+
+/// One recorded checkout by [`ScriptedBillingProvider`]: tag, space id, plan, success url, cancel url.
+pub type BillingCheckoutCall = (String, String, String, String, String);
+
+/// A scripted model provider transport (REQ-052): records the probes, answers with a queue.
+#[derive(Debug, Default)]
+pub struct ScriptedModelTransport {
+    responses: std::sync::Mutex<
+        std::collections::VecDeque<Result<serde_json::Value, boma_app::ports::ModelTransportError>>,
+    >,
+    calls: std::sync::Mutex<Vec<ModelTransportCall>>,
+}
+
+impl ScriptedModelTransport {
+    /// A transport that answers `{}` to everything.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Queues answers; each `get_json` pops one, defaulting to a successful empty one.
+    #[must_use]
+    pub fn with_responses(
+        responses: Vec<Result<serde_json::Value, boma_app::ports::ModelTransportError>>,
+    ) -> Self {
+        Self {
+            responses: std::sync::Mutex::new(responses.into()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The calls the transport received.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn calls(&self) -> Vec<ModelTransportCall> {
+        lock(&self.calls).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::ModelTransport for ScriptedModelTransport {
+    async fn get_json(
+        &self,
+        url: &str,
+        auth: &[(String, String)],
+    ) -> Result<serde_json::Value, boma_app::ports::ModelTransportError> {
+        lock(&self.calls).push((url.to_owned(), auth.to_vec()));
+        match lock(&self.responses).pop_front() {
+            Some(result) => result,
+            None => Ok(serde_json::json!({ "data": [] })),
+        }
+    }
+}
+
+/// A scripted checkout provider (REQ-051): returns the queued sessions in order.
+#[derive(Debug, Default)]
+pub struct ScriptedBillingProvider {
+    sessions: std::sync::Mutex<
+        std::collections::VecDeque<Result<boma_app::ports::CheckoutSession, boma_app::AppError>>,
+    >,
+    calls: std::sync::Mutex<Vec<BillingCheckoutCall>>,
+}
+
+impl ScriptedBillingProvider {
+    /// A provider that hands out the default scripted session to every call.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Queues answers; each `create_checkout` pops one, defaulting to a scripted success.
+    #[must_use]
+    pub fn with_sessions(
+        sessions: Vec<Result<boma_app::ports::CheckoutSession, boma_app::AppError>>,
+    ) -> Self {
+        Self {
+            sessions: std::sync::Mutex::new(sessions.into()),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The calls the provider received: context tag, space id, plan, success url, cancel url.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a lock is poisoned, which is a broken test, not a runtime path.
+    #[must_use]
+    pub fn calls(&self) -> Vec<BillingCheckoutCall> {
+        lock(&self.calls).clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::BillingProvider for ScriptedBillingProvider {
+    async fn create_checkout(
+        &self,
+        _context: &boma_domain::TenantContext,
+        space_id: &str,
+        plan: &str,
+        success_url: &str,
+        cancel_url: &str,
+    ) -> Result<boma_app::ports::CheckoutSession, boma_app::AppError> {
+        lock(&self.calls).push((
+            "create_checkout".to_owned(),
+            space_id.to_owned(),
+            plan.to_owned(),
+            success_url.to_owned(),
+            cancel_url.to_owned(),
+        ));
+        lock(&self.sessions).pop_front().unwrap_or_else(|| {
+            Ok(boma_app::ports::CheckoutSession {
+                url: "https://checkout.example.com/scripted".to_owned(),
+                provider_ref: "cs_scripted".to_owned(),
+            })
+        })
+    }
+}

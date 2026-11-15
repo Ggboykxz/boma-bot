@@ -48,6 +48,9 @@ pub enum ConfigError {
     /// The inbound-mail settings are half-configured or invalid.
     #[error("{0}")]
     EmailInbound(String),
+    /// The billing settings are half-configured or invalid.
+    #[error("{0}")]
+    Billing(String),
     /// The Slack app credentials are half-configured or invalid.
     #[error("{0}")]
     Slack(String),
@@ -122,6 +125,50 @@ pub struct Config {
     /// The public base URL (`BOMA_PUBLIC_BASE_URL`), used for the webhook URLs members paste
     /// into a platform. Loopback by default for development.
     pub public_base_url: String,
+    /// The billing settings (REQ-051).
+    pub billing: BillingSettings,
+}
+
+/// The billing settings of this deployment (REQ-051).
+///
+/// `BOMA_BILLING=true` makes the billing surface exist: `billing.status` and `billing.checkout`
+/// become answerable and the webhook route verifies calls. Without it, everything billing is
+/// 404, signed in or not. `BOMA_BILLING_PROVIDER=stripe` configures the checkout provider; the
+/// Stripe settings and the webhook secret come together or the deployment refuses to boot.
+#[derive(Clone)]
+pub struct BillingSettings {
+    /// Whether the billing surface exists (`BOMA_BILLING`).
+    pub enabled: bool,
+    /// The Stripe settings, when `BOMA_BILLING_PROVIDER=stripe`. Kept around only for
+    /// diagnostics; the checkout path uses `provider`.
+    pub stripe: Option<boma_app::ports::StripeBillingConfig>,
+    /// The wired checkout provider, built once at boot (REQ-051).
+    provider: Option<std::sync::Arc<dyn boma_app::ports::BillingProvider>>,
+    /// The webhook signing secret (`BOMA_BILLING_WEBHOOK_SECRET`).
+    pub webhook_secret: Option<String>,
+}
+
+impl BillingSettings {
+    /// The checkout provider of this deployment, when configured (REQ-051).
+    pub fn provider(&self) -> Option<std::sync::Arc<dyn boma_app::ports::BillingProvider>> {
+        self.provider.clone()
+    }
+}
+
+impl std::fmt::Debug for BillingSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The provider is a network client; the secret never leaves this build. Report the
+        // knobs, not the client.
+        f.debug_struct("BillingSettings")
+            .field("enabled", &self.enabled)
+            .field("stripe", &self.stripe)
+            .field("provider", &self.provider.as_ref().map(|_| "configured"))
+            .field(
+                "webhook_secret",
+                &self.webhook_secret.as_ref().map(|_| "configured"),
+            )
+            .finish()
+    }
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -236,7 +283,7 @@ impl Config {
             integrations: parse_string_list(&env, "BOMA_INTEGRATIONS"),
             messaging: optional_parsed(&env, "BOMA_MESSAGING", false)?,
             email: optional(&env, "BOMA_EMAIL"),
-            billing: optional(&env, "BOMA_BILLING"),
+            billing: billing_capability(&env),
             jobs: optional(&env, "BOMA_JOBS").unwrap_or_else(|| "inline".to_owned()),
             realtime: optional(&env, "BOMA_REALTIME").unwrap_or_else(|| "postgres".to_owned()),
             degraded: optional_parsed(&env, "BOMA_DEGRADED", false)?,
@@ -268,6 +315,7 @@ impl Config {
             email_inbound: parse_email_inbound(&env)?,
             slack: parse_slack(&env)?,
             public_base_url: parse_public_base_url(&env)?,
+            billing: parse_billing(&env)?,
         })
     }
 }
@@ -453,6 +501,71 @@ fn parse_public_base_url(env: &BTreeMap<String, String>) -> Result<String, Confi
     Ok(value)
 }
 
+/// Parses the billing settings (REQ-051): structured, both-or-neither for the provider.
+fn parse_billing(env: &BTreeMap<String, String>) -> Result<BillingSettings, ConfigError> {
+    let enabled = optional_parsed(env, "BOMA_BILLING", false)?;
+    let provider = optional(env, "BOMA_BILLING_PROVIDER");
+    let stripe_secret = optional(env, "BOMA_BILLING_STRIPE_SECRET");
+    let price_pro = optional(env, "BOMA_BILLING_STRIPE_PRICE_PRO");
+    let webhook_secret = optional(env, "BOMA_BILLING_WEBHOOK_SECRET");
+    match (provider.as_deref(), stripe_secret, price_pro, webhook_secret) {
+        (None, None, None, None) => Ok(BillingSettings {
+            enabled,
+            stripe: None,
+            provider: None,
+            webhook_secret: None,
+        }),
+        (Some("stripe"), Some(secret), Some(price), Some(webhook)) => {
+            if secret.len() < 16 {
+                return Err(ConfigError::Billing(
+                    "BOMA_BILLING_STRIPE_SECRET must be at least 16 characters".to_owned(),
+                ));
+            }
+            if !price.starts_with("price_") {
+                return Err(ConfigError::Billing(
+                    "BOMA_BILLING_STRIPE_PRICE_PRO must be a Stripe price id (price_…)".to_owned(),
+                ));
+            }
+            if webhook.len() < 16 {
+                return Err(ConfigError::Billing(
+                    "BOMA_BILLING_WEBHOOK_SECRET must be at least 16 characters".to_owned(),
+                ));
+            }
+            let provider = boma_infra::StripeBillingProvider::new(
+                secrecy::SecretString::from(secret.clone()),
+                price.clone(),
+            )
+            .map_err(|_| {
+                ConfigError::Billing("the Stripe client refused to build; check the settings".to_owned())
+            })?;
+            Ok(BillingSettings {
+                enabled,
+                stripe: Some(boma_app::ports::StripeBillingConfig {
+                    secret_key: secrecy::SecretString::from(secret),
+                    price_pro: price,
+                }),
+                provider: Some(std::sync::Arc::new(provider)),
+                webhook_secret: Some(webhook),
+            })
+        }
+        _ => Err(ConfigError::Billing(
+            "BOMA_BILLING_PROVIDER, BOMA_BILLING_STRIPE_SECRET, BOMA_BILLING_STRIPE_PRICE_PRO and BOMA_BILLING_WEBHOOK_SECRET must be set together".to_owned(),
+        )),
+    }
+}
+
+/// What `/ready` reports for billing: nothing unless configured.
+fn billing_capability(env: &BTreeMap<String, String>) -> Option<String> {
+    match (
+        optional_parsed(env, "BOMA_BILLING", false).ok()?,
+        optional(env, "BOMA_BILLING_PROVIDER"),
+    ) {
+        (true, Some(provider)) => Some(provider),
+        (true, None) => Some("unconfigured".to_owned()),
+        (false, _) => None,
+    }
+}
+
 fn parse_string_list(env: &BTreeMap<String, String>, name: &str) -> Vec<String> {
     optional(env, name)
         .unwrap_or_default()
@@ -578,7 +691,7 @@ mod tests {
             ("BOMA_INTEGRATIONS", "github, linear"),
             ("BOMA_MESSAGING", "true"),
             ("BOMA_EMAIL", "bot@boma.test"),
-            ("BOMA_BILLING", "none"),
+            ("BOMA_BILLING", "false"),
             ("BOMA_JOBS", "postgres"),
             ("BOMA_REALTIME", "postgres"),
             ("BOMA_DEGRADED", "true"),
