@@ -24,29 +24,34 @@ use crate::{
     error::ApiError,
     state::AppState,
     wire::{
-        AccountDeleteReply, AccountDeleteRequest, AnswerReply, ArtifactCreateReply,
-        ArtifactGetReply, ArtifactListSpaceReply, ArtifactRemoveReply, ArtifactVersionView,
-        ArtifactVersionsReply, ArtifactView, AuditEventView, AuditExportReply,
-        BillingCheckoutReply, BillingStatusReply, BoardsGetReply, BotReply, BotsListReply,
-        CancelReply, CatalogModelView, CatalogProviderView, ComputerOpenScreenReply,
-        ComputerProviderInfo, ComputerProviderReply, ComputerSettingsReply, ComputerStatusReply,
-        ComputerTakeoverReply, ConnectionsInstallReply, ConnectionsListReply,
-        ConnectionsRemoveReply, ConnectorView, ConversationView, ConversationsReply,
-        ExportCountsView, ExportDownloadReply, ExportIdRequest, ExportStartReply,
-        ExportStatusReply, HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply,
-        InstallGenericReply, InstallTelegramReply, InstallUrlReply, InstallationsReply,
-        InvitationReply, MailPolicyReply, MailPolicyView, MarketplaceInstallReply,
-        MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply,
-        McpServerView, McpServersListReply, McpServersRemoveReply, MemoryDocumentReply,
-        MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply,
-        MessagesReply, MessagingInstallationView, MessagingRemoveReply, ModelConnectReply,
-        ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply, ModelsCatalogReply,
-        PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
-        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
-        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
-        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply, SkillReply,
-        SkillView, SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply,
-        ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply, TicketView,
+        AccountDeleteReply, AccountDeleteRequest, AdminGrantCreateReply, AdminGrantCreateRequest,
+        AdminGrantRevokeReply, AdminGrantRevokeRequest, AdminGrantView, AdminGrantsReply,
+        AdminInvitationRevokeReply, AdminInvitationRevokeRequest, AdminInvitationView,
+        AdminInvitationsReply, AdminMemberView, AdminMembersReply, AdminPluginDecideReply,
+        AdminPluginDecideRequest, AdminPluginSubmissionView, AdminPluginsListRequest,
+        AdminPluginsReply, AnswerReply, ArtifactCreateReply, ArtifactGetReply,
+        ArtifactListSpaceReply, ArtifactRemoveReply, ArtifactVersionView, ArtifactVersionsReply,
+        ArtifactView, AuditEventView, AuditExportReply, BillingCheckoutReply, BillingStatusReply,
+        BoardsGetReply, BotReply, BotsListReply, CancelReply, CatalogModelView,
+        CatalogProviderView, ComputerOpenScreenReply, ComputerProviderInfo, ComputerProviderReply,
+        ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
+        ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
+        ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
+        ExportStartReply, ExportStatusReply, HeldDropReply, HeldListReply, HeldMailView,
+        HeldReleaseReply, InstallGenericReply, InstallTelegramReply, InstallUrlReply,
+        InstallationsReply, InvitationReply, MailPolicyReply, MailPolicyView,
+        MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply,
+        McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
+        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
+        MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
+        ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
+        ModelsCatalogReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply,
+        PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
+        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
+        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SecurityEventsReply,
+        SendReply, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply, SpendingLimitReply,
+        TeachSkillReply, ThreadHeadReply, TicketCommentReply, TicketCommentView, TicketReply,
+        TicketView,
     },
 };
 
@@ -101,12 +106,15 @@ pub mod namespaces {
     pub const EXPORT: &str = "export";
     /// Account: the account lifecycle (REQ-044).
     pub const ACCOUNT: &str = "account";
+    /// Admin: members, invitations, server-level access grants and the plugin-submission review (REQ-058).
+    pub const ADMIN: &str = "admin";
 }
 
 /// Every procedure this deployment serves.
 ///
 /// The list is the contract: a procedure that is not here is not reachable.
 #[must_use]
+#[allow(clippy::too_many_lines)] // the surface list mirrors the spec; the length is the point
 pub fn procedures() -> Vec<(&'static str, &'static str)> {
     vec![
         (namespaces::THREADS, "send"),
@@ -203,6 +211,14 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::EXPORT, "status"),
         (namespaces::EXPORT, "download"),
         (namespaces::ACCOUNT, "delete"),
+        (namespaces::ADMIN, "members.list"),
+        (namespaces::ADMIN, "invitations.list"),
+        (namespaces::ADMIN, "invitations.revoke"),
+        (namespaces::ADMIN, "grants.list"),
+        (namespaces::ADMIN, "grants.create"),
+        (namespaces::ADMIN, "grants.revoke"),
+        (namespaces::ADMIN, "plugins.list"),
+        (namespaces::ADMIN, "plugins.decide"),
     ]
 }
 
@@ -559,6 +575,30 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::ACCOUNT, "delete") => account_delete(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "members.list") => admin_members_list(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "invitations.list") => admin_invitations_list(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "invitations.revoke") => admin_invitations_revoke(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "grants.list") => admin_grants_list(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "grants.create") => admin_grants_create(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "grants.revoke") => admin_grants_revoke(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "plugins.list") => admin_plugins_list(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::ADMIN, "plugins.decide") => admin_plugins_decide(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         _ => Err(ApiError::not_found()),
@@ -3320,5 +3360,169 @@ async fn account_delete(
         boma_app::account_export::account_delete(state.app(), &auth.actor.context).await?;
     Ok(AccountDeleteReply {
         status: outcome.status,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// M9 — admin surfaces (REQ-058)
+// ---------------------------------------------------------------------------
+
+/// `admin.members.list` — the members of the caller's space (REQ-058).
+async fn admin_members_list(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<AdminMembersReply, ApiError> {
+    let outcome = usecases::admin_members_list(state.app(), &auth.actor.context).await?;
+    Ok(AdminMembersReply {
+        members: outcome
+            .members
+            .iter()
+            .map(|member| AdminMemberView {
+                user_id: member.user_id.as_str().to_owned(),
+                email: member.email.as_str().to_owned(),
+                name: member.name.clone(),
+                role: member.role.as_str().to_owned(),
+                last_seen_at: member.last_seen_at.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// `admin.invitations.list` — the pending invitations of the caller's space (REQ-058).
+async fn admin_invitations_list(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<AdminInvitationsReply, ApiError> {
+    let outcome = usecases::admin_invitations_list(state.app(), &auth.actor.context).await?;
+    Ok(AdminInvitationsReply {
+        invitations: outcome
+            .invitations
+            .iter()
+            .map(|invitation| AdminInvitationView {
+                id: invitation.id.clone(),
+                email: invitation.email.clone(),
+                role: invitation.role.as_str().to_owned(),
+                expires_at: invitation.expires_at.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// `admin.invitations.revoke` — kills one pending invitation (REQ-058).
+async fn admin_invitations_revoke(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AdminInvitationRevokeReply, ApiError> {
+    let request: AdminInvitationRevokeRequest = parse(&body)?;
+    let revoked = usecases::admin_invitations_revoke(
+        state.app(),
+        &auth.actor.context,
+        &request.invitation_id,
+    )
+    .await?;
+    if !revoked {
+        return Err(ApiError::not_found());
+    }
+    Ok(AdminInvitationRevokeReply { revoked: true })
+}
+
+/// `admin.grants.list` — every grant on the deployment (REQ-058).
+async fn admin_grants_list(
+    state: AppState,
+    auth: AuthContext,
+) -> Result<AdminGrantsReply, ApiError> {
+    let outcome = usecases::admin_grants_list(state.app(), &auth.actor.context).await?;
+    Ok(AdminGrantsReply {
+        grants: outcome
+            .grants
+            .iter()
+            .map(|grant| AdminGrantView {
+                email: grant.email.clone(),
+                reason: grant.reason.clone(),
+                granted_by: grant.granted_by.clone(),
+                created_at: grant.created_at.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// `admin.grants.create` — one server-level grant (REQ-058).
+async fn admin_grants_create(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AdminGrantCreateReply, ApiError> {
+    let request: AdminGrantCreateRequest = parse(&body)?;
+    let grant = usecases::admin_grants_create(
+        state.app(),
+        &auth.actor.context,
+        &request.email,
+        &request.reason,
+    )
+    .await?;
+    Ok(AdminGrantCreateReply {
+        grant: AdminGrantView {
+            email: grant.email,
+            reason: grant.reason,
+            granted_by: grant.granted_by,
+            created_at: grant.created_at,
+        },
+    })
+}
+
+/// `admin.grants.revoke` — removes one grant by email (REQ-058).
+async fn admin_grants_revoke(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AdminGrantRevokeReply, ApiError> {
+    let request: AdminGrantRevokeRequest = parse(&body)?;
+    let revoked =
+        usecases::admin_grants_revoke(state.app(), &auth.actor.context, &request.email).await?;
+    Ok(AdminGrantRevokeReply { revoked })
+}
+
+/// `admin.plugins.list` — the plugin-submission review queue (REQ-058).
+async fn admin_plugins_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AdminPluginsReply, ApiError> {
+    let request: AdminPluginsListRequest = parse(&body)?;
+    let outcome =
+        usecases::admin_plugins_list(state.app(), &auth.actor.context, request.status.as_deref())
+            .await?;
+    Ok(AdminPluginsReply {
+        submissions: outcome
+            .submissions
+            .iter()
+            .map(|submission| AdminPluginSubmissionView {
+                id: submission.id.clone(),
+                source: submission.source.clone(),
+                name: submission.name.clone(),
+                status: submission.status.clone(),
+                created_at: submission.created_at.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// `admin.plugins.decide` — the reviewer's approve or reject (REQ-058).
+async fn admin_plugins_decide(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AdminPluginDecideReply, ApiError> {
+    let request: AdminPluginDecideRequest = parse(&body)?;
+    usecases::admin_plugins_decide(
+        state.app(),
+        &auth.actor.context,
+        &request.submission_id,
+        &request.decision,
+    )
+    .await?;
+    Ok(AdminPluginDecideReply {
+        status: request.decision,
     })
 }

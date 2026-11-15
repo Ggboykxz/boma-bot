@@ -582,6 +582,7 @@ pub async fn computer_app(
             )),
             Arc::new(boma_infra::PostgresBillingStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresAccountExportStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresAdminStore::new(pool.clone())),
         ),
         services,
     );

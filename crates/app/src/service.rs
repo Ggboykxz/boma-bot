@@ -77,6 +77,8 @@ pub struct Stores {
     pub billing: Arc<dyn BillingStore>,
     /// The ruled parts of one account export (REQ-044).
     pub account_export: Arc<dyn crate::ports::AccountExportStore>,
+    /// The admin surfaces: members, invitations, grants, plugin review (REQ-058).
+    pub admin: Arc<dyn crate::ports::AdminStore>,
     /// The tickets of the board (REQ-038). Only meaningful when the deployment enables the board.
     pub tickets: Arc<dyn TicketStore>,
     /// Side effects a run performs, exactly once per effect key.
@@ -144,6 +146,7 @@ impl Stores {
         models: Arc<dyn ModelStore>,
         billing: Arc<dyn BillingStore>,
         account_export: Arc<dyn crate::ports::AccountExportStore>,
+        admin: Arc<dyn crate::ports::AdminStore>,
     ) -> Self {
         Self {
             accounts,
@@ -173,6 +176,7 @@ impl Stores {
             models,
             billing,
             account_export,
+            admin,
             tickets,
             effects,
             tools,

@@ -567,6 +567,7 @@ impl TestAppBuilder {
             Arc::new(database.models()),
             Arc::new(database.billing()),
             Arc::new(crate::memory::MemoryAccountExportStore::new(&database)),
+            Arc::new(crate::memory::MemoryAdminStore::new(&database)),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -7599,29 +7600,237 @@ mod account_export_tests {
         // Provide an archive with bad JSON inside one parse-tolerant section plus an unknown one.
         let buf = std::io::Cursor::new(Vec::new());
         let archive = {
+            use std::io::Write as _;
             let mut writer = zip::ZipWriter::new(buf);
             let options = zip::write::SimpleFileOptions::default();
             writer
                 .start_file("manifest.json", options)
                 .expect("start manifest");
-            use std::io::Write as _;
             writer
                 .write_all(
                     br#"{"version":1,"exportedAt":"2026-01-01T00:00:00Z","userId":"u","counts":{"bots":0,"threads":0,"messages":0,"memory":0,"routines":0,"artifacts":0}}"#,
                 )
                 .expect("manifest writes");
             writer.start_file("bots.json", options).expect("start bots");
-            writer
-                .write_all(b"not json at all")
-                .expect("bots writes");
+            writer.write_all(b"not json at all").expect("bots writes");
             writer.finish().expect("zip finishes").into_inner()
         };
         let outcome = boma_app::account_export::account_import(test.app(), &context, &archive)
             .await
             .expect("the archive is accepted; the refusal is named by path");
-        assert!(outcome
-            .refused
+        assert!(
+            outcome
+                .refused
+                .iter()
+                .any(|entry| entry.contains("bots.json")),
+            "{:?}",
+            outcome.refused
+        );
+    }
+}
+
+#[cfg(test)]
+mod admin_tests {
+    // REQ-058 — the admin surfaces: access grants and plugin-submission review.
+
+    use super::TestApp;
+
+    async fn world() -> (
+        TestApp,
+        boma_domain::TenantContext,
+        boma_domain::TenantContext,
+    ) {
+        let test = TestApp::builder().build();
+        let owner_id = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner_id, "Admin space")
+            .await
+            .expect("the space exists");
+        let plain_id = test
+            .seed_user("plain@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        test.seed_member(&space_id, &plain_id, boma_domain::SpaceRole::Member);
+        (
+            test,
+            TestApp::member_context(&space_id, &owner_id),
+            TestApp::member_context(&space_id, &plain_id),
+        )
+    }
+
+    #[tokio::test]
+    async fn req_058_the_grants_create_list_and_revoke_round_trip_with_audit_rows() {
+        let (test, owner, plain) = world().await;
+
+        // A plain member is refused entirely.
+        let error = boma_app::usecases::admin_members_list(test.app(), &plain)
+            .await
+            .expect_err("a plain member is refused");
+        assert!(matches!(error, boma_app::AppError::Forbidden));
+
+        // An owner creates a grant.
+        let grant = boma_app::usecases::admin_grants_create(
+            test.app(),
+            &owner,
+            "granted@example.com",
+            "enterprise beta",
+        )
+        .await
+        .expect("the grant is written");
+        assert_eq!(grant.email, "granted@example.com");
+        assert_eq!(grant.reason, "enterprise beta");
+
+        // A duplicate email is a conflict, not a silent overwrite.
+        let duplicate = boma_app::usecases::admin_grants_create(
+            test.app(),
+            &owner,
+            "granted@example.com",
+            "again",
+        )
+        .await
+        .expect_err("a duplicate is refused");
+        assert!(matches!(duplicate, boma_app::AppError::Conflict));
+
+        // The audit trail holds one creation, never the reason.
+        let events = test.database().audit().events();
+        let created: Vec<_> = events
             .iter()
-            .any(|entry| entry.contains("bots.json")), "{:?}", outcome.refused);
+            .filter(|event| event.kind == "admin.grant_created")
+            .collect();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].target, "granted@example.com");
+
+        // The list returns the grant, the revoke removes it.
+        let listed = boma_app::usecases::admin_grants_list(test.app(), &owner)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed.grants.len(), 1);
+        let revoked =
+            boma_app::usecases::admin_grants_revoke(test.app(), &owner, "granted@example.com")
+                .await
+                .expect("the revoke answers");
+        assert!(revoked);
+        let after = boma_app::usecases::admin_grants_list(test.app(), &owner)
+            .await
+            .expect("the list answers");
+        assert_eq!(after.grants.len(), 0);
+
+        let events = test.database().audit().events();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "admin.grant_revoked")
+        );
+    }
+
+    #[tokio::test]
+    async fn req_058_the_plugin_review_decides_once_and_reports_conflict_afterwards() {
+        let (test, owner, plain) = world().await;
+
+        // File a plugin submission as anyone (anonymous path writes a row too).
+        let _ = boma_app::usecases::submit_plugin(
+            test.app(),
+            &boma_domain::PluginSourceRef {
+                git_url: "github.com/acme/connector".to_owned(),
+                ref_: None,
+                subdir: None,
+            },
+            Some("Acme connector".to_owned()),
+            Some("author@example.com".to_owned()),
+            None,
+        )
+        .await
+        .expect("the submission is filed");
+
+        // A plain member cannot review.
+        let refused = boma_app::usecases::admin_plugins_list(test.app(), &plain, Some("pending"))
+            .await
+            .expect_err("a plain member is refused");
+        assert!(matches!(refused, boma_app::AppError::Forbidden));
+
+        let queue = boma_app::usecases::admin_plugins_list(test.app(), &owner, Some("pending"))
+            .await
+            .expect("the queue answers");
+        assert_eq!(queue.submissions.len(), 1);
+        let id = queue.submissions[0].id.clone();
+
+        // Approve it.
+        boma_app::usecases::admin_plugins_decide(test.app(), &owner, &id, "approved")
+            .await
+            .expect("the decision is recorded");
+        let decided = boma_app::usecases::admin_plugins_list(test.app(), &owner, Some("approved"))
+            .await
+            .expect("the query answers");
+        assert_eq!(decided.submissions.len(), 1);
+
+        // A second decision on the same id is a conflict, not a silent no-op.
+        let second = boma_app::usecases::admin_plugins_decide(test.app(), &owner, &id, "rejected")
+            .await
+            .expect_err("a decided submission conflicts");
+        assert!(matches!(second, boma_app::AppError::Conflict));
+    }
+
+    #[tokio::test]
+    async fn req_058_the_invitations_list_and_revoke_flow_for_the_space_admin() {
+        let (test, owner, plain) = world().await;
+        let _ = boma_app::usecases::invite(
+            test.app(),
+            &owner,
+            "invited@example.com",
+            boma_domain::SpaceRole::Member,
+            60 * 60,
+        )
+        .await
+        .expect("the invitation is created");
+        let listed = boma_app::usecases::admin_invitations_list(test.app(), &owner)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed.invitations.len(), 1);
+        assert_eq!(listed.invitations[0].email, "invited@example.com");
+
+        // A plain member is refused the list.
+        let refused = boma_app::usecases::admin_invitations_list(test.app(), &plain)
+            .await
+            .expect_err("a plain member is refused");
+        assert!(matches!(refused, boma_app::AppError::Forbidden));
+
+        let revoked = boma_app::usecases::admin_invitations_revoke(
+            test.app(),
+            &owner,
+            &listed.invitations[0].id,
+        )
+        .await
+        .expect("the revoke answers");
+        assert!(revoked);
+        let after = boma_app::usecases::admin_invitations_list(test.app(), &owner)
+            .await
+            .expect("the list answers");
+        assert_eq!(after.invitations.len(), 0);
+
+        // The audit trail records nothing about the invite: ordinary space administration.
+        let events = test.database().audit().events();
+        assert!(!events.iter().any(|event| event.kind.starts_with("admin.")));
+    }
+
+    #[tokio::test]
+    async fn req_058_a_grant_written_for_an_invalid_reason_or_email_is_refused() {
+        let (test, owner, _plain) = world().await;
+        let error = boma_app::usecases::admin_grants_create(
+            test.app(),
+            &owner,
+            "granted@example.com",
+            "   ",
+        )
+        .await
+        .expect_err("an empty reason is refused");
+        assert!(matches!(error, boma_app::AppError::Rule(_)));
+        let error =
+            boma_app::usecases::admin_grants_create(test.app(), &owner, "not-an-email", "reason")
+                .await
+                .expect_err("an invalid email is refused");
+        assert!(matches!(error, boma_app::AppError::Rule(_)));
     }
 }

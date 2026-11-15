@@ -7,11 +7,11 @@ use boma_api::{AppState, router};
 use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountExportStore,
-    PostgresAccountStore, PostgresArtifactStore, PostgresAuditStore, PostgresBillingStore,
-    PostgresBotStore, PostgresCardStore, PostgresComputerStore, PostgresConnectorStore,
-    PostgresEffectStore, PostgresEventStore, PostgresInvitationStore, PostgresMailStore,
-    PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore, PostgresMessagingStore,
-    PostgresModelStore, PostgresPageStore, PostgresPendingToolCallStore,
+    PostgresAccountStore, PostgresAdminStore, PostgresArtifactStore, PostgresAuditStore,
+    PostgresBillingStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
+    PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresInvitationStore,
+    PostgresMailStore, PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore,
+    PostgresMessagingStore, PostgresModelStore, PostgresPageStore, PostgresPendingToolCallStore,
     PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
     PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
     PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
@@ -188,6 +188,7 @@ fn build_app(
             Arc::new(PostgresModelStore::new(pool.clone(), secrets_vault()?)),
             Arc::new(PostgresBillingStore::new(pool.clone())),
             Arc::new(PostgresAccountExportStore::new(pool.clone())),
+            Arc::new(PostgresAdminStore::new(pool.clone())),
         ),
         {
             let services = Services::new(

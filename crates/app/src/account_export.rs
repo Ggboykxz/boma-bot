@@ -556,41 +556,13 @@ pub async fn account_import(
 
     // Parse optional sections; every refusal is named in `refused` so the caller knows exactly which
     // entries did not land. None of them is silent.
-    let bots: Vec<boma_domain::Bot> = match read_optional(&entries, "bots.json", app) {
-        Ok(value) => value,
-        Err(_) => {
-            refused.push("bots.json: not valid for the archive schema".to_owned());
-            Vec::new()
-        }
-    };
-    let _threads: Vec<boma_domain::Thread> = match read_optional(&entries, "threads.json", app) {
-        Ok(value) => value,
-        Err(_) => {
-            refused.push("threads.json: not valid for the archive schema".to_owned());
-            Vec::new()
-        }
-    };
-    let messages: Vec<boma_domain::Message> = match read_optional(&entries, "messages.json", app) {
-        Ok(value) => value,
-        Err(_) => {
-            refused.push("messages.json: not valid for the archive schema".to_owned());
-            Vec::new()
-        }
-    };
-    let memories: Vec<boma_domain::MemoryDocument> = match read_optional(&entries, "memories.json", app) {
-        Ok(value) => value,
-        Err(_) => {
-            refused.push("memories.json: not valid for the archive schema".to_owned());
-            Vec::new()
-        }
-    };
-    let routines: Vec<crate::ports::Routine> = match read_optional(&entries, "routines.json", app) {
-        Ok(value) => value,
-        Err(_) => {
-            refused.push("routines.json: not valid for the archive schema".to_owned());
-            Vec::new()
-        }
-    };
+    let bots: Vec<boma_domain::Bot> = read_section(&entries, "bots.json", &mut refused);
+    let _threads: Vec<boma_domain::Thread> = read_section(&entries, "threads.json", &mut refused);
+    let messages: Vec<boma_domain::Message> = read_section(&entries, "messages.json", &mut refused);
+    let memories: Vec<boma_domain::MemoryDocument> =
+        read_section(&entries, "memories.json", &mut refused);
+    let routines: Vec<crate::ports::Routine> =
+        read_section(&entries, "routines.json", &mut refused);
 
     // The bots become new, caller-owned bots; their threads follow the same creation helper.
     let mut new_bot_ids: BTreeMap<String, boma_domain::BotId> = BTreeMap::new();
@@ -745,19 +717,21 @@ pub async fn account_import(
 }
 
 /// Reads one optional JSON section; missing sections are empty, present ones are strictly parsed.
-fn read_optional<T: serde::de::DeserializeOwned>(
+///
+/// An unusable section is named in `refused` and contributes nothing — never silently.
+fn read_section<T: serde::de::DeserializeOwned>(
     entries: &BTreeMap<String, Vec<u8>>,
     key: &str,
-    _app: &App,
-) -> Result<Vec<T>, AppError> {
+    refused: &mut Vec<String>,
+) -> Vec<T> {
     let Some(bytes) = entries.get(key) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
-    serde_json::from_slice(bytes).map_err(|_| {
-        AppError::Rule(boma_domain::DomainError::InvalidName(format!(
-            "the archive section {key:?} does not match the account export schema"
-        )))
-    })
+    let Ok(value) = serde_json::from_slice(bytes) else {
+        refused.push(format!("{key}: not valid for the archive schema"));
+        return Vec::new();
+    };
+    value
 }
 
 /// A file's safe name, never a path.

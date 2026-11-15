@@ -3983,3 +3983,154 @@ pub struct AnswerCardOutcome {
     /// a replay.
     pub effect_recorded: bool,
 }
+
+/// One member of a space as the admin surface sees them (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminMember {
+    /// The member's id.
+    pub user_id: UserId,
+    /// Their address.
+    pub email: Email,
+    /// The display name.
+    pub name: String,
+    /// Their role.
+    pub role: SpaceRole,
+    /// When they last signed in, when the session is fresh enough to say.
+    pub last_seen_at: Option<String>,
+}
+
+/// One pending invitation as the admin surface sees them (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminInvitation {
+    /// The invitation's id.
+    pub id: String,
+    /// The invited email; shown back to admins only.
+    pub email: String,
+    /// The role the invitation grants.
+    pub role: SpaceRole,
+    /// When it expires.
+    pub expires_at: String,
+}
+
+/// One server-level grant of hosted access (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminGrant {
+    /// The granted email; globally unique.
+    pub email: String,
+    /// The admin's reason for the grant.
+    pub reason: String,
+    /// Who granted it: the admin id, never free text.
+    pub granted_by: String,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// One plugin submission as the admin surface sees it (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminPluginSubmission {
+    /// The submission's id.
+    pub id: String,
+    /// The canonical source.
+    pub source: String,
+    /// The plugin's display name, when the author gave one.
+    pub name: Option<String>,
+    /// The review state.
+    pub status: String,
+    /// When it was filed.
+    pub created_at: String,
+}
+
+/// The admin surfaces: members, invitations, grants and the plugin-submission review (REQ-058).
+///
+/// Role checks live in the use cases, not in the store; the store never decides who is allowed to see anything.
+#[async_trait]
+pub trait AdminStore: Send + Sync {
+    /// The members of one space, alphabetical name order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn members(
+        &self,
+        context: &TenantContext,
+        space_id: &SpaceId,
+    ) -> Result<Vec<AdminMember>, AppError>;
+
+    /// The pending invitations of one space, newest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn invitations(
+        &self,
+        context: &TenantContext,
+        space_id: &SpaceId,
+    ) -> Result<Vec<AdminInvitation>, AppError>;
+
+    /// Revokes one pending invitation. A revoked invitation can never be used again.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn revoke_invitation(
+        &self,
+        context: &TenantContext,
+        space_id: &SpaceId,
+        invitation_id: &str,
+    ) -> Result<bool, AppError>;
+
+    /// Every access grant on the deployment, alphabetical email.
+    ///
+    /// System-scoped; an admin never reads grants of other deployments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn grants(&self) -> Result<Vec<AdminGrant>, AppError>;
+
+    /// Writes one access grant. Returns the row as stored.
+    ///
+    /// `created_at` comes from the app's clock so the row is as reproducible as everything else.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a grant for the email already exists, and an error when the database cannot answer.
+    async fn grant_access(
+        &self,
+        email: &Email,
+        reason: &str,
+        granted_by: &UserId,
+        created_at: &str,
+    ) -> Result<AdminGrant, AppError>;
+
+    /// Revokes one access grant by email.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn revoke_grant(&self, email: &Email) -> Result<bool, AppError>;
+
+    /// The plugin-submission review queue, newest first, capped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn plugin_submissions(
+        &self,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<AdminPluginSubmission>, AppError>;
+
+    /// Marks one pending submission `approved`, `rejected` or `revoked`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Conflict`] when the submission is already decided or does not exist,
+    /// and an error when the database cannot answer.
+    async fn decide_submission(
+        &self,
+        id: &str,
+        decision: &str,
+        _reviewer: &UserId,
+    ) -> Result<(), AppError>;
+}

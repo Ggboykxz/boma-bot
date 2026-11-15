@@ -8044,3 +8044,284 @@ pub async fn scim_set_active(
         active: deactivated_at.is_none(),
     })
 }
+
+// ---------------------------------------------------------------------------
+// M9 — admin surfaces (REQ-058)
+// ---------------------------------------------------------------------------
+
+/// The outcome of `admin.members.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminMembersOutcome {
+    /// The members of the caller's space.
+    pub members: Vec<crate::ports::AdminMember>,
+}
+
+/// The outcome of `admin.invitations.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminInvitationsOutcome {
+    /// The pending invitations of the caller's space.
+    pub invitations: Vec<crate::ports::AdminInvitation>,
+}
+
+/// The outcome of `admin.grants.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminGrantsOutcome {
+    /// Every grant on the deployment, alphabetical email.
+    pub grants: Vec<crate::ports::AdminGrant>,
+}
+
+/// The outcome of `admin.plugins.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminPluginsOutcome {
+    /// The submissions of the review queue, newest first.
+    pub submissions: Vec<crate::ports::AdminPluginSubmission>,
+}
+
+/// The space the admin procedures address: the space the caller acts in (REQ-058).
+fn admin_space(context: &TenantContext) -> Result<boma_domain::SpaceId, AppError> {
+    context.space_id().cloned().ok_or(AppError::Forbidden)
+}
+
+/// Every admin procedure gates on Owner|Admin of the caller's space.
+async fn require_admin(
+    app: &App,
+    context: &TenantContext,
+) -> Result<boma_domain::SpaceId, AppError> {
+    let space_id = admin_space(context)?;
+    require_space_role(app, context, &space_id, SPACE_ADMINS).await?;
+    Ok(space_id)
+}
+
+/// The members of the caller's space, with the role each one holds (REQ-058).
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin, and an error when
+/// a store cannot answer.
+pub async fn admin_members_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<AdminMembersOutcome, AppError> {
+    let space_id = require_admin(app, context).await?;
+    let members = app.stores.admin.members(context, &space_id).await?;
+    Ok(AdminMembersOutcome { members })
+}
+
+/// The pending invitations of the caller's space (REQ-058).
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin, and an error when
+/// a store cannot answer.
+pub async fn admin_invitations_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<AdminInvitationsOutcome, AppError> {
+    let space_id = require_admin(app, context).await?;
+    let invitations = app.stores.admin.invitations(context, &space_id).await?;
+    Ok(AdminInvitationsOutcome { invitations })
+}
+
+/// Revokes one pending invitation (REQ-058).
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin, [`AppError::NotFound`]
+/// when the invitation is not pending in the caller's space, and an error when a store cannot
+/// answer.
+pub async fn admin_invitations_revoke(
+    app: &App,
+    context: &TenantContext,
+    invitation_id: &str,
+) -> Result<bool, AppError> {
+    let space_id = require_admin(app, context).await?;
+    if invitation_id.trim().is_empty() {
+        return Err(AppError::NotFound);
+    }
+    app.stores
+        .admin
+        .revoke_invitation(context, &space_id, invitation_id)
+        .await
+}
+
+/// Every access grant on the deployment (REQ-058).
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin, and an error when
+/// a store cannot answer.
+pub async fn admin_grants_list(
+    app: &App,
+    context: &TenantContext,
+) -> Result<AdminGrantsOutcome, AppError> {
+    let _ = require_admin(app, context).await?;
+    let grants = app.stores.admin.grants().await?;
+    Ok(AdminGrantsOutcome { grants })
+}
+
+/// Writes one access grant, after the caller's role is checked and before anyone gets access (REQ-058).
+///
+/// The grant is recorded in the audit trail (never the reason, which is admin shorthand), and the
+/// email is the thing the provider asked for. It activates server access for the whole deployment:
+/// membership in a space is still required to see anything.
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin, [`AppError::Conflict`]
+/// when the email already holds a grant, [`AppError::Rule`] when the reason is empty or over 200
+/// characters, and an error when a store cannot answer.
+pub async fn admin_grants_create(
+    app: &App,
+    context: &TenantContext,
+    email: &str,
+    reason: &str,
+) -> Result<crate::ports::AdminGrant, AppError> {
+    let _ = require_admin(app, context).await?;
+    let reason = reason.trim();
+    if reason.is_empty() || reason.chars().count() > 200 {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the reason is required and at most 200 characters".to_owned(),
+        )));
+    }
+    let email = boma_domain::Email::new(email.trim().to_ascii_lowercase())?;
+    let granted_by = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    let now = app.services.clock.now();
+    let grant = app
+        .stores
+        .admin
+        .grant_access(&email, reason, &granted_by, &now)
+        .await?;
+    let _ = app
+        .stores
+        .audit
+        .append(crate::ports::NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: None,
+            actor_user_id: Some(granted_by),
+            kind: boma_domain::AuditKind::AdminGrantCreated,
+            target: email.as_str().to_owned(),
+            metadata: serde_json::json!({
+                "reason": reason,
+            }),
+            created_at: now,
+        })
+        .await;
+    Ok(grant)
+}
+
+/// Revokes one access grant by email; a revoked email is refused at the next request (REQ-058).
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin, [`AppError::NotFound`]
+/// when there is no such grant, and an error when a store cannot answer.
+pub async fn admin_grants_revoke(
+    app: &App,
+    context: &TenantContext,
+    email: &str,
+) -> Result<bool, AppError> {
+    let _ = require_admin(app, context).await?;
+    let email = boma_domain::Email::new(email.trim().to_ascii_lowercase())?;
+    let revoked_by = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    let now = app.services.clock.now();
+    let removed = app.stores.admin.revoke_grant(&email).await?;
+    if removed {
+        let _ = app
+            .stores
+            .audit
+            .append(crate::ports::NewAuditEvent {
+                id: app.services.ids.new_id("aud"),
+                space_id: None,
+                actor_user_id: Some(revoked_by),
+                kind: boma_domain::AuditKind::AdminGrantRevoked,
+                target: email.as_str().to_owned(),
+                metadata: serde_json::json!({}),
+                created_at: now,
+            })
+            .await;
+    }
+    Ok(removed)
+}
+
+/// The plugin-submission review queue (REQ-058).
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin, and an error when
+/// a store cannot answer.
+pub async fn admin_plugins_list(
+    app: &App,
+    context: &TenantContext,
+    status: Option<&str>,
+) -> Result<AdminPluginsOutcome, AppError> {
+    let _ = require_admin(app, context).await?;
+    if let Some(status) = status {
+        match status {
+            "pending" | "unconfirmed" | "approved" | "rejected" | "applied" | "revoked" => {}
+            _ => {
+                return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                    "the status is not one of pending, unconfirmed, approved, rejected, applied, revoked".to_owned(),
+                )));
+            }
+        }
+    }
+    let limit = 200_i64;
+    let submissions = app.stores.admin.plugin_submissions(status, limit).await?;
+    Ok(AdminPluginsOutcome { submissions })
+}
+
+/// Records the reviewer's decision on one pending plugin submission (REQ-058).
+///
+/// `decision` is `approved` or `rejected`. The submitter is not notified today (no outbound mail
+/// adapter in this deployment; recorded in STATE.md); the audit line is what the operator can
+/// prove was decided, and by whom.
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not an owner or admin,
+/// [`AppError::Conflict`] when the submission was already decided or does not exist,
+/// [`AppError::Rule`] when the decision is not `approved` or `rejected`, and an error when a
+/// store cannot answer.
+pub async fn admin_plugins_decide(
+    app: &App,
+    context: &TenantContext,
+    submission_id: &str,
+    decision: &str,
+) -> Result<(), AppError> {
+    let _ = require_admin(app, context).await?;
+    let submission_id = submission_id.trim();
+    if submission_id.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    let decision = match decision.trim() {
+        "approved" => "approved",
+        "rejected" => "rejected",
+        _ => {
+            return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+                "the decision must be approved or rejected".to_owned(),
+            )));
+        }
+    };
+    let reviewer = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    app.stores
+        .admin
+        .decide_submission(submission_id, decision, &reviewer)
+        .await?;
+    let now = app.services.clock.now();
+    let _ = app
+        .stores
+        .audit
+        .append(crate::ports::NewAuditEvent {
+            id: app.services.ids.new_id("aud"),
+            space_id: None,
+            actor_user_id: Some(reviewer),
+            kind: boma_domain::AuditKind::AdminPluginReviewed,
+            target: submission_id.to_owned(),
+            metadata: serde_json::json!({
+                "decision": decision,
+            }),
+            created_at: now,
+        })
+        .await;
+    Ok(())
+}

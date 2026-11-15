@@ -4033,3 +4033,154 @@ async fn req_045_security_events_list_refuses_a_plain_member_and_returns_securit
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["kind"], "security.sign_in_failed");
 }
+
+// ---------------------------------------------------------------------------
+// M9 — admin surfaces (REQ-058)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_058_an_owner_creates_a_deployment_grant_a_plain_member_is_refused() {
+    let test_app = TestApp::builder().build();
+    let owner_id = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner_id, "Admin space")
+        .await
+        .expect("the space exists");
+    let _ = test_app
+        .seed_bot(&space_id, &owner_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let plain_id = test_app
+        .seed_user("plain@example.com", "correct horse battery")
+        .await
+        .expect("the person exists");
+    test_app.seed_member(&space_id, &plain_id, boma_domain::SpaceRole::Member);
+    let plain_cookie = sign_in_as(&test_app, "plain@example.com").await;
+    let owner_cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let plain_caller = Caller {
+        cookie: plain_cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+    let owner_caller = Caller {
+        cookie: owner_cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    let plain = post(
+        state(&test_app),
+        "/rpc/admin/grants.create",
+        Some(&plain_caller),
+        serde_json::json!({
+            "email": "beta@example.com",
+            "reason": "beta tester",
+        }),
+    )
+    .await;
+    assert_eq!(plain.status(), StatusCode::FORBIDDEN);
+
+    let response = post(
+        state(&test_app),
+        "/rpc/admin/grants.create",
+        Some(&owner_caller),
+        serde_json::json!({
+            "email": "beta@example.com",
+            "reason": "beta tester",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["grant"]["email"], "beta@example.com");
+    assert_eq!(body["grant"]["reason"], "beta tester");
+
+    let listed = post(
+        state(&test_app),
+        "/rpc/admin/grants.list",
+        Some(&owner_caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let body = json(listed).await;
+    let grants = body["grants"].as_array().expect("an array");
+    assert_eq!(grants.len(), 1);
+    assert_eq!(grants[0]["email"], "beta@example.com");
+
+    let events = test_app.database().audit().events();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == "admin.grant_created")
+    );
+}
+
+#[tokio::test]
+async fn req_058_the_plugin_review_approve_then_a_second_decision_conflicts() {
+    let test_app = TestApp::builder().build();
+    let owner_id = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner_id, "Admin space")
+        .await
+        .expect("the space exists");
+    let _ = test_app
+        .seed_bot(&space_id, &owner_id, "Analyst")
+        .await
+        .expect("the bot exists");
+    let _ = boma_app::usecases::submit_plugin(
+        test_app.app(),
+        &boma_domain::PluginSourceRef {
+            git_url: "github.com/acme/connector".to_owned(),
+            ref_: None,
+            subdir: None,
+        },
+        Some("Acme connector".to_owned()),
+        None,
+        None,
+    )
+    .await
+    .expect("the submission is filed");
+    let owner_cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let owner_caller = Caller {
+        cookie: owner_cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    let queued = post(
+        state(&test_app),
+        "/rpc/admin/plugins.list",
+        Some(&owner_caller),
+        serde_json::json!({ "status": "pending" }),
+    )
+    .await;
+    assert_eq!(queued.status(), StatusCode::OK);
+    let body = json(queued).await;
+    let submissions = body["submissions"].as_array().expect("an array").clone();
+    assert_eq!(submissions.len(), 1);
+    let id = submissions[0]["id"].as_str().expect("an id").to_owned();
+
+    let decided = post(
+        state(&test_app),
+        "/rpc/admin/plugins.decide",
+        Some(&owner_caller),
+        serde_json::json!({ "submissionId": id, "decision": "approved" }),
+    )
+    .await;
+    assert_eq!(decided.status(), StatusCode::OK);
+    let body = json(decided).await;
+    assert_eq!(body["status"], "approved");
+
+    let second = post(
+        state(&test_app),
+        "/rpc/admin/plugins.decide",
+        Some(&owner_caller),
+        serde_json::json!({ "submissionId": id, "decision": "rejected" }),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+}

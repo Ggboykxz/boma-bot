@@ -1551,6 +1551,174 @@ pub struct AccountDeleteReply {
     pub status: String,
 }
 
+/// One member of a space as the admin surface sees them (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminMemberView {
+    /// The member's id.
+    pub user_id: String,
+    /// Their address.
+    pub email: String,
+    /// The display name.
+    pub name: String,
+    /// Their role.
+    pub role: String,
+    /// When they were last seen, when known; `null` otherwise.
+    pub last_seen_at: Option<String>,
+}
+
+/// The reply of `admin.members.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminMembersReply {
+    /// The members of the caller's space.
+    pub members: Vec<AdminMemberView>,
+}
+
+/// One pending invitation as the admin surface sees them (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminInvitationView {
+    /// The invitation's id.
+    pub id: String,
+    /// The invited email; shown to admins only.
+    pub email: String,
+    /// The role the invitation grants.
+    pub role: String,
+    /// When it expires.
+    pub expires_at: String,
+}
+
+/// The reply of `admin.invitations.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminInvitationsReply {
+    /// The pending invitations of the caller's space.
+    pub invitations: Vec<AdminInvitationView>,
+}
+
+/// The body of `admin.invitations.revoke` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminInvitationRevokeRequest {
+    /// The invitation id; the server refuses a blank or unknown one.
+    pub invitation_id: String,
+}
+
+/// The reply of `admin.invitations.revoke` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminInvitationRevokeReply {
+    /// Whether the pending invitation was revoked by this call.
+    pub revoked: bool,
+}
+
+/// One server-level grant of hosted access, as the admin surface sees them (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminGrantView {
+    /// The granted email.
+    pub email: String,
+    /// The admin's reason for the grant.
+    pub reason: String,
+    /// Who granted it: the admin id.
+    pub granted_by: String,
+    /// When it was written.
+    pub created_at: String,
+}
+
+/// The reply of `admin.grants.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminGrantsReply {
+    /// Every grant on the deployment, alphabetical email.
+    pub grants: Vec<AdminGrantView>,
+}
+
+/// The body of `admin.grants.create` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminGrantCreateRequest {
+    /// The granted email.
+    pub email: String,
+    /// The admin's reason for the grant; one line, at most 200 characters.
+    pub reason: String,
+}
+
+/// The reply of `admin.grants.create` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminGrantCreateReply {
+    /// The grant as stored.
+    pub grant: AdminGrantView,
+}
+
+/// The body of `admin.grants.revoke` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminGrantRevokeRequest {
+    /// The email to revoke.
+    pub email: String,
+}
+
+/// The reply of `admin.grants.revoke` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminGrantRevokeReply {
+    /// Whether a grant was actually revoked by this call.
+    pub revoked: bool,
+}
+
+/// One plugin submission as the admin surface sees them (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminPluginSubmissionView {
+    /// The submission's id.
+    pub id: String,
+    /// The canonical source.
+    pub source: String,
+    /// The plugin's display name, when the author gave one.
+    pub name: Option<String>,
+    /// The review state.
+    pub status: String,
+    /// When it was filed.
+    pub created_at: String,
+}
+
+/// The body of `admin.plugins.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminPluginsListRequest {
+    /// The status to filter by; absent lists everything.
+    pub status: Option<String>,
+}
+
+/// The reply of `admin.plugins.list` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminPluginsReply {
+    /// The submissions of the review queue, newest first.
+    pub submissions: Vec<AdminPluginSubmissionView>,
+}
+
+/// The body of `admin.plugins.decide` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminPluginDecideRequest {
+    /// The submission's id.
+    pub submission_id: String,
+    /// The decision: `approved` or `rejected`.
+    pub decision: String,
+}
+
+/// The reply of `admin.plugins.decide` (REQ-058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminPluginDecideReply {
+    /// The stored decision.
+    pub status: String,
+}
+
 #[cfg(test)]
 mod tests {
     use boma_domain::{Block, MessageId, MessageRole, RunId, ThreadId};

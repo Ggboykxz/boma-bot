@@ -37,17 +37,17 @@ pub mod scripts;
 
 pub use build::{TestApp, TestAppBuilder};
 pub use memory::{
-    MemoryAccountExportStore, MemoryAccountStore, MemoryArtifactContentStore, MemoryArtifactStore,
-    MemoryAuditStore, MemoryBillingStore, MemoryBotStore, MemoryCardStore, MemoryComputerStore,
-    MemoryConnectorStore, MemoryDatabase, MemoryEffectStore, MemoryEventPublisher,
-    MemoryEventStore, MemoryInvitationStore, MemoryMailStore, MemoryMcpServerStore,
-    MemoryMemoryStore, MemoryMessageStore, MemoryMessagingStore, MemoryModelStore, MemoryPageStore,
-    MemoryPendingToolCallStore, MemoryPluginInstallStore, MemoryPluginSubmissionStore,
-    MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore, MemoryRosterStore,
-    MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore, MemorySecretStore,
-    MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore, MemoryTicketStore,
-    MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall, RecordedSkill,
-    RecordedSubmission,
+    MemoryAccountExportStore, MemoryAccountStore, MemoryAdminStore, MemoryArtifactContentStore,
+    MemoryArtifactStore, MemoryAuditStore, MemoryBillingStore, MemoryBotStore, MemoryCardStore,
+    MemoryComputerStore, MemoryConnectorStore, MemoryDatabase, MemoryEffectStore,
+    MemoryEventPublisher, MemoryEventStore, MemoryInvitationStore, MemoryMailStore,
+    MemoryMcpServerStore, MemoryMemoryStore, MemoryMessageStore, MemoryMessagingStore,
+    MemoryModelStore, MemoryPageStore, MemoryPendingToolCallStore, MemoryPluginInstallStore,
+    MemoryPluginSubmissionStore, MemoryRateLimitStore, MemoryReactionStore, MemoryReadStateStore,
+    MemoryRosterStore, MemoryRoutineStore, MemoryRunStore, MemoryScreenCapabilityStore,
+    MemorySecretStore, MemorySessionStore, MemorySkillStore, MemorySpaceStore, MemoryThreadStore,
+    MemoryTicketStore, MemoryToolStore, MemoryUserStore, Organization, RecordedPluginInstall,
+    RecordedSkill, RecordedSubmission,
 };
 pub use scripts::{
     BillingCheckoutCall, ComputerAnswer, FixedHasher, ModelTransportCall, ScriptedBillingProvider,

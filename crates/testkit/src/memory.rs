@@ -8158,3 +8158,192 @@ impl boma_app::ports::BillingStore for MemoryBillingStore {
         Ok(())
     }
 }
+
+/// The in-memory admin store: grants live in a shared vector since the deployment reuses one.
+#[derive(Debug, Default)]
+pub struct MemoryAdminStore {
+    state: Arc<RwLock<State>>,
+    grants: Arc<RwLock<Vec<AdminGrantRow>>>,
+}
+
+#[derive(Debug, Clone)]
+struct AdminGrantRow {
+    email: String,
+    reason: String,
+    granted_by: String,
+    created_at: String,
+}
+
+impl MemoryAdminStore {
+    /// Builds the store on the shared rows.
+    #[must_use]
+    pub fn new(database: &MemoryDatabase) -> Self {
+        Self {
+            state: Arc::clone(&database.state),
+            grants: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    fn grants_snapshot(&self) -> Vec<boma_app::ports::AdminGrant> {
+        self.grants
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|row| boma_app::ports::AdminGrant {
+                email: row.email.clone(),
+                reason: row.reason.clone(),
+                granted_by: row.granted_by.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::AdminStore for MemoryAdminStore {
+    async fn members(
+        &self,
+        _context: &boma_domain::TenantContext,
+        space_id: &boma_domain::SpaceId,
+    ) -> Result<Vec<boma_app::ports::AdminMember>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .memberships
+            .iter()
+            .filter(|row| row.space_id == *space_id)
+            .filter_map(|row| {
+                state
+                    .users
+                    .iter()
+                    .find(|u| u.user.id == row.user_id)
+                    .map(|u| boma_app::ports::AdminMember {
+                        user_id: u.user.id.clone(),
+                        email: u.user.email.clone(),
+                        name: u.user.name.clone(),
+                        role: row.role,
+                        last_seen_at: None,
+                    })
+            })
+            .collect())
+    }
+
+    async fn invitations(
+        &self,
+        _context: &boma_domain::TenantContext,
+        space_id: &boma_domain::SpaceId,
+    ) -> Result<Vec<boma_app::ports::AdminInvitation>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .invitations
+            .iter()
+            .filter(|row| row.invitation.space_id == *space_id && row.invitation.pending)
+            .map(|row| boma_app::ports::AdminInvitation {
+                id: row.invitation.id.as_str().to_owned(),
+                email: row.invitation.email.as_str().to_owned(),
+                role: row.invitation.role,
+                expires_at: row.invitation.expires_at.clone(),
+            })
+            .collect())
+    }
+
+    async fn revoke_invitation(
+        &self,
+        _context: &boma_domain::TenantContext,
+        space_id: &boma_domain::SpaceId,
+        invitation_id: &str,
+    ) -> Result<bool, AppError> {
+        let mut state = write(&self.state);
+        let found = state.invitations.iter_mut().find(|row| {
+            row.invitation.space_id == *space_id
+                && row.invitation.id.as_str() == invitation_id
+                && row.invitation.pending
+        });
+        match found {
+            Some(row) => {
+                row.invitation.pending = false;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn grants(&self) -> Result<Vec<boma_app::ports::AdminGrant>, AppError> {
+        Ok(self.grants_snapshot())
+    }
+
+    async fn grant_access(
+        &self,
+        email: &boma_domain::Email,
+        reason: &str,
+        granted_by: &boma_domain::UserId,
+        created_at: &str,
+    ) -> Result<boma_app::ports::AdminGrant, AppError> {
+        let mut grants = self
+            .grants
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if grants.iter().any(|row| row.email == email.as_str()) {
+            return Err(AppError::Conflict);
+        }
+        let created_at = created_at.to_owned();
+        let row = AdminGrantRow {
+            email: email.as_str().to_owned(),
+            reason: reason.to_owned(),
+            granted_by: granted_by.as_str().to_owned(),
+            created_at,
+        };
+        grants.push(row.clone());
+        Ok(boma_app::ports::AdminGrant {
+            email: row.email,
+            reason: row.reason,
+            granted_by: row.granted_by,
+            created_at: row.created_at,
+        })
+    }
+
+    async fn revoke_grant(&self, email: &boma_domain::Email) -> Result<bool, AppError> {
+        let mut grants = self
+            .grants
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = grants.len();
+        grants.retain(|row| row.email != email.as_str());
+        Ok(grants.len() != before)
+    }
+
+    async fn plugin_submissions(
+        &self,
+        status: Option<&str>,
+        _limit: i64,
+    ) -> Result<Vec<boma_app::ports::AdminPluginSubmission>, AppError> {
+        let state = read(&self.state);
+        Ok(state
+            .plugin_submissions
+            .iter()
+            .filter(|row| status.is_none_or(|want| row.status == want))
+            .map(|row| boma_app::ports::AdminPluginSubmission {
+                id: row.id.clone(),
+                source: row.source.clone(),
+                name: row.name.clone(),
+                status: row.status.clone(),
+                created_at: row.created_at.clone(),
+            })
+            .collect())
+    }
+
+    async fn decide_submission(
+        &self,
+        id: &str,
+        decision: &str,
+        _reviewer: &boma_domain::UserId,
+    ) -> Result<(), AppError> {
+        let mut state = write(&self.state);
+        let row = state
+            .plugin_submissions
+            .iter_mut()
+            .find(|row| row.id == id && row.status == "pending")
+            .ok_or(AppError::Conflict)?;
+        decision.clone_into(&mut row.status);
+        Ok(())
+    }
+}
