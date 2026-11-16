@@ -192,6 +192,16 @@ committed) and packed by electron-builder into `resources/postgres/`. The launch
 `boma serve` + `boma worker` as supervised child processes. Verified on Linux (initdb →
 migrate → serve → RPC round-trip); Windows verified by the owner on an installed machine.
 
+## OpenSSL (one transitive edge; v0.3 Windows builds)
+
+The Windows `boma.exe` is built with OpenSSL because of one transitive edge nothing else pulls:
+`web-push` → `ece` → `openssl-sys` (`ece` predates rustls). Everything else in the workspace
+uses rustls. The Windows CI runners install it via `vcpkg install openssl:x64-windows-static-md`
+(dynamic CRT, matching Rust's `/MD`), so the binary is self-contained with no OpenSSL DLLs. The
+Linux build links the runner's system OpenSSL. Distribution is unaffected (OpenSSL is linked,
+not redistributed); recorded here because the repo otherwise bans OpenSSL (AGENTS.md: rustls,
+avoid OpenSSL).
+
 ## Assets
 
 Nothing visual was taken from the analysed product. No font, icon or image is vendored at M0.

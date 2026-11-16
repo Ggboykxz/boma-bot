@@ -169,6 +169,10 @@ jobs:
       - name: Stage the desktop vendor (embedded Postgres, boma, web)
         if: runner.os == 'Linux'
         run: bash ../../tools/stage-desktop-vendor.sh linux
+      - name: Install OpenSSL for openssl-sys (transitive: web-push → ece)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: vcpkg install openssl:x64-windows-static-md
       - name: Stage the desktop vendor (embedded Postgres, boma, web)
         if: runner.os == 'Windows'
         run: bash ../../tools/stage-desktop-vendor.sh windows

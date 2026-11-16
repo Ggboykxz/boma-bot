@@ -138,6 +138,9 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
+      - name: Install OpenSSL for openssl-sys (transitive: web-push → ece)
+        shell: bash
+        run: vcpkg install openssl:x64-windows-static-md
       - name: Stage the desktop vendor (embedded Postgres, boma, web)
         run: bash tools/stage-desktop-vendor.sh windows
         shell: bash
