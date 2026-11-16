@@ -124,8 +124,14 @@ mod tests {
                 },
             ]
         );
-        assert!(parse_ollama_tags(&serde_json::json!({"models": "nope"})).is_empty());
-        assert!(parse_ollama_tags(&serde_json::json!(42)).is_empty());
+        assert_eq!(
+            parse_ollama_tags(&serde_json::json!({"models": "nope"})),
+            [] as [LocalDiscoveredModel; 0]
+        );
+        assert_eq!(
+            parse_ollama_tags(&serde_json::json!(42)),
+            [] as [LocalDiscoveredModel; 0]
+        );
     }
 
     #[test]
@@ -152,6 +158,9 @@ mod tests {
                 },
             ]
         );
-        assert!(parse_lmstudio_models(&serde_json::json!({})).is_empty());
+        assert_eq!(
+            parse_lmstudio_models(&serde_json::json!({})),
+            [] as [LocalDiscoveredModel; 0]
+        );
     }
 }
