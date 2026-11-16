@@ -27,8 +27,11 @@ echo "staging $OS into $VENDOR"
 rm -rf "$VENDOR/postgres" "$VENDOR/boma" "$VENDOR/web"
 mkdir -p "$VENDOR/postgres" "$VENDOR/boma" "$VENDOR/web"
 
-# 1) Embedded Postgres (SHA-256 pinned, Maven Central).
-bash "$ROOT/tools/fetch-embedded-postgres.sh" "$VENDOR/postgres" "$OS"
+# 1) Embedded Postgres (SHA-256 pinned, Maven Central), staged FLAT: the pack expects
+# resources/postgres/bin/initdb, not resources/postgres/<os>/bin/initdb.
+bash "$ROOT/tools/fetch-embedded-postgres.sh" "$VENDOR/postgres-tmp" "$OS"
+mv "$VENDOR/postgres-tmp/$OS"/* "$VENDOR/postgres"/
+rm -rf "$VENDOR/postgres-tmp"
 
 # 2) The boma server binary; release by default, overridable for rehearsals.
 cargo build --release --locked --bin boma --manifest-path "$ROOT/Cargo.toml"
