@@ -94,7 +94,13 @@ jobs:
             echo "- boma-${VERSION}-linux-x86_64.tar.gz — the server: the boma binary, the static web build, migrations, README/LICENSE/CHANGELOG and docs/UPGRADING.md. Serve it with boma migrate && boma serve; see docs/UPGRADING.md."
             echo "- boma-desktop-${VERSION}-linux-x64.tar.gz — the Electron shell, unpacked and unsigned; see docs/UPGRADING.md (§Desktop). No auto-update; updates are manual."
             echo
-            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI 4 jobs on every push."
+            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI 5 jobs on every push."
+            echo
+            echo "Verify the downloads (no Apple/MS identity required — these are keyless Sigstore attestations, not code-signing certificates):"
+            echo
+            echo "  gh attestation verify boma-${VERSION}-linux-x86_64.tar.gz --repo Ggboykxz/boma-bot"
+            echo "  gh attestation verify boma-desktop-${VERSION}-linux-x64.tar.gz --repo Ggboykxz/boma-bot"
+            echo "  gh attestation verify SHA256SUMS.txt --repo Ggboykxz/boma-bot"
             echo
             echo "Everything else is in the repository: CHANGELOG.md, docs/PLAN.md, docs/TRACEABILITY.md (56/58 REQ ids in test names), docs/adr/ (25 decisions)."
           } > release-notes.md

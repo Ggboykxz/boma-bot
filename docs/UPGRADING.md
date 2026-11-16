@@ -102,10 +102,32 @@ via `ingress.tls`.
 
 ## Desktop (Electron)
 
-The update feed is static and inert (ADR-016): there is no silent auto-update in 0.1.0. Updates
-are manual — download the new pack from the release page, install over the previous one; the
-configuration and the local cache live in the OS app directory and survive reinstalls. Verify
-the pack's signature before installing (see the release notes for the publisher and checksums).
+ADR-016: the update feed is static and inert; there is no silent auto-update. Updates are manual —
+download the new pack from the release page and install over the previous one; the configuration
+and the local cache live in the OS app directory and survive reinstalls.
+
+**The pack is not signed by an Apple or Microsoft identity.** The release pipeline therefore
+covers every published artifact — including the desktop pack and `SHA256SUMS.txt` — with a
+**keyless Sigstore attestation** via the release workflow (GitHub Actions OIDC, no private key
+is used or stored). You do not need an Apple Developer account to verify that the pack really
+came from this repository's release workflow. Verify before installing:
+
+```bash
+gh attestation verify boma-desktop-<version>-linux-x64.tar.gz \
+  --repo Ggboykxz/boma-bot
+```
+
+Expected output: JSON (or `verified` with exit code 0) with a SLSA v1 predicate, the workflow
+path (`release.yml`), the ref (`refs/tags/vX.Y.Z`) and the commit hash that ran the release. If
+attestation lookup fails (e.g. no GitHub access), compare SHA256 against `SHA256SUMS.txt` from
+the same release page; those hashes are themselves attested.
+
+Linux/macOS Gatekeeper note: an unsigned app may still trip a first-launch warning (right-click →
+Open on macOS, `Allow` on Linux). This is expected for unsigned bytes; it is not an indication
+the release is forged — the Sigstore attestation is the proof of origin.
+
+Signing remains unsigned by owner decision (ADR-016); attestations are the chain of custody in
+their place — verify them, don't skip them.
 
 ## What changed with every release
 
