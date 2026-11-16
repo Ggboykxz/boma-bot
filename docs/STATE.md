@@ -30,6 +30,17 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
     verify`, never trust unsigned bytes).
   - Verified: `npm run dist` (Linux) passes with the new config; desktop typecheck/lint/build/smoke
     pass; web build prerenders `/icon.svg` and `/apple-icon.png`; `.ico` carries 8 PNG frames.
+- **v0.2.1 — the release fix (2026-11-16, commit `590d8db`, tag `v0.2.1`, release run 43844088535 green).**
+  v0.2.0 published the Linux artifacts but its Windows desktop job failed its own pre-upload
+  verification step: `gh attestation verify` takes exactly one `<file-path>`, and the workflow passed
+  three in one call. The Windows assets were built and Sigstore-attested by the job but never
+  reached the release page. Fixed in `release.yml` (one verification per file); everything bumped
+  0.2.1; the v0.2.0 release page now carries a banner pointing at v0.2.1. Verified end to end this
+  session: downloaded `boma-desktop-0.2.1-win-x64-setup.exe`, `-portable.zip` and
+  `SHA256SUMS-windows.txt` from the release, `sha256sum -c` OK, and
+  `gh attestation verify <file> --repo Ggboykxz/boma-bot` exits 0 for all three; the setup.exe
+  certificate SAN decodes to `https://github.com/Ggboykxz/boma-bot/.github/workflows/release.yml@refs/tags/v0.2.1`.
+  Linux and Windows CI legs both green on `windows-latest` and `ubuntu-24.04`.
 
 - **M15.4 — local-first bring-up + release verification (2026-11-16, REQ-066, uncommitted worktree; ADR-029).**
   - `BOMA_LOCAL_FIRST=true` (default off): loopback-only at boot (`HttpConfig::with_local_first` refuses
