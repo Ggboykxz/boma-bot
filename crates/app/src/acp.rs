@@ -107,25 +107,21 @@ impl AcpSession {
             if chunk.is_empty() {
                 return Err(AppError::Unavailable);
             }
-            match chunk.iter().position(|&byte| byte == b'\n') {
-                Some(newline) => {
-                    let end = newline + 1;
-                    if out.len() + end > MAX_LINE_BYTES {
-                        return Err(AppError::Unavailable);
-                    }
-                    out.extend_from_slice(&chunk[..end]);
-                    self.stdout.consume(end);
-                    return String::from_utf8(out).map_err(|_| AppError::Unavailable);
+            if let Some(newline) = chunk.iter().position(|&byte| byte == b'\n') {
+                let end = newline + 1;
+                if out.len() + end > MAX_LINE_BYTES {
+                    return Err(AppError::Unavailable);
                 }
-                None => {
-                    let remaining = MAX_LINE_BYTES.saturating_sub(out.len());
-                    let take = chunk.len().min(remaining);
-                    out.extend_from_slice(&chunk[..take]);
-                    self.stdout.consume(take);
-                    if out.len() >= MAX_LINE_BYTES {
-                        return Err(AppError::Unavailable);
-                    }
-                }
+                out.extend_from_slice(&chunk[..end]);
+                self.stdout.consume(end);
+                return String::from_utf8(out).map_err(|_| AppError::Unavailable);
+            }
+            let remaining = MAX_LINE_BYTES.saturating_sub(out.len());
+            let take = chunk.len().min(remaining);
+            out.extend_from_slice(&chunk[..take]);
+            self.stdout.consume(take);
+            if out.len() >= MAX_LINE_BYTES {
+                return Err(AppError::Unavailable);
             }
         }
     }
