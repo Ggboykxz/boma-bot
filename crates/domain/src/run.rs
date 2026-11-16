@@ -40,8 +40,9 @@ pub enum RunStatus {
 
 impl RunStatus {
     /// Every status, in the order the vocabulary is written in the spec.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Queued,
+        Self::Paused,
         Self::Leased,
         Self::Running,
         Self::WaitingInput,
@@ -400,6 +401,9 @@ mod tests {
     const ALLOWED: &[(RunStatus, RunStatus)] = &[
         (RunStatus::Queued, RunStatus::Leased),
         (RunStatus::Queued, RunStatus::Cancelled),
+        (RunStatus::Queued, RunStatus::Paused),
+        (RunStatus::Paused, RunStatus::Queued),
+        (RunStatus::Paused, RunStatus::Cancelled),
         (RunStatus::Leased, RunStatus::Running),
         (RunStatus::Leased, RunStatus::Queued),
         (RunStatus::Leased, RunStatus::Cancelled),
@@ -461,6 +465,7 @@ mod tests {
                     | RunStatus::Leased
                     | RunStatus::WaitingInput
                     | RunStatus::WaitingTakeover
+                    | RunStatus::Paused
             );
             assert_eq!(
                 from.can_transition_to(RunStatus::Queued),
@@ -505,7 +510,7 @@ mod tests {
                 trigger
             );
         }
-        assert!(RunStatus::from_str("paused").is_err());
+        assert!(RunStatus::from_str("stalled").is_err());
         assert!(RunTrigger::from_str("cron").is_err());
     }
 
