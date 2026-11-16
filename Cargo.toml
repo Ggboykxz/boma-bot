@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.3.0-rc"
 edition = "2024"
 # sqlx 0.9 declares rust-version 1.94, so the workspace MSRV cannot be lower.
 rust-version = "1.94"
@@ -62,11 +62,11 @@ uuid = { version = "1.29.2", features = ["v4", "serde"] }
 
 # Internal crates. The version is spelled out so `cargo deny` does not read the path dependency
 # as a wildcard: a path without a version is unresolvable outside this workspace.
-boma-api = { path = "crates/api", version = "0.2.3" }
-boma-app = { path = "crates/app", version = "0.2.3" }
-boma-domain = { path = "crates/domain", version = "0.2.3" }
-boma-infra = { path = "crates/infra", version = "0.2.3" }
-boma-testkit = { path = "crates/testkit", version = "0.2.3" }
+boma-api = { path = "crates/api", version = "0.3.0-rc" }
+boma-app = { path = "crates/app", version = "0.3.0-rc" }
+boma-domain = { path = "crates/domain", version = "0.3.0-rc" }
+boma-infra = { path = "crates/infra", version = "0.3.0-rc" }
+boma-testkit = { path = "crates/testkit", version = "0.3.0-rc" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "boma-api"
-version = "0.2.3"
+version = "0.3.0-rc"
 dependencies = [
  "async-trait",
  "axum",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "boma-app"
-version = "0.2.3"
+version = "0.3.0-rc"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "boma-bin"
-version = "0.2.3"
+version = "0.3.0-rc"
 dependencies = [
  "anyhow",
  "axum",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "boma-conformance"
-version = "0.2.3"
+version = "0.3.0-rc"
 dependencies = [
  "async-trait",
  "axum",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "boma-domain"
-version = "0.2.3"
+version = "0.3.0-rc"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "boma-infra"
-version = "0.2.3"
+version = "0.3.0-rc"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "boma-testkit"
-version = "0.2.3"
+version = "0.3.0-rc"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3745,7 +3745,7 @@ checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "time-macros"
-version = "0.2.32"
+version = "0.3.0-rc2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
 dependencies = [
@@ -4047,7 +4047,7 @@ checksum = "993ad287eb20e8ba755312801cfe1413e0f25d604075863acaddca10b04c1833"
 
 [[package]]
 name = "unicode-width"
-version = "0.2.3"
+version = "0.3.0-rc"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 

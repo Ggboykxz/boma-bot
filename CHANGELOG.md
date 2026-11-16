@@ -4,6 +4,25 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.3.0-rc] - 2026-11-16
+
+Release candidate for v0.3.0. The Windows/Linux desktop is now a fully self-contained app, like
+OpenBot: the installer carries the web export, the `boma` server binary and an embedded
+PostgreSQL 17.12.0 (zonkyio, pinned verified download). First launch runs `initdb` in the app's
+user-data folder, starts Postgres on a fresh loopback port, applies the migrations
+(compiled into the binary), starts `boma serve` and `boma worker` as supervised children, and
+opens the app — no Docker, no system Postgres, no account, no setup. `BOMA_DESKTOP_URL` still
+selects an externally-hosted origin (server tarball path). The HTTP port persists between
+launches; crashes quit with a named-step dialog, never an anonymous dead end. Linux stays
+`dir` + tar.gz; macOS stays out of scope for this rc.
+
+CI pinned evidence: both desktop legs pack with the embedded stack, Linux additionally
+rehearses the full boot (initdb → migrate → serve/worker → RPC round-trip) headlessly; the Windows
+leg compiles through vcpkg-provided OpenSSL (`x64-windows-static-md`, static, no DLLs).
+React version metadata everywhere moved to `0.3.0-rc`.
+
+Release candidate: the Windows owner smokes the installer before v0.3.0 final is cut.
+
 ## [0.2.3] - 2026-11-16
 
 Patch release of v0.2.2: the desktop shell is no longer a dead-end when the server is not running.

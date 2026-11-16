@@ -3,6 +3,16 @@
 For operators self-hosting Boma Bot. `0.1.0` is the first release; there is nothing to upgrade
 *from* unless you run a pre-release build. Both paths are covered below.
 
+## Desktop, self-contained (v0.3.0 line)
+
+The Windows and Linux desktop builds are self-contained from v0.3.0-rc onward: the pack carries
+the web export, the `boma` server and embedded PostgreSQL. Install it and open it — no Docker or
+system Postgres install. On first launch it initialises a database in the app's user-data folder
+(e.g. `%APPDATA%/Boma Bot/boma/`), starts it on a fresh loopback port, applies migrations and
+opens the app. Delete `userData/boma/` to reset the deployment. `BOMA_DESKTOP_URL` still pins an
+external origin. The Windows installer remains unsigned by owner decision (ADR-016); verify with
+`gh attestation verify` as documented.
+
 ## What ships in a release
 
 - one static web build (the whole UI; the Rust binary serves it — no Node at runtime);
