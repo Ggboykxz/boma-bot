@@ -588,6 +588,10 @@ pub async fn computer_app(
             Arc::new(boma_infra::PostgresExternalAgentStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresSignInStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresNotificationStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresNotificationDestinationStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
         ),
         services,
     );

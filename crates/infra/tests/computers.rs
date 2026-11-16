@@ -112,6 +112,10 @@ fn app(database: &Postgres, runtime: Arc<dyn ComputerRuntime>) -> App {
             Arc::new(boma_infra::PostgresExternalAgentStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresSignInStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresNotificationStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresNotificationDestinationStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
         ),
         services,
     )

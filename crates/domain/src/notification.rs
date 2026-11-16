@@ -129,18 +129,29 @@ pub enum NotificationFailureOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{NotificationDestinationKind, NotificationDestination, NotificationKind, NotificationPolicy};
+    use super::{
+        NotificationDestination, NotificationDestinationKind, NotificationKind, NotificationPolicy,
+    };
     use crate::{BotId, SpaceId, UserId};
 
     #[test]
     fn req_065_destination_kinds_round_trip_their_str() {
-        assert_eq!(NotificationDestinationKind::SlackWebhook.as_str(), "slack_webhook");
-        assert_eq!(NotificationDestinationKind::TeamsWebhook.as_str(), "teams_webhook");
+        assert_eq!(
+            NotificationDestinationKind::SlackWebhook.as_str(),
+            "slack_webhook"
+        );
+        assert_eq!(
+            NotificationDestinationKind::TeamsWebhook.as_str(),
+            "teams_webhook"
+        );
         assert_eq!(
             NotificationDestinationKind::SlackWebhook.webhook_prefix(),
             Some("https://hooks.slack.com/"),
         );
-        assert_eq!(NotificationDestinationKind::TeamsWebhook.webhook_prefix(), None);
+        assert_eq!(
+            NotificationDestinationKind::TeamsWebhook.webhook_prefix(),
+            None
+        );
     }
 
     #[test]
@@ -154,9 +165,18 @@ mod tests {
             created_at: "2026-11-15T00:00:00Z".to_owned(),
         };
         let serialized = format!("{destination:?}");
-        assert!(!serialized.contains("hooks.slack.com"), "no webhook value in the stored shape");
-        assert!(!serialized.contains("ciphertext"), "no ciphertext field in the public shape");
-        assert!(!serialized.contains("nonce"), "no nonce field in the public shape");
+        assert!(
+            !serialized.contains("hooks.slack.com"),
+            "no webhook value in the stored shape"
+        );
+        assert!(
+            !serialized.contains("ciphertext"),
+            "no ciphertext field in the public shape"
+        );
+        assert!(
+            !serialized.contains("nonce"),
+            "no nonce field in the public shape"
+        );
     }
 
     #[test]

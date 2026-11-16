@@ -597,6 +597,9 @@ impl TestAppBuilder {
             Arc::new(crate::memory::MemoryExternalAgentStore::new(&database)),
             Arc::new(crate::memory::MemorySignInStore::new(&database)),
             Arc::new(crate::memory::MemoryNotificationStore::new(&database)),
+            Arc::new(crate::memory::MemoryNotificationDestinationStore::new(
+                &database,
+            )),
         );
         let services = Services::new(
             Arc::clone(&publisher) as Arc<dyn EventPublisher>,
@@ -10083,5 +10086,144 @@ impl boma_app::ports::EndpointSafetyChecker for ScriptedEndpointSafety {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::TestApp;
+    use secrecy::ExposeSecret;
+
+    #[tokio::test]
+    async fn req_065_create_list_delete_roundtrip() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        let created = test
+            .app()
+            .stores
+            .destinations
+            .create(
+                &context,
+                boma_domain::notification::NewNotificationDestination {
+                    id: "dest-test-1".to_owned(),
+                    space_id: space_id.clone(),
+                    kind: boma_domain::notification::NotificationDestinationKind::SlackWebhook,
+                    label: "#product".to_owned(),
+                    webhook: "https://hooks.slack.com/services/test-redacted".to_owned(),
+                    created_by: owner.clone(),
+                    created_at: "2026-11-15T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the destination is created");
+        assert_eq!(created.label, "#product");
+
+        let listed = test
+            .app()
+            .stores
+            .destinations
+            .list(&context, None)
+            .await
+            .expect("the list answers");
+        assert_eq!(listed.len(), 1);
+        let serialized = format!("{listed:?}");
+        assert!(
+            !serialized.contains("hooks.slack.com"),
+            "list never carries URLs"
+        );
+
+        let webhook = test
+            .app()
+            .stores
+            .destinations
+            .destination_webhook(&context, &created.id)
+            .await
+            .expect("the delivery path reads the URL back");
+        assert!(webhook.expose_secret().starts_with("https://"));
+
+        let removed = test
+            .app()
+            .stores
+            .destinations
+            .delete(&context, &created.id)
+            .await
+            .expect("the destination is removed");
+        assert!(removed);
+        assert!(
+            !test
+                .app()
+                .stores
+                .destinations
+                .delete(&context, &created.id)
+                .await
+                .expect("a missing id deletes to false"),
+        );
+    }
+
+    #[tokio::test]
+    async fn req_065_destination_kinds_filter_on_list() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        for (id, kind, label) in [
+            (
+                "dest-slack-1",
+                boma_domain::notification::NotificationDestinationKind::SlackWebhook,
+                "#a",
+            ),
+            (
+                "dest-teams-1",
+                boma_domain::notification::NotificationDestinationKind::TeamsWebhook,
+                "#b",
+            ),
+        ] {
+            test.app()
+                .stores
+                .destinations
+                .create(
+                    &context,
+                    boma_domain::notification::NewNotificationDestination {
+                        id: id.to_owned(),
+                        space_id: space_id.clone(),
+                        kind,
+                        label: label.to_owned(),
+                        webhook: format!("https://hooks.slack.com/{id}"),
+                        created_by: owner.clone(),
+                        created_at: "2026-11-15T00:00:00Z".to_owned(),
+                    },
+                )
+                .await
+                .expect("the destination is created");
+        }
+
+        let slack = test
+            .app()
+            .stores
+            .destinations
+            .list(
+                &context,
+                Some(boma_domain::notification::NotificationDestinationKind::SlackWebhook),
+            )
+            .await
+            .expect("the list answers");
+        assert_eq!(slack.len(), 1);
+        assert_eq!(slack[0].id, "dest-slack-1");
     }
 }

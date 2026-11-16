@@ -125,6 +125,12 @@ pub fn percent_encode(value: &str) -> String {
         .collect()
 }
 
+/// A minimal sanity-shaped URL helper used by tests and the store's inline shape check.
+#[must_use]
+pub fn format_webhook(value: &str) -> String {
+    value.split_whitespace().collect()
+}
+
 #[cfg(test)]
 mod percent_encode_tests {
     use super::percent_encode;

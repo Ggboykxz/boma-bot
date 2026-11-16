@@ -66,6 +66,7 @@ pub use stores::bots::PostgresBotStore;
 pub use stores::cards::{PostgresCardStore, PostgresEffectStore};
 pub use stores::computer::PostgresComputerStore;
 pub use stores::connectors::PostgresConnectorStore;
+pub use stores::destinations::PostgresNotificationDestinationStore;
 pub use stores::events::PostgresEventStore;
 pub use stores::external_agents::PostgresExternalAgentStore;
 pub use stores::notifications::PostgresNotificationStore;

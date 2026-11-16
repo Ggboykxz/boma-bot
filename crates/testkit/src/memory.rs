@@ -9116,3 +9116,97 @@ fn today_utc_prefix() -> String {
     let at = time::OffsetDateTime::now_utc();
     format!("{:04}-{:02}-{:02}", at.year(), at.month() as u8, at.day())
 }
+
+/// The outgoing notification destinations of the improvement program (REQ-065), in-memory.
+#[derive(Clone)]
+pub struct MemoryNotificationDestinationStore {
+    rows: Arc<
+        RwLock<
+            std::collections::HashMap<
+                String,
+                (boma_domain::notification::NotificationDestination, String),
+            >,
+        >,
+    >,
+}
+
+impl MemoryNotificationDestinationStore {
+    /// Builds the store on an empty database.
+    #[must_use]
+    pub fn new(_database: &MemoryDatabase) -> Self {
+        Self {
+            rows: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::NotificationDestinationStore for MemoryNotificationDestinationStore {
+    async fn create(
+        &self,
+        context: &boma_domain::TenantContext,
+        destination: boma_domain::notification::NewNotificationDestination,
+    ) -> Result<boma_domain::notification::NotificationDestination, AppError> {
+        let _space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let _member = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut rows = self.rows.write().map_err(|_| AppError::Unavailable)?;
+        let stored = boma_domain::notification::NotificationDestination {
+            id: destination.id,
+            space_id: destination.space_id,
+            kind: destination.kind,
+            label: destination.label,
+            created_by: destination.created_by,
+            created_at: destination.created_at,
+        };
+        rows.insert(stored.id.clone(), (stored.clone(), destination.webhook));
+        Ok(stored)
+    }
+
+    async fn list(
+        &self,
+        context: &boma_domain::TenantContext,
+        kind: Option<boma_domain::notification::NotificationDestinationKind>,
+    ) -> Result<Vec<boma_domain::notification::NotificationDestination>, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let rows = self.rows.read().map_err(|_| AppError::Unavailable)?;
+        let mut v: Vec<_> = rows
+            .values()
+            .map(|(destination, _)| destination.clone())
+            .filter(|destination| {
+                destination.space_id == space && kind.is_none_or(|k| destination.kind == k)
+            })
+            .collect();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(v)
+    }
+
+    async fn delete(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &str,
+    ) -> Result<bool, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut rows = self.rows.write().map_err(|_| AppError::Unavailable)?;
+        let remove = rows
+            .get(id)
+            .is_some_and(|(destination, _)| destination.space_id == space);
+        if remove {
+            rows.remove(id);
+        }
+        Ok(remove)
+    }
+
+    async fn destination_webhook(
+        &self,
+        context: &boma_domain::TenantContext,
+        id: &str,
+    ) -> Result<secrecy::SecretString, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let rows = self.rows.read().map_err(|_| AppError::Unavailable)?;
+        let (destination, webhook) = rows.get(id).ok_or(AppError::NotFound)?;
+        if destination.space_id != space {
+            return Err(AppError::NotFound);
+        }
+        Ok(secrecy::SecretString::from(webhook.clone()))
+    }
+}

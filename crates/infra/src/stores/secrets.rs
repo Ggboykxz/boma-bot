@@ -272,3 +272,56 @@ pub async fn rekey_space_keys(
     )
     .await
 }
+
+/// The space's data-encryption key, unwrapped from `space_keys` (or minted exactly once).
+///
+/// Shared with the destinations store so destinations are sealed exactly as secrets are (REQ-065);
+/// the mint path is idempotent like the bot-secrets path and reuses the same wrap/unwrap.
+///
+/// # Errors
+///
+/// Returns an error when the database refuses or when the DEK cannot be unwrapped.
+pub(crate) async fn space_dek(
+    pool: &sqlx::PgPool,
+    space_id: &boma_domain::SpaceId,
+    secrets: &SecretBox,
+) -> Result<[u8; 32], boma_app::AppError> {
+    // The space's DEK: read the wrapped row, or mint a fresh one exactly once.
+    let wrapped: Option<(Vec<u8>, Vec<u8>)> =
+        sqlx::query_as("SELECT wrapped_key, nonce FROM space_keys WHERE space_id = $1")
+            .bind(space_id.as_str())
+            .fetch_optional(pool)
+            .await
+            .map_err(tenant::unavailable)?;
+    let space_key = if let Some((wrapped_key, nonce)) = wrapped {
+        secrets.unwrap_data_key(&boma_app::ports::SealedSecret {
+            ciphertext: wrapped_key,
+            nonce,
+        })?
+    } else {
+        let dek = SecretBox::fresh_data_key();
+        let sealed_dek = secrets.wrap_data_key(&dek)?;
+        let mut conn = pool.acquire().await.map_err(tenant::unavailable)?;
+        sqlx::query(
+            "INSERT INTO space_keys (space_id, wrapped_key, nonce)
+             VALUES ($1, $2, $3) ON CONFLICT (space_id) DO NOTHING",
+        )
+        .bind(space_id.as_str())
+        .bind(&sealed_dek.ciphertext)
+        .bind(&sealed_dek.nonce)
+        .execute(&mut *conn)
+        .await
+        .map_err(tenant::unavailable)?;
+        let survivor: (Vec<u8>, Vec<u8>) =
+            sqlx::query_as("SELECT wrapped_key, nonce FROM space_keys WHERE space_id = $1")
+                .bind(space_id.as_str())
+                .fetch_one(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)?;
+        secrets.unwrap_data_key(&boma_app::ports::SealedSecret {
+            ciphertext: survivor.0,
+            nonce: survivor.1,
+        })?
+    };
+    Ok(space_key)
+}

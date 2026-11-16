@@ -4511,3 +4511,47 @@ pub trait EndpointSafetyChecker: Send + Sync {
     /// Returns [`AppError::Rule`] with the refusing rule.
     async fn check(&self, url: &str) -> Result<(), AppError>;
 }
+
+/// The Slack/Teams outgoing destinations of the improvement program (REQ-065).
+#[async_trait]
+pub trait NotificationDestinationStore: Send + Sync {
+    /// Seals and stores a webhook; the caller chose the id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn create(
+        &self,
+        context: &TenantContext,
+        destination: boma_domain::notification::NewNotificationDestination,
+    ) -> Result<boma_domain::notification::NotificationDestination, AppError>;
+
+    /// The destinations of the space, newest first; the webhook never returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn list(
+        &self,
+        context: &TenantContext,
+        kind: Option<boma_domain::notification::NotificationDestinationKind>,
+    ) -> Result<Vec<boma_domain::notification::NotificationDestination>, AppError>;
+
+    /// Remove one destination. Deleting a missing id is a success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn delete(&self, context: &TenantContext, id: &str) -> Result<bool, AppError>;
+
+    /// Delivery-bound plaintext of one webhook; never exposed to RPC or any other port.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer, or when the id is not found.
+    async fn destination_webhook(
+        &self,
+        context: &TenantContext,
+        id: &str,
+    ) -> Result<secrecy::SecretString, AppError>;
+}

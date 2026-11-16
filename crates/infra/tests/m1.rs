@@ -118,6 +118,10 @@ fn app_with_scripts(
             Arc::new(boma_infra::PostgresExternalAgentStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresSignInStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresNotificationStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresNotificationDestinationStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
         ),
         boma_app::Services::new(
             publisher,
@@ -2347,6 +2351,10 @@ async fn req_036_an_artifact_round_trip_survives_postgres() {
                 Arc::new(boma_infra::PostgresExternalAgentStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresSignInStore::new(pool.clone())),
                 Arc::new(boma_infra::PostgresNotificationStore::new(pool.clone())),
+                Arc::new(boma_infra::PostgresNotificationDestinationStore::new(
+                    pool.clone(),
+                    boma_infra::SecretBox::ephemeral(),
+                )),
             ),
             boma_app::Services::new(
                 publisher,
@@ -2887,6 +2895,10 @@ async fn req_048_a_messaging_install_and_ingress_round_trip_through_postgres() {
             Arc::new(boma_infra::PostgresExternalAgentStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresSignInStore::new(pool.clone())),
             Arc::new(boma_infra::PostgresNotificationStore::new(pool.clone())),
+            Arc::new(boma_infra::PostgresNotificationDestinationStore::new(
+                pool.clone(),
+                boma_infra::SecretBox::ephemeral(),
+            )),
         ),
         boma_app::Services::new(
             publisher,
