@@ -42,6 +42,14 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   `gh attestation verify <file> --repo Ggboykxz/boma-bot` exits 0 for all three; the setup.exe
   certificate SAN decodes to `https://github.com/Ggboykxz/boma-bot/.github/workflows/release.yml@refs/tags/v0.2.1`.
   Linux and Windows CI legs both green on `windows-latest` and `ubuntu-24.04`.
+- **v0.2.2 — the brand ships (2026-11-16, commit `e01087c`, tag `v0.2.2`, release run 43858391776 green).**
+  The owner-supplied robot-cat head (`assets/brand/boma-bot-head.svg`, provided in chat 2026-11-16;
+  master embedded verbatim) replaces the rejected enclosure mark everywhere: `icon.ico` 16…1024,
+  `icon.png` (Linux dir pack + Electron window), NSIS `installerSidebar/Header.bmp`,
+  web `app/icon.svg` / `favicon.ico` / `apple-icon.png`, README lockups (prefers-color-scheme), the
+  landing and auth shells (icon next to the wordmark). No product changes; binaries rebuilt with the
+  new art. Windows assets re-attested and verified this session (exit 0 ×3, SAN =
+  `release.yml@refs/tags/v0.2.2`); v0.2.1's release page now carries a banner to v0.2.2.
 
 - **M15.4 — local-first bring-up + release verification (2026-11-16, REQ-066, uncommitted worktree; ADR-029).**
   - `BOMA_LOCAL_FIRST=true` (default off): loopback-only at boot (`HttpConfig::with_local_first` refuses
