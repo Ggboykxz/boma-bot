@@ -129,6 +129,27 @@ RTL, with a keyboard path for every primary flow.
 | 360 px width | **not verified yet** — the shell is fluid, but no narrow-viewport test exists until M1 |
 | Screen reader | **not verified yet** — axe checks the markup, not the announcement |
 
+## Design-system local edits (2026-11-16, M34)
+
+Local edits to the vendored BoardUI-derived tokens (`apps/web/styles/theme.css`), made to fix
+the 2026-11-16 UI audit's WCAG AA contrast findings. Tracked here because the file documents
+the design system of this project; the values re-land via `boardui.json` if the upstream file
+is ever refreshed.
+
+- **Two new primitives** (`@theme`): `--color-neutral-450: #8c8c8c` and `--color-neutral-550:
+  #666666`, documented in the file next to the other intentional deviations from Tailwind's
+  ramp. Chosen against measured ratios: light `text-secondary` on white/neutral-100/neutral-200
+  → 5.74/5.36/4.82:1; light `text-tertiary` → `neutral-600` → 7.81/7.29/6.55:1; dark
+  `text-secondary` → `neutral-400` → 6.00/7.11/7.43:1; dark `text-tertiary` → `neutral-450` →
+  4.50/5.33/5.57:1 (AA everywhere; gradation preserved).
+- **Light mapping changed**: `text-secondary` now `neutral-550` (was `neutral-500`, 4.43:1 on
+  the secondary surface — failing AA); `text-tertiary` now `neutral-600` (was `neutral-400`,
+  ~2.5:1 — failing everywhere).
+- **Dark mapping added**: `text-secondary: neutral-400`, `text-tertiary: neutral-450` — the
+  `.dark` block previously inherited the light values, which failed on the inverted surfaces.
+- Composite consumers (`text-text-tertiary`, `text-text-secondary`) ride the tokens; no screen
+  was edited for the re-tune itself.
+
 ## Reference captures and their licenses
 
 `../re-workspace/notes/ui/` is empty: `/ui-probe` never ran in the analysis workspace, so there

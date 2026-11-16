@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-16T19:18:51.345Z",
+  "generatedAt": "2026-11-16T19:55:50.934Z",
   "base": "http://127.0.0.1:3010",
   "botId": "bot_YXyOa6eMBbbvbzg5xbqkIzttKQ",
   "routes": [
@@ -24,6 +24,11 @@
         },
         {
           "url": "http://127.0.0.1:3010/app/bot_YXyOa6eMBbbvbzg5xbqkIzttKQ/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
         }
@@ -59,6 +64,11 @@
           "url": "http://127.0.0.1:3010/app/bot_YXyOa6eMBbbvbzg5xbqkIzttKQ/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
         }
       ],
       "badResponses": [],
@@ -92,6 +102,11 @@
           "url": "http://127.0.0.1:3010/app/bot_YXyOa6eMBbbvbzg5xbqkIzttKQ/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
         }
       ],
       "badResponses": [],
@@ -118,19 +133,7 @@
         }
       ],
       "badResponses": [],
-      "axeViolations": [
-        {
-          "id": "region",
-          "impact": "moderate",
-          "help": "All page content should be contained by landmarks",
-          "nodes": 1,
-          "targets": [
-            [
-              ".hover\\:text-text-secondary"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "reset-password",
@@ -153,19 +156,7 @@
         }
       ],
       "badResponses": [],
-      "axeViolations": [
-        {
-          "id": "region",
-          "impact": "moderate",
-          "help": "All page content should be contained by landmarks",
-          "nodes": 1,
-          "targets": [
-            [
-              ".hover\\:text-text-secondary"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "onboarding",
@@ -213,19 +204,7 @@
       "pageerrors": [],
       "failedRequests": [],
       "badResponses": [],
-      "axeViolations": [
-        {
-          "id": "color-contrast",
-          "impact": "serious",
-          "help": "Elements must meet minimum color contrast ratio thresholds",
-          "nodes": 1,
-          "targets": [
-            [
-              "p"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "invite",
@@ -248,19 +227,7 @@
         }
       ],
       "badResponses": [],
-      "axeViolations": [
-        {
-          "id": "region",
-          "impact": "moderate",
-          "help": "All page content should be contained by landmarks",
-          "nodes": 1,
-          "targets": [
-            [
-              ".hover\\:text-text-secondary"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "threads-home",
@@ -283,6 +250,11 @@
         },
         {
           "url": "http://127.0.0.1:3010/app/bot_YXyOa6eMBbbvbzg5xbqkIzttKQ/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
         }
@@ -312,6 +284,11 @@
         },
         {
           "url": "http://127.0.0.1:3010/app/activity/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
         },
@@ -352,55 +329,15 @@
           "url": "http://127.0.0.1:3010/app/bot_YXyOa6eMBbbvbzg5xbqkIzttKQ/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
         }
       ],
       "badResponses": [],
-      "axeViolations": [
-        {
-          "id": "color-contrast",
-          "impact": "serious",
-          "help": "Elements must meet minimum color contrast ratio thresholds",
-          "nodes": 1,
-          "targets": [
-            [
-              ".h-full > p"
-            ]
-          ]
-        },
-        {
-          "id": "landmark-main-is-top-level",
-          "impact": "moderate",
-          "help": "Main landmark should not be contained in another landmark",
-          "nodes": 1,
-          "targets": [
-            [
-              ".h-full"
-            ]
-          ]
-        },
-        {
-          "id": "landmark-no-duplicate-main",
-          "impact": "moderate",
-          "help": "Document should not have more than one main landmark",
-          "nodes": 1,
-          "targets": [
-            [
-              ".gap-3"
-            ]
-          ]
-        },
-        {
-          "id": "landmark-unique",
-          "impact": "moderate",
-          "help": "Landmarks should have a unique role or role/label/title (i.e. accessible name) combination",
-          "nodes": 1,
-          "targets": [
-            [
-              ".gap-3"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "board",
@@ -431,6 +368,11 @@
           "url": "http://127.0.0.1:3010/app/bot_YXyOa6eMBbbvbzg5xbqkIzttKQ/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
         }
       ],
       "badResponses": [
@@ -439,52 +381,7 @@
           "status": 404
         }
       ],
-      "axeViolations": [
-        {
-          "id": "landmark-main-is-top-level",
-          "impact": "moderate",
-          "help": "Main landmark should not be contained in another landmark",
-          "nodes": 1,
-          "targets": [
-            [
-              ".h-full"
-            ]
-          ]
-        },
-        {
-          "id": "landmark-no-duplicate-main",
-          "impact": "moderate",
-          "help": "Document should not have more than one main landmark",
-          "nodes": 1,
-          "targets": [
-            [
-              ".min-w-0"
-            ]
-          ]
-        },
-        {
-          "id": "landmark-unique",
-          "impact": "moderate",
-          "help": "Landmarks should have a unique role or role/label/title (i.e. accessible name) combination",
-          "nodes": 1,
-          "targets": [
-            [
-              ".min-w-0"
-            ]
-          ]
-        },
-        {
-          "id": "page-has-heading-one",
-          "impact": "moderate",
-          "help": "Page should contain a level-one heading",
-          "nodes": 1,
-          "targets": [
-            [
-              "html"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "activity",
@@ -507,6 +404,11 @@
         },
         {
           "url": "http://127.0.0.1:3010/app/bot_YXyOa6eMBbbvbzg5xbqkIzttKQ/",
+          "failure": "net::ERR_ABORTED",
+          "resourceType": "fetch"
+        },
+        {
+          "url": "http://127.0.0.1:3010/app/bot_oxvf6adLRn3Qj0JNzdkDBiLrSg/",
           "failure": "net::ERR_ABORTED",
           "resourceType": "fetch"
         }
@@ -535,22 +437,7 @@
         }
       ],
       "badResponses": [],
-      "axeViolations": [
-        {
-          "id": "color-contrast",
-          "impact": "serious",
-          "help": "Elements must meet minimum color contrast ratio thresholds",
-          "nodes": 2,
-          "targets": [
-            [
-              "section[aria-labelledby=\"admin-invitations\"] > p"
-            ],
-            [
-              "section[aria-labelledby=\"admin-grants\"] > p"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "admin-plugins",
@@ -573,19 +460,7 @@
         }
       ],
       "badResponses": [],
-      "axeViolations": [
-        {
-          "id": "color-contrast",
-          "impact": "serious",
-          "help": "Elements must meet minimum color contrast ratio thresholds",
-          "nodes": 1,
-          "targets": [
-            [
-              "p"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "integrations-setup",
@@ -614,28 +489,7 @@
           "status": 404
         }
       ],
-      "axeViolations": [
-        {
-          "id": "color-contrast",
-          "impact": "serious",
-          "help": "Elements must meet minimum color contrast ratio thresholds",
-          "nodes": 5,
-          "targets": [
-            [
-              "a"
-            ],
-            [
-              "li:nth-child(1) > .gap-0\\.5 > .text-text-tertiary.text-body-2-medium"
-            ],
-            [
-              "li:nth-child(1) > .text-text-tertiary.text-body-2-medium"
-            ],
-            [
-              "li:nth-child(2) > .gap-0\\.5 > .text-text-tertiary.text-body-2-medium"
-            ]
-          ]
-        }
-      ]
+      "axeViolations": []
     },
     {
       "slug": "shared-page-valid",
@@ -709,19 +563,131 @@
   ],
   "motion": {
     "landing": {
-      "entries": [],
+      "entries": [
+        {
+          "kind": "CSSAnimation",
+          "name": "row-slide-in",
+          "duration": 400,
+          "delay": 0,
+          "endTime": 400,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-fade-in",
+          "duration": 240,
+          "delay": 0,
+          "endTime": 240,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        }
+      ],
       "reducedMatches": false
     },
     "landingReduced": {
-      "entries": [],
+      "entries": [
+        {
+          "kind": "CSSAnimation",
+          "name": "row-slide-in",
+          "duration": 1,
+          "delay": 0,
+          "endTime": 1,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-fade-in",
+          "duration": 1,
+          "delay": 0,
+          "endTime": 1,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        }
+      ],
       "reducedMatches": true
     },
     "room": {
-      "entries": [],
+      "entries": [
+        {
+          "kind": "CSSAnimation",
+          "name": "row-slide-in",
+          "duration": 400,
+          "delay": 0,
+          "endTime": 400,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-fade-in",
+          "duration": 240,
+          "delay": 0,
+          "endTime": 240,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-slide-in",
+          "duration": 400,
+          "delay": 0,
+          "endTime": 400,
+          "playState": "running",
+          "target": "li.animate-row-slide-in flex flex-col gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-fade-in",
+          "duration": 240,
+          "delay": 0,
+          "endTime": 240,
+          "playState": "running",
+          "target": "li.animate-row-slide-in flex flex-col gap-1"
+        }
+      ],
       "reducedMatches": false
     },
     "roomReduced": {
-      "entries": [],
+      "entries": [
+        {
+          "kind": "CSSAnimation",
+          "name": "row-slide-in",
+          "duration": 1,
+          "delay": 0,
+          "endTime": 1,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-fade-in",
+          "duration": 1,
+          "delay": 0,
+          "endTime": 1,
+          "playState": "running",
+          "target": "div.animate-row-slide-in flex items-center gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-slide-in",
+          "duration": 1,
+          "delay": 0,
+          "endTime": 1,
+          "playState": "running",
+          "target": "li.animate-row-slide-in flex flex-col gap-1"
+        },
+        {
+          "kind": "CSSAnimation",
+          "name": "row-fade-in",
+          "duration": 1,
+          "delay": 0,
+          "endTime": 1,
+          "playState": "running",
+          "target": "li.animate-row-slide-in flex flex-col gap-1"
+        }
+      ],
       "reducedMatches": true
     }
   },
@@ -737,12 +703,12 @@
         "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
       },
       {
-        "tag": "a",
+        "tag": "button",
         "id": null,
         "role": null,
-        "name": "Settings",
-        "outline": "none 0px lab(2.75381 0 0)",
-        "outlineOffset": "1px",
+        "name": "Toggle dark mode",
+        "outline": "none 0px lab(48.496 0 0)",
+        "outlineOffset": "0px",
         "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
       },
       {
@@ -755,11 +721,20 @@
         "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
       },
       {
+        "tag": "a",
+        "id": null,
+        "role": null,
+        "name": "Nora",
+        "outline": "none 0px lab(2.75381 0 0)",
+        "outlineOffset": "1px",
+        "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
+      },
+      {
         "tag": "button",
         "id": null,
         "role": null,
         "name": "New group",
-        "outline": "none 0px lab(66.128 -0.0000298023 0.0000119209)",
+        "outline": "none 0px lab(34.924 0 0)",
         "outlineOffset": "0px",
         "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
       },
@@ -783,12 +758,12 @@
         "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
       },
       {
-        "tag": "a",
+        "tag": "button",
         "id": null,
         "role": null,
-        "name": "Settings",
-        "outline": "none 0px lab(2.75381 0 0)",
-        "outlineOffset": "1px",
+        "name": "Toggle dark mode",
+        "outline": "none 0px lab(48.496 0 0)",
+        "outlineOffset": "0px",
         "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
       },
       {
@@ -799,23 +774,14 @@
         "outline": "none 0px lab(2.75381 0 0)",
         "outlineOffset": "1px",
         "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
-      },
-      {
-        "tag": "button",
-        "id": null,
-        "role": null,
-        "name": "New group",
-        "outline": "none 0px lab(66.128 -0.0000298023 0.0000119209)",
-        "outlineOffset": "0px",
-        "boxShadow": "rgb(255, 255, 255) 0px 0px 0px 2px, lab(54.1736 13.3369 -74.6839) 0px 0px 0px 4px"
       }
     ]
   },
   "responsiveness": {},
   "performance": {
     "landing": {
-      "cls": 0.00042861328125000007,
-      "lcp": 72
+      "cls": 0.0013876953125,
+      "lcp": 68
     }
   }
 }

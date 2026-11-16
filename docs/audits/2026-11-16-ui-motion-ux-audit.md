@@ -184,3 +184,50 @@ A small milestone (candidate **M34 — motion pass + a11y sweep**), scoped rough
 
 Estimation: small-to-medium (mostly CSS class wiring + two token decisions). Everything waits
 for the owner's go.
+
+## Addendum — M34, the motion pass + a11y sweep (2026-11-16, after the audit)
+
+Implemented from this audit (see `docs/STATE.md` for the full session log; the audit numbers
+above stay as the point-in-time baseline):
+
+- **Approval cards are answerable from the browser (was: dead buttons).** The `card` block now
+  renders a working decision: `approval`/`purchase` get Approve/Deny; `question` gets a textbox
+  and an always-enabled **Approve** (aligned to the REQ-007 golden; an empty answer sends the
+  literal `approve`); answered state replaces the affordance with a check-drawn confirmation
+  (`.animate-check-draw`). `threads.answer` finally has a client (`threadsAnswer`); a 409
+  degrades to the honest already-answered state. **Spec §8.3 followed**: composer disabled while
+  an approval/purchase card is unanswered (questions and takeovers are not modal); the waiting
+  reason is carried by an `aria-live` line. Card blocks arriving with snake `card_id` are parsed
+  alongside the golden-pinned camelCase `cardId`.
+- **Dead navigation fixed.** The header's dead "Settings" link is gone; in its place a
+  `shell.theme.toggle` button flips `.dark` on `<html>`, persists `boma-theme` (read by the
+  pre-paint bootstrap) and freezes transitions during the flip (`.theme-transitioning`). Dark
+  mode is now reachable from the UI.
+- **Motion wired where it earns its keep**: message rows, rail rows, activity rows, artifact
+  cards, board cards (`animate-row-slide-in` / `animate-row-grow-in`, 240–400 ms, guarded by
+  `prefers-reduced-motion`); unread badges fade on count change (`animate-number-fade`); the
+  empty-thread intro reveal (`.t-stagger`, soft-landing, 12px rise, blurred-out); the run-status
+  line shimmers while a run is active; the transcript skeleton and aria-live regions unchanged.
+- **a11y**: tokens re-tuned for WCAG AA in both schemes (see `docs/UI.md` — two new documented
+  primitives `neutral-450`/`neutral-550`); duplicated `<main>` on artifacts/board/viewer are now
+  `<section>`s; the board gains an `sr-only` h1 in loading and flag-off states; the auth-shell
+  lockup sits inside a `<header>` landmark; the five auth routes' "content outside landmarks"
+  violations are gone.
+
+**Verification**: `eslint --max-warnings=0`, `tsc --noEmit` clean; Playwright UI goldens 8/8 green
+(`REQ-007-pending-card` needed the question-card alignment above); a11y suite 32/33 green — the
+one failure (RTL mirror) is pre-existing on this machine with nix chromium and is green on the CI
+web job (verified against `43924116332`); the four other local failures are likewise pre-existing
+machine artifacts (`reactions`, `shell` locale, `integrations REQ-048`, a11y RTL); full 21-route
+sweep re-run: **0 axe violations**, motion probe records the entrance animations.
+
+**Wire note (recorded, not fixed)**: an answered card carries no state on the messages wire, so
+after a reload an answered approval card renders pending again; a second answer yields the 409
+already-answered note. The fix belongs to the wire (a card-state field or a cards list) — spec
+question for the owner, not a client-side guess.
+
+**Environment honesty**: `/home` filled to 100% during this session; `/tmp` hit ENOSPC twice;
+Playwright's bundled chromium needed an assembled `LD_LIBRARY_PATH` (libglib and friends from
+nix) to launch here; the long-running Rust server processes are reaped with their calling tool
+session, so every live check ran start→probe→kill inside one command. None of these change the
+findings; they explain the local reproduction caveats.

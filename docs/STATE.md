@@ -35,6 +35,46 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   were never affected. (b) The local-first server was SIGKILLed mid-first-sweep (cause
   unestablished; ~28 GB available); every number in the report comes from the healthy-server
   re-run; the screenshots captured during the outage were overwritten by the re-run.
+- **M34 — motion pass + a11y sweep (2026-11-16, on `1cb087d`; report addendum in
+  `docs/audits/2026-11-16-ui-motion-ux-audit.md`).** Implements the owner's "use BoardUI to
+  refine the UI", driven by the audit's headline finding: the product was fully static.
+  - **Approval cards answerable (REQ-017 parity, web side).** `card` blocks get a working
+    decision: Approve/Deny for approval/purchase, textbox + always-enabled Approve for
+    questions (aligned to the `REQ-007-pending-card` golden), answered state replaces the
+    affordance with an `.animate-check-draw` confirmation; `threads.answer` now has a client
+    (`threadsAnswer`, golden-pinned camelCase request); 409 degrades to an honest
+    already-answered state. Spec §8.3: composer is disabled while an approval/purchase card
+    awaits (questions and takeovers are not modal), with an `aria-live` waiting note. Card
+    blocks arrive as `card_id` on the messages wire but `cardId` on requests; the web
+    normalises both spellings (golden thread-answer pins the request).
+  - **Dead navigation fixed**: the dead "Settings" link is now a `shell.theme.toggle` button
+    (sun/moon) that flips `.dark` on `<html>`, persists `boma-theme` (pre-paint bootstrap read
+    it all along; nothing set it) and freezes transitions during the flip
+    (`.theme-transitioning`). Dark mode reachable from the UI at last.
+  - **Motion wired**: message/rail/activity/artifact/board rows and cards enter with the
+    240–400 ms ease-out recipes from `styles/globals.css` (`animate-row-slide-in` /
+    `animate-row-grow-in`, `prefers-reduced-motion` guarded); unread badges fade on count
+    change (`animate-number-fade`); empty-thread reveal via `.t-stagger` (soft-landing bezier,
+    12px rise, blur-out, 40 ms stagger); run-status line shimmers while active
+    (`.bui-agent-thinking-label`); skeletons unchanged.
+  - **a11y**: `text-tertiary`/`text-secondary` re-tuned for AA in both schemes (`neutral-600`
+    / `neutral-550` light; `neutral-450` / `neutral-400` dark — new primitives
+    `neutral-450`/`neutral-550`, documented in `docs/UI.md`); nested `<main>` on
+    artifacts/board/viewer → `<section>`; board has an `sr-only` h1 in loading/flag-off; the
+    auth lockup sits in a `<header>` landmark.
+  - **Verified**: lint/typecheck clean; UI goldens 8/8 (`REQ-007-pending-card` was aligned to
+    the golden); a11y suite 32/33 (the RTL failure is this machine's nix chromium; green on CI
+    — `reactions`, `shell` locale, `integrations REQ-048` likewise pre-existing here); full
+    21-route sweep: **0 axe violations**; motion probe records the entrance animations.
+  - **Environment honesty**: `/home` hit 100% during this session (not user-removable);
+    `/tmp` hit ENOSPC twice (broke the npm tree once — repaired); Playwright's bundled
+    chromium needs an assembled `LD_LIBRARY_PATH` on nix (in `/tmp/opencode/pw-ldpath.sh`);
+    the local web suite only runs with it; the 4 still-failing local tests are pre-existing
+    machine artifacts, green on CI. Long-lived audit servers die with their tool session —
+    every live check ran start→probe→kill in one command.
+  - Not done (recorded): RTL axe green on this machine needs system fontconfig/libs or the CI
+    browser; the card-answered state is not on the messages wire (reload shows the card
+    pending; second answer → 409 note) — a wire-level fix is a spec question for the owner.
 - **M28 — local automation API + operator CLI (2026-11-16, REQ-072; this commit).**
   - The token-gated automation surface landed: `/api/v1/automation/*`, off unless both
     `BOMA_AUTOMATION_TOKEN` (≥16 chars) and `BOMA_AUTOMATION_AGENTS` (comma-separated bot ids, or
