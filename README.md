@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/boma-lockup-dark.svg">
-  <img alt="Boma Bot — AI teammates on hardware you own" src="assets/brand/boma-lockup-light.svg" width="340">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/boma-lockup-on-dark.png">
+  <img alt="Boma Bot — AI teammates on hardware you own" src="assets/brand/boma-lockup-on-light.png" width="460">
 </picture>
 
 # rebuild-workspace : reconstruire le logiciel analysé, en Rust et en mieux

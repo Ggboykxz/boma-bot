@@ -42,6 +42,8 @@ export function LandingScreen() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-6 px-6 py-16">
+      {/* eslint-disable-next-line @next/next/no-img-element -- static export; the SVG carries its own intrinsic size */}
+      <img src="/icon.svg" alt="" width={96} height={96} className="h-24 w-24 rounded-3xl" />
       <p className="text-text-secondary text-body-strong">{t("app.name")}</p>
       <h1 className="text-title-2-medium text-text-primary">{t("landing.title")}</h1>
       <p className="text-text-secondary text-body-medium">{t("landing.body")}</p>
