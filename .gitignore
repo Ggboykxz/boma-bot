@@ -25,3 +25,4 @@ blob-report/
 .DS_Store
 spec.bak-*/
 .worktrees/
+apps/desktop/vendor/

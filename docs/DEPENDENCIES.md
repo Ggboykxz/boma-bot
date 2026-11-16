@@ -173,6 +173,25 @@ publishing, re-read BoardUI's terms: if Pro source may not be redistributed, it 
 at build time and kept out of the public repository. The local adaptations to the vendored source
 are listed in `docs/UI.md`; none of them edits a vendored file.
 
+## Embedded Postgres (M35)
+
+The self-contained desktop (M35, the OpenBot-style packaging) embeds PostgreSQL 17.12.0 via
+the zonkyio `embedded-postgres-binaries` Maven artifacts:
+
+| Artifact | Version | License | Why |
+| --- | --- | --- | --- |
+| `embedded-postgres-binaries-linux-amd64` | `17.12.0` | Apache-2.0 (PostgreSQL license for the PG tree itself) | real Postgres on Linux without Docker or a system install |
+| `embedded-postgres-binaries-windows-amd64` | `17.12.0` | Apache-2.0 (PostgreSQL license) | same, on Windows |
+
+Fetched at package time by `tools/fetch-embedded-postgres.sh` (pinned version, SHA-256 verified
+against the published Maven Central checksums; `7a8951dc117490f2d4161600836c8b1055306aff86e0a472aad55457651e5cbd`
+linux, `bebadbe868ed53adb1c12033a381e41005915205ea9fedaa2349f5467fa7016b` windows), extracted
+(bin/lib/share, ~60 MB per OS) into `apps/desktop/vendor/postgres/` (gitignored, never
+committed) and packed by electron-builder into `resources/postgres/`. The launch flow:
+`initdb` → loopback port → `boma migrate` (migrations are embedded in the binary) →
+`boma serve` + `boma worker` as supervised child processes. Verified on Linux (initdb →
+migrate → serve → RPC round-trip); Windows verified by the owner on an installed machine.
+
 ## Assets
 
 Nothing visual was taken from the analysed product. No font, icon or image is vendored at M0.
