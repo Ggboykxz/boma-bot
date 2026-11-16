@@ -95,6 +95,19 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
     decision expires after `permission_timeout` → `cancelled`); stall on `still_live` during
     permission wait (cancel needs the person to answer or the timeout); workspace GC.
 
+- **M23 provider-matrix reality check (2026-11-16).** `opencode acp` exists on this machine
+  (v2.3.0) and speaks the exact wire our client implements — initialize handshake answers with
+  full agentCapabilities; a full LLM turn needs `opencode auth login` (or a provider API key),
+  which is the owner's one interactive step; the Rust path is protocol-verified against the real
+  binary, the agentic turn is unproven end-to-end until sign-in exists.
+- **v0.2.3 — desktop first-launch (2026-11-16, user-reported).** The v0.2.2 desktop opened a
+  dead-end error when no server was running. v0.2.3 probes `/health`; if nothing answers it offers
+  a one-click local-first stack (`docker compose`, `BOMA_LOCAL_FIRST=true`, loopback bind) and waits
+  for readiness; failure paths say exactly what to do (compose instructions, releases URL,
+  `BOMA_DESKTOP_URL`). compose.yaml gained `BOMA_LOCAL_FIRST` passthrough and a parameterized
+  `BOMA_BIND_ADDR` (loopback both ways for local-first). Typecheck/lint/build/pack all pass;
+  release v0.2.3 ships the fix.
+
 - **v0.2.2 — the brand ships (2026-11-16, commit `e01087c`, tag `v0.2.2`, release run 43858391776 green).**
   The owner-supplied robot-cat head (`assets/brand/boma-bot-head.svg`, provided in chat 2026-11-16;
   master embedded verbatim) replaces the rejected enclosure mark everywhere: `icon.ico` 16…1024,

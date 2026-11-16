@@ -10,18 +10,91 @@
 
 import { app, BrowserWindow, Menu, dialog, session, shell } from "electron";
 import { autoUpdater } from "electron-updater";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 /** Where the app points: loopback by default, any origin the operator chose at package time. */
 const DEPLOYMENT_URL = process.env.BOMA_DESKTOP_URL ?? "http://127.0.0.1:3000";
 
+/** The release page, for the case where no local stack can be started. */
+const RELEASES_URL = "https://github.com/Ggboykxz/boma-bot/releases/latest";
+
+/** Whether the deployment answers a plain health check. */
+async function isDeploymentReachable(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2_000);
+  try {
+    const response = await fetch(`${url}/health`, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Whether the docker CLI exists on this PATH. */
+function dockerAvailable(): boolean {
+  try {
+    return spawnSync("docker", ["--version"], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** The compose file to drive, in preference order; `undefined` when none is found. */
+function findComposeFile(): string | undefined {
+  const fromEnv = process.env.BOMA_COMPOSE_FILE;
+  if (fromEnv && pathExists(fromEnv)) {
+    return fromEnv;
+  }
+  const fromCwd = path.join(process.cwd(), "compose.yaml");
+  if (pathExists(fromCwd)) {
+    return fromCwd;
+  }
+  const fromHere = path.join(__dirname, "..", "..", "compose.yaml");
+  if (pathExists(fromHere)) {
+    return fromHere;
+  }
+  return undefined;
+}
+
+function pathExists(candidate: string): boolean {
+  return existsSync(candidate);
+}
+
+/** Starts the local stack and waits for readiness; the loopback-only, no-account posture. */
+async function startLocalStack(): Promise<boolean> {
+  const compose = findComposeFile();
+  if (!compose || !dockerAvailable()) {
+    return false;
+  }
+  const child = spawn(
+    "docker",
+    ["compose", "-f", compose, "up", "-d"],
+    {
+      cwd: path.dirname(compose),
+      env: { ...process.env, BOMA_LOCAL_FIRST: "true", BOMA_BIND_ADDR: "127.0.0.1:3000" },
+    },
+  );
+  const code: number | null = await new Promise((resolve) => {
+    child.on("exit", resolve);
+  });
+  if (code !== 0) {
+    return false;
+  }
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    if (await isDeploymentReachable(DEPLOYMENT_URL)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return false;
+}
+
 /** The one partition this app owns; nothing else in Electron shares it. */
 const DESKTOP_PARTITION = "persist:boma";
-
-/** The path of the compose file the "run a local stack" action drives. */
-const COMPOSE_FILE =
-  process.env.BOMA_COMPOSE_FILE ?? path.join(process.cwd(), "compose.yaml");
 
 /** Whether the signed update feed exists; off until the owner provisions one (ADR-016, DEC). */
 const SIGNED_UPDATE = process.env.BOMA_DESKTOP_SIGNED === "true";
@@ -76,33 +149,27 @@ async function signOut(window: BrowserWindow): Promise<void> {
 }
 
 async function runLocalStack(window: BrowserWindow): Promise<void> {
-  const { response } = await dialog.showMessageBox(window, {
-    type: "question",
-    buttons: ["Cancel", "Run it"],
-    defaultId: 1,
-    title: "Run a local stack",
-    message: "Start the local Compose stack with docker compose?",
-    detail: `This runs: docker compose -f ${COMPOSE_FILE} up -d\n\nIt will pull images and build the binary once. Nothing is uploaded to the network.`,
-  });
-  if (response !== 1) {
+  const started = await startLocalStack();
+  if (!started) {
+    dialog.showMessageBox(window, {
+      type: "warning",
+      buttons: ["OK"],
+      defaultId: 0,
+      title: "Local stack",
+      message: "docker compose could not start the local stack.",
+      detail:
+        "Is docker running? If so, run `docker compose up -d` in the repository yourself — the stack then answers on http://127.0.0.1:3000.",
+    });
     return;
   }
-  const child = spawn("docker", ["compose", "-f", COMPOSE_FILE, "up", "-d"], {
-    cwd: path.dirname(COMPOSE_FILE),
-    env: { ...process.env },
+  dialog.showMessageBox(window, {
+    type: "info",
+    buttons: ["OK"],
+    defaultId: 0,
+    title: "Local stack",
+    message: "The stack is up; the app will reconnect to it.",
   });
-  child.stderr.on("data", () => {
-    // The docker CLI reports progress on stderr; the exit code is the signal.
-  });
-  child.on("exit", (code) => {
-    dialog.showMessageBox(window, {
-      type: code === 0 ? "info" : "warning",
-      buttons: ["OK"],
-      title: "Local stack",
-      message: code === 0 ? "The stack is up; the app will reconnect to it." : `docker compose exited with ${code}. See the logs.`,
-    });
-    window.reload();
-  });
+  window.reload();
 }
 
 function template(window: BrowserWindow): Electron.MenuItemConstructorOptions[] {
@@ -176,24 +243,41 @@ app.whenReady().then(() => {
     enableSignedUpdateFeed();
   }
 
-  window.loadURL(DEPLOYMENT_URL).catch(() => {
-    // The loopback origin may be down on first launch (fresh device, stack never started):
-    // say so plainly instead of a blank window.
-    dialog.showMessageBox(window, {
+  (async () => {
+    if (await isDeploymentReachable(DEPLOYMENT_URL)) {
+      await window.loadURL(DEPLOYMENT_URL).catch(() => app.quit());
+      return;
+    }
+    // First launch on a fresh device: offer the one-click local stack before erroring out.
+    const start = await startLocalStack();
+    if (start) {
+      await window.loadURL(DEPLOYMENT_URL).catch(() => app.quit());
+      return;
+    }
+    // Still nothing: say exactly what to do, in one screen, with the two supported paths.
+    const { response } = await dialog.showMessageBox(window, {
       type: "warning",
-      buttons: ["Retry", "Quit"],
+      buttons: ["Start local stack", "Open downloads", "Quit"],
       defaultId: 0,
       title: "Boma Bot is not reachable",
       message: `${DEPLOYMENT_URL} did not answer.`,
-      detail: "Start the deployment (docker compose up -d) or set BOMA_DESKTOP_URL to the right origin, then relaunch.",
-    }).then(({ response }) => {
-      if (response === 1) {
-        app.quit();
+      detail:
+        "This app is the window onto a deployment, not the deployment itself.\n\n" +
+        "Run a local stack (one click, entirely on this machine), or install the server bundle and set BOMA_DESKTOP_URL to its origin.\n\n" +
+        "Downloads: https://github.com/Ggboykxz/boma-bot/releases/latest",
+    });
+    if (response === 0) {
+      // Retry the one-click path; a docker daemon may have needed the nudge.
+      const ok = await startLocalStack();
+      if (ok) {
+        await window.loadURL(DEPLOYMENT_URL).catch(() => app.quit());
         return;
       }
-      window.loadURL(DEPLOYMENT_URL).catch(() => app.quit());
-    });
-  });
+    } else if (response === 1) {
+      await shell.openExternal(RELEASES_URL);
+    }
+    app.quit();
+  })().catch(() => app.quit());
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

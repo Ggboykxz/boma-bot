@@ -241,7 +241,7 @@ jobs:
         run: helm lint deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway
 
       - name: render the in-cluster path
-        run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set image.repository=boma-bot --set image.tag=0.2.2
+        run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set image.repository=boma-bot --set image.tag=0.2.3
 
       - name: render the external-postgres path
         run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set postgresql.enabled=false --set externalPostgres.dsn=postgres://boma:ci@example.com:5432/boma

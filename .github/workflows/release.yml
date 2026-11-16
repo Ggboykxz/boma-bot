@@ -88,7 +88,7 @@ jobs:
             echo "Boma Bot — persistent AI teammates on hardware you own."
             echo
             echo "What is in this release: the v0.1.0 product (M1–M11) plus the improvement program — external agents over AG-UI (M12, REQ-059), sign-in requests (M13.1, REQ-060), Web Push for opted-in members (M15.1, REQ-064) and Slack/Teams notification destinations (M15.2, REQ-065), the single-node k3d Helm chart (M15.3), local-first bring-up (M15.4, REQ-066). 61 of 64 REQ ids are covered by tests carrying their id in the name; REQ-049 (voice, COULD), REQ-056 (mobile, SHOULD) and REQ-061 (authored, not built) are the recorded gaps."
-            echo "(v0.2.2: the brand ships. v0.2.0 published Linux-only assets; v0.2.1 fixed the Windows attestation verify step and shipped the Windows assets; v0.2.2 replaces the installer art, app icons and web icons with the owner-supplied robot-cat head — the first enclosure mark was rejected by the owner. Nothing in the product changed.)"
+            echo "(v0.2.3: the desktop shell boots the person into a working app. v0.2.2 shipped the brand; v0.2.1 fixed the Windows attestation verify step; v0.2.0 published Linux-only assets. v0.2.3: on first launch the app probes the deployment; if nothing answers, one click starts the local-first stack (loopback-only, no account) and waits for readiness — no more dead-end error. Nothing else changed.)"
             echo
             echo "Artifacts (hashes: SHA256SUMS.txt covers the Linux artifacts; SHA256SUMS-windows.txt covers the Windows artifacts — both are Sigstore-attested). The desktop-windows job uploads the Windows files to this release after the Linux job finishes:"
             echo

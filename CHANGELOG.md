@@ -4,6 +4,16 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.2.3] - 2026-11-16
+
+Patch release of v0.2.2: the desktop shell is no longer a dead-end when the server is not running.
+On first launch it probes `http://127.0.0.1:3000/health`; if nothing answers it offers a one-click
+local stack (docker compose, `BOMA_LOCAL_FIRST=true`, loopback-only, no account, no password) and
+waits for readiness; if docker or the compose file is missing, it says exactly which two supported
+paths exist (the one-click stack, or the server tarball + `BOMA_DESKTOP_URL`). The compose file
+gains an optional `BOMA_LOCAL_FIRST` passthrough and a parameterized `BOMA_BIND_ADDR` for
+single-machine local-first deployments.
+
 ## [0.2.2] - 2026-11-16
 
 Patch release of v0.2.1: ships the new brand. The enclosure/ticks mark authored for v0.2.0 was

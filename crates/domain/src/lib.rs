@@ -17,6 +17,7 @@ pub mod billing;
 pub mod bot;
 pub mod card;
 pub mod catalog;
+pub mod compaction;
 pub mod computer;
 pub mod connector;
 pub mod error;

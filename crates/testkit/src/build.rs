@@ -11030,3 +11030,129 @@ mod acp_agent_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod pause_resume_tests {
+    use super::TestApp;
+    use boma_app::worker::Worker;
+    use boma_domain::RunStatus;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn req_067_a_paused_run_is_not_claimed_until_it_is_resumed() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("pause@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.bot.id.to_string(),
+                text: "do the thing".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        assert_eq!(outcome.runs[0].status, RunStatus::Queued);
+        let run_id = outcome.runs[0].id.to_string();
+
+        let paused = boma_app::usecases::pause_run(test.app(), &context, &run_id)
+            .await
+            .expect("the queued run pauses");
+        assert_eq!(paused.status, RunStatus::Paused);
+
+        // The paused run is claimable by nobody.
+        let app = Arc::new(test.app().clone());
+        let worker = Worker::new(
+            app,
+            Arc::new(crate::ScriptedProvider::default()),
+            "worker-pause".to_owned(),
+        );
+        assert!(
+            !worker.step().await.expect("the step answers"),
+            "a paused run is not claimed"
+        );
+
+        // Resume returns it to the queue exactly once.
+        let resumed = boma_app::usecases::resume_run(test.app(), &context, &run_id)
+            .await
+            .expect("the paused run resumes");
+        assert_eq!(resumed.status, RunStatus::Queued);
+        let claimed = worker.step().await.expect("the step answers");
+        assert!(claimed, "the resumed run is claimed again");
+
+        // A second resume is a conflict: the run is no longer paused.
+        let again = boma_app::usecases::resume_run(test.app(), &context, &run_id).await;
+        assert!(
+            matches!(again, Err(boma_app::AppError::Conflict)),
+            "a running run cannot be resumed again"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_067_a_running_run_cannot_be_paused() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("pause2@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "assistant", None, None)
+            .await
+            .expect("the bot is created");
+        let outcome = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.bot.id.to_string(),
+                text: "do the thing".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+        let run_id = outcome.runs[0].id.to_string();
+
+        // Claim it so it is Running/Leased, then try to pause: conflict.
+        let app = Arc::new(test.app().clone());
+        let worker = Worker::new(
+            app,
+            Arc::new(crate::ScriptedProvider::default()),
+            "worker-pause-2".to_owned(),
+        );
+        assert!(worker.step().await.expect("the step answers"));
+
+        let outcome = boma_app::usecases::pause_run(test.app(), &context, &run_id).await;
+        assert!(
+            matches!(outcome, Err(boma_app::AppError::Conflict)),
+            "a run that is being answered cannot be parked"
+        );
+    }
+}

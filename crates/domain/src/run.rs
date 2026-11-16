@@ -20,6 +20,8 @@ use crate::{
 pub enum RunStatus {
     /// Accepted, waiting for an executor to take a lease.
     Queued,
+    /// Parked by a person, not waiting on anyone and not claimable (REQ-067).
+    Paused,
     /// An executor holds the lease and is about to start.
     Leased,
     /// The executor is working.
@@ -54,6 +56,7 @@ impl RunStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
+            Self::Paused => "paused",
             Self::Leased => "leased",
             Self::Running => "running",
             Self::WaitingInput => "waiting_input",
@@ -95,7 +98,8 @@ impl RunStatus {
     #[must_use]
     pub const fn can_transition_to(self, next: Self) -> bool {
         match self {
-            Self::Queued => matches!(next, Self::Leased | Self::Cancelled),
+            Self::Queued => matches!(next, Self::Leased | Self::Cancelled | Self::Paused),
+            Self::Paused => matches!(next, Self::Queued | Self::Cancelled),
             Self::Leased => matches!(next, Self::Running | Self::Queued | Self::Cancelled),
             Self::Running => matches!(
                 next,
@@ -141,6 +145,7 @@ impl FromStr for RunStatus {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "queued" => Ok(Self::Queued),
+            "paused" => Ok(Self::Paused),
             "leased" => Ok(Self::Leased),
             "running" => Ok(Self::Running),
             "waiting_input" => Ok(Self::WaitingInput),

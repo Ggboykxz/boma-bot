@@ -147,6 +147,16 @@ the release is forged — the Sigstore attestation is the proof of origin.
 Signing remains unsigned by owner decision (ADR-016); attestations are the chain of custody in
 their place — verify them, don't skip them.
 
+## Desktop, first launch (no server yet)
+
+Since v0.2.3 the desktop app never strands you: on launch it probes
+`http://127.0.0.1:3000/health`. If nothing answers, it offers a one-click local stack —
+`docker compose up -d` with `BOMA_LOCAL_FIRST=true`, a loopback-only, no-account instance of the
+whole product on your own machine — waits for readiness, then opens straight into it (no sign-in:
+the machine is the trust anchor, REQ-066). If docker or the compose file is missing, the dialog
+says so and names both supported paths: the one-click stack, or the server tarball plus
+`BOMA_DESKTOP_URL` pointing at your origin. Nothing leaves the network except pulling images.
+
 ## Desktop on Windows (unsigned: what SmartScreen tells you)
 
 The same release publishes two Windows artifacts (built on a real `windows-latest` runner, no

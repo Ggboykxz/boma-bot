@@ -4,7 +4,7 @@
 
 image:
   repository: boma-bot
-  tag: "0.2.2"
+  tag: "0.2.3"
   pullPolicy: IfNotPresent
 
 # The only secret that MUST be overridden before `helm install`; without it the boot fails fast.

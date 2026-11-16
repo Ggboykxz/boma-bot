@@ -6443,6 +6443,74 @@ pub async fn claim_run(app: &App, owner: &str) -> Result<Option<ClaimedRun>, App
 ///
 /// Returns [`AppError::NotFound`] when the run does not exist in the caller's tenant, and
 /// [`AppError::Unavailable`] when a store cannot answer.
+/// Pauses a queued run: the worker stops claiming it until the person resumes it (REQ-067).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the run does not exist, [`AppError::Conflict`] when it
+/// is not `queued` or `paused`.
+pub async fn pause_run(app: &App, context: &TenantContext, run_id: &str) -> Result<Run, AppError> {
+    let run_id = boma_domain::RunId::new(run_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let run = app
+        .stores
+        .runs
+        .find(context, &run_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    match run.status {
+        boma_domain::RunStatus::Paused => return Ok(run),
+        boma_domain::RunStatus::Queued => {}
+        _ => return Err(AppError::Conflict),
+    }
+    let now = app.services.clock.now();
+    app.stores
+        .runs
+        .set_status(context, &run_id, RunStatus::Paused, &now, None, None)
+        .await?;
+    app.stores
+        .runs
+        .find(context, &run_id)
+        .await?
+        .ok_or(AppError::Unavailable)
+}
+
+/// Resumes a paused run back onto the queue (REQ-067).
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the run does not exist, [`AppError::Conflict`] when it
+/// is not `paused`.
+pub async fn resume_run(app: &App, context: &TenantContext, run_id: &str) -> Result<Run, AppError> {
+    let run_id = boma_domain::RunId::new(run_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let run = app
+        .stores
+        .runs
+        .find(context, &run_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if run.status != boma_domain::RunStatus::Paused {
+        return Err(AppError::Conflict);
+    }
+    let now = app.services.clock.now();
+    app.stores
+        .runs
+        .set_status(context, &run_id, RunStatus::Queued, &now, None, None)
+        .await?;
+    app.stores
+        .runs
+        .find(context, &run_id)
+        .await?
+        .ok_or(AppError::Unavailable)
+}
+
+/// Cancels a run wherever it stands (REQ-006).
+///
+/// Terminal runs answer themselves unchanged; every other state flips to `cancelled` and the
+/// person is told. The executor notices at its next tool boundary or chunk.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the run does not exist in this tenant.
 pub async fn cancel_run(app: &App, context: &TenantContext, run_id: &str) -> Result<Run, AppError> {
     let run_id = boma_domain::RunId::new(run_id.to_owned()).map_err(|_| AppError::NotFound)?;
     let run = app

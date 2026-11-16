@@ -2,5 +2,5 @@ apiVersion: v2
 name: boma-bot
 description: Boma Bot — a self-hosted teammate your whole team can talk to, send to and approve
 type: application
-version: 0.2.2
-appVersion: "0.2.2"
+version: 0.2.3
+appVersion: "0.2.3"

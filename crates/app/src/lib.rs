@@ -14,6 +14,7 @@ pub mod acp_provider;
 pub mod agui_provider;
 pub mod error;
 pub mod health;
+pub mod local_models;
 pub mod metrics;
 pub mod ports;
 pub mod push;

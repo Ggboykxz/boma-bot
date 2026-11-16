@@ -1361,6 +1361,24 @@ pub struct CatalogProviderView {
     pub models: Vec<CatalogModelView>,
 }
 
+/// One model offered by a local loopback server (REQ-075).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalDiscoveredModelView {
+    /// Which server offered it: `ollama` or `lm-studio`.
+    pub source: String,
+    /// The model identifier the server listed.
+    pub id: String,
+}
+
+/// The reply of `models.discovered` — what local loopback servers offer (REQ-075).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsDiscoveredReply {
+    /// The discovered models, Ollama first. Empty when no local server answers.
+    pub models: Vec<LocalDiscoveredModelView>,
+}
+
 /// The reply of `models.catalog` (REQ-052, golden `models-catalog`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

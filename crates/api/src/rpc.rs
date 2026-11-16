@@ -44,13 +44,14 @@ use crate::{
         GroupListView, GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply,
         HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply,
         InstallTelegramReply, InstallUrlReply, InstallationsReply, InvitationAcceptReply,
-        InvitationAcceptRequest, InvitationReply, MailPolicyReply, MailPolicyView,
-        MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply, McpOAuthStartReply,
-        McpServerReply, McpServerView, McpServersListReply, McpServersRemoveReply,
-        MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
-        MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
-        ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
-        ModelsCatalogReply, NotificationDestinationView, NotificationsDestinationsCreateReply,
+        InvitationAcceptRequest, InvitationReply, LocalDiscoveredModelView, MailPolicyReply,
+        MailPolicyView, MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply,
+        McpOAuthStartReply, McpServerReply, McpServerView, McpServersListReply,
+        McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply,
+        MemoryRemoveReply, MemoryWriteReply, MessagesReply, MessagingInstallationView,
+        MessagingRemoveReply, ModelConnectReply, ModelCredentialView, ModelCredentialsReply,
+        ModelPreferenceReply, ModelsCatalogReply, ModelsDiscoveredReply,
+        NotificationDestinationView, NotificationsDestinationsCreateReply,
         NotificationsDestinationsDeleteReply, NotificationsDestinationsListReply,
         NotificationsPolicyGetRequest, NotificationsPolicySetRequest, NotificationsPolicyView,
         NotificationsStatusReply, NotificationsSubscribeReply, NotificationsUnsubscribeReply,
@@ -164,6 +165,8 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::RUNS, "list"),
         (namespaces::RUNS, "cancel"),
         (namespaces::RUNS, "retry"),
+        (namespaces::RUNS, "pause"),
+        (namespaces::RUNS, "resume"),
         (namespaces::MEMORY, "write"),
         (namespaces::MEMORY, "read"),
         (namespaces::MEMORY, "list"),
@@ -225,6 +228,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::MESSAGING, "remove"),
         (namespaces::MESSAGING, "conversations"),
         (namespaces::MODELS, "catalog"),
+        (namespaces::MODELS, "discovered"),
         (namespaces::MODELS, "credentials"),
         (namespaces::MODELS, "connect"),
         (namespaces::MODELS, "disconnect"),
@@ -430,6 +434,12 @@ async fn rpc_inner(
         (namespaces::RUNS, "retry") => runs_retry(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
+        (namespaces::RUNS, "pause") => runs_pause(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::RUNS, "resume") => runs_resume(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
         (namespaces::MEMORY, "write") => memory_write(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
@@ -612,6 +622,9 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::MODELS, "catalog") => models_catalog(state, auth)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::MODELS, "discovered") => models_discovered(state, auth)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::MODELS, "credentials") => models_credentials(state, auth)
@@ -1755,6 +1768,50 @@ async fn runs_retry(
     let request: RunsRetryRequest = parse(&body)?;
     let run = usecases::retry_run(state.app(), &auth.actor.context, &request.run_id).await?;
     Ok(RunRetryReply::from(&run))
+}
+
+/// The body of `runs.pause`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunsPauseRequest {
+    /// The queued run the caller wants parked.
+    run_id: String,
+}
+
+/// The body of `runs.resume`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunsResumeRequest {
+    /// The paused run the caller wants back on the queue.
+    run_id: String,
+}
+
+/// `runs.pause` — park a queued run; no worker claims it until the person resumes it (REQ-067).
+async fn runs_pause(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<CancelReply, ApiError> {
+    let request: RunsPauseRequest = parse(&body)?;
+    let run = usecases::pause_run(state.app(), &auth.actor.context, &request.run_id).await?;
+    Ok(CancelReply {
+        id: run.id.as_str().to_owned(),
+        status: run.status.as_str().to_owned(),
+    })
+}
+
+/// `runs.resume` — return a paused run to the queue (REQ-067).
+async fn runs_resume(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<CancelReply, ApiError> {
+    let request: RunsResumeRequest = parse(&body)?;
+    let run = usecases::resume_run(state.app(), &auth.actor.context, &request.run_id).await?;
+    Ok(CancelReply {
+        id: run.id.as_str().to_owned(),
+        status: run.status.as_str().to_owned(),
+    })
 }
 
 /// The body of `runs.list`.
@@ -3118,6 +3175,28 @@ async fn messaging_conversations(
 /// `models.catalog` — what this deployment reaches, shaped exactly as the golden
 /// (`spec/golden/models-catalog.json`): providers, models, context windows, roles. No keys, no
 /// account identifiers: whether a provider is usable is `models.credentials` (REQ-052).
+/// `models.discovered` — what local loopback servers offer (REQ-075).
+///
+/// Discovery is best effort and answered synchronously at call time: a deployment whose local
+/// servers are on gets the picker-ready list, one whose servers died gets an empty list and no
+/// error. The loopback is probed from this process; nothing reaches the network beyond it.
+async fn models_discovered(
+    _state: AppState,
+    _auth: AuthContext,
+) -> Result<ModelsDiscoveredReply, ApiError> {
+    let discovered = boma_app::local_models::discover().await;
+    Ok(ModelsDiscoveredReply {
+        models: discovered
+            .models
+            .into_iter()
+            .map(|model| LocalDiscoveredModelView {
+                source: model.source,
+                id: model.id,
+            })
+            .collect(),
+    })
+}
+
 async fn models_catalog(
     state: AppState,
     auth: AuthContext,

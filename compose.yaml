@@ -5,10 +5,9 @@ name: boma
 
 x-app-environment: &app-environment
   BOMA_DATABASE_URL: postgres://boma:${POSTGRES_PASSWORD:-boma}@db:5432/boma
-  BOMA_BIND_ADDR: 0.0.0.0:3000
   BOMA_LOG_FORMAT: json
   BOMA_LOG_FILTER: ${BOMA_LOG_FILTER:-info}
-  BOMA_VERSION: ${BOMA_VERSION:-0.2.2}
+  BOMA_VERSION: ${BOMA_VERSION:-0.2.3}
   BOMA_REVISION: ${BOMA_REVISION:-}
   BOMA_RUNTIME: sandboxed
   # The provider variable is `SANDBOX_PROVIDER` (spec/01-requirements.md REQ-027); a `BOMA_SANDBOX`
@@ -20,6 +19,13 @@ x-app-environment: &app-environment
   BOMA_JOBS: postgres
   BOMA_REALTIME: postgres
   BOMA_DEGRADED: ${BOMA_DEGRADED:-false}
+  # Local-first bring-up (REQ-066): `true` makes this a loopback-only, no-account instance for
+  # the person's own machine. Empty (default) is the multi-tenant posture.
+  BOMA_LOCAL_FIRST: ${BOMA_LOCAL_FIRST:-}
+  # The listener. The compose default keeps the app on 0.0.0.0 inside the container while
+  # publishing 127.0.0.1 on the host; a single-machine local-first stack wants loopback both
+  # ways, so the desktop passes BOMA_BIND_ADDR=127.0.0.1:3000 when it starts the stack for you.
+  BOMA_BIND_ADDR: ${BOMA_BIND_ADDR:-0.0.0.0:3000}
   # Bot secrets vault (REQ-046). Empty means an ephemeral per-process key (a warning is logged):
   # fine for a first boot, never for a real deployment. Losing this key loses every secret.
   BOMA_MASTER_KEY: ${BOMA_MASTER_KEY:-}

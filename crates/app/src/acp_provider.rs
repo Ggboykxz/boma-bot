@@ -176,6 +176,18 @@ impl PermissionDecider {
             if started.elapsed() >= self.timeout {
                 return None;
             }
+            // A person may cancel the run while it waits on the card; the turn must end
+            // rather than leak a blocked executor forever.
+            match self.app.stores.runs.find(&self.context, &self.run_id).await {
+                Ok(Some(run)) if run.status.is_terminal() => {
+                    tracing::info!(run = %run.id, status = ?run.status, "the run went terminal while parked on the ACP permission; the turn is cancelled");
+                    return None;
+                }
+                Ok(Some(_) | None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "the run could not be checked while parked; treating the wait as live");
+                }
+            }
             if let Ok(Some(card)) = self.app.stores.cards.find(&self.context, card_id).await
                 && card.status != boma_domain::CardStatus::Pending
             {
@@ -251,20 +263,22 @@ fn render_prompt(request: &ProviderRequest) -> String {
     prompt
 }
 
-#[async_trait]
-impl ModelProvider for AcpProvider {
-    async fn complete(&self, request: ProviderRequest) -> Result<ProviderTurn, AppError> {
-        let workspace = self.fresh_workspace(request.thread.id.as_str())?;
+impl AcpProvider {
+    async fn turn_inner(
+        &self,
+        request: &ProviderRequest,
+        workspace: &std::path::Path,
+    ) -> Result<ProviderTurn, AppError> {
         let cwd = workspace
             .to_str()
             .map(str::to_owned)
             .ok_or(AppError::Unavailable)?;
 
-        let prompt = render_prompt(&request);
+        let prompt = render_prompt(request);
         let mut session = AcpSession::spawn(
             self.spec.command,
             self.spec.args,
-            &workspace,
+            workspace,
             HANDSHAKE_TIMEOUT,
         )?;
         session.set_permission_decider(Box::new(PermissionDecider {
@@ -293,5 +307,31 @@ impl ModelProvider for AcpProvider {
             return Err(AppError::Unavailable);
         }
         Ok(ProviderTurn::Chunks(vec![text]))
+    }
+
+    fn cleanup_policy(workspace: &std::path::Path, outcome_ok: bool) {
+        match std::env::var("BOMA_ACP_KEEP_WORKSPACES").as_deref() {
+            Ok("all" | "failures") if !outcome_ok => {}
+            Ok("none" | "failures") => {
+                let _ = std::fs::remove_dir_all(workspace);
+            }
+            Ok("all") => {}
+            _ => {
+                // default: keep only failing workspaces for debugging
+                if outcome_ok {
+                    let _ = std::fs::remove_dir_all(workspace);
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl ModelProvider for AcpProvider {
+    async fn complete(&self, request: ProviderRequest) -> Result<ProviderTurn, AppError> {
+        let workspace = self.fresh_workspace(request.thread.id.as_str())?;
+        let result = self.turn_inner(&request, &workspace).await;
+        Self::cleanup_policy(&workspace, result.is_ok());
+        result
     }
 }

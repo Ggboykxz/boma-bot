@@ -11,7 +11,7 @@ use boma_domain::{RunStatus, TenantContext};
 
 use crate::{
     App, AppError, Failure,
-    ports::{ModelProvider, ProviderRequest, ProviderTurn},
+    ports::{ModelProvider, NewMessage, ProviderRequest, ProviderTurn},
     usecases,
 };
 
@@ -301,6 +301,41 @@ impl Worker {
             .map(|page| page.messages)
             .unwrap_or_default();
         let latest = history.iter().map(|message| message.seq).max().unwrap_or(0);
+        // REQ-069: the window is a budget, not a cliff. Pack the history to three quarters of
+        // the deployment's window before the provider sees it, and tell the person it happened.
+        let window_tokens = boma_domain::catalogue_for(&self.app.services.models)
+            .into_iter()
+            .flat_map(|provider| provider.models)
+            .find(|model| model.key == self.app.services.models.default)
+            .map_or(128_000, |model| {
+                usize::try_from(model.context_window).unwrap_or(128_000)
+            });
+        let history_budget = window_tokens.saturating_mul(3) / 4;
+        let (history, compaction) =
+            boma_domain::compaction::compact_history(&history, history_budget);
+        if let Some(report) = compaction {
+            let note = format!(
+                "[context compacted: {} tool results elided ({} bytes), {} earlier messages dropped]",
+                report.elided_tool_results, report.elided_bytes, report.dropped_messages
+            );
+            let note_message = NewMessage {
+                id: boma_domain::MessageId::new(self.app.services.ids.new_id("msg"))?,
+                space_id: claimed.thread.space_id.clone(),
+                thread_id: claimed.thread.id.clone(),
+                role: boma_domain::MessageRole::System,
+                blocks: vec![boma_domain::Block::Text { text: note.clone() }],
+                bot_id: Some(claimed.bot.id.clone()),
+                author_user_id: None,
+                run_id: Some(run.id.clone()),
+                client_nonce: None,
+                created_at: self.app.services.clock.now(),
+                reply_to_message_id: None,
+                reply_quote: None,
+            };
+            if let Err(error) = self.app.stores.messages.insert(context, note_message).await {
+                tracing::warn!(%error, "the compaction notice could not be written to the thread");
+            }
+        }
         // A routine-woken run has no person message in the history: the prompt is the routine's.
         let prompt = match &run.routine_id {
             Some(routine_id) => self
