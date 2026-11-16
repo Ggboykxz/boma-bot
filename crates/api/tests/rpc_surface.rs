@@ -4916,7 +4916,7 @@ async fn req_064_notifications_status_subscribe_policy_round_trip() {
         state(&test_app),
         "/rpc/notifications/policySet",
         Some(&caller),
-        serde_json::json!({ "botId": bot.as_str(), "notifyCompleted": true, "dailyCap": 7 }),
+        serde_json::json!({ "botId": bot.as_str(), "notifyCompleted": true, "dailyCap": 7, "destinationSlackWebhook": true }),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -4924,6 +4924,8 @@ async fn req_064_notifications_status_subscribe_policy_round_trip() {
     assert_eq!(body["notifyWaiting"], serde_json::json!(true));
     assert_eq!(body["notifyCompleted"], serde_json::json!(true));
     assert_eq!(body["dailyCap"], serde_json::json!(7));
+    assert_eq!(body["destinationSlackWebhook"], serde_json::json!(true));
+    assert_eq!(body["destinationTeamsWebhook"], serde_json::json!(false));
 
     // An unknown bot is not found.
     let response = post(

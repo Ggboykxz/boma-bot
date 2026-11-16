@@ -4103,6 +4103,8 @@ async fn notifications_policy_set(
                 notify_waiting: request.notify_waiting,
                 notify_completed: request.notify_completed,
                 daily_cap: request.daily_cap,
+                destination_slack_webhook: request.destination_slack_webhook,
+                destination_teams_webhook: request.destination_teams_webhook,
             },
         )
         .await?;
@@ -4115,6 +4117,8 @@ fn policy_view(policy: &boma_domain::notification::NotificationPolicy) -> Notifi
         notify_waiting: policy.notify_waiting,
         notify_completed: policy.notify_completed,
         daily_cap: policy.daily_cap,
+        destination_slack_webhook: policy.destination_slack_webhook,
+        destination_teams_webhook: policy.destination_teams_webhook,
     }
 }
 

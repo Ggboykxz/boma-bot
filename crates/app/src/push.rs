@@ -8,7 +8,11 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use base64::Engine as _;
-use boma_domain::{BotId, RunId, SpaceId, TenantContext, UserId};
+use boma_domain::{
+    BotId, RunId, SpaceId, TenantContext, UserId, notification::NotificationDestinationKind,
+};
+
+use secrecy::ExposeSecret;
 
 use crate::error::AppError;
 use crate::service::App;
@@ -133,6 +137,119 @@ fn title_for(locale: &str, outcome: Option<PushOutcome>) -> &'static str {
         (_, None) => "A bot needs your answer",
         (_, Some(PushOutcome::Completed)) => "The bot finished its run",
         (_, Some(PushOutcome::Failed)) => "The bot run failed",
+    }
+}
+
+fn vapid_policy_title(locale: &str, outcome: Option<PushOutcome>) -> String {
+    match outcome {
+        None => title_for(locale, None).to_owned(),
+        Some(PushOutcome::Completed) => title_for(locale, Some(PushOutcome::Completed)).to_owned(),
+        Some(PushOutcome::Failed) => title_for(locale, Some(PushOutcome::Failed)).to_owned(),
+    }
+}
+
+/// Whether any destination channel is enabled for this member+bot; the answer decides the fan-out.
+fn destination_kinds(
+    policy: &boma_domain::notification::NotificationPolicy,
+) -> Vec<NotificationDestinationKind> {
+    let mut kinds = Vec::new();
+    if policy.destination_slack_webhook {
+        kinds.push(NotificationDestinationKind::SlackWebhook);
+    }
+    if policy.destination_teams_webhook {
+        kinds.push(NotificationDestinationKind::TeamsWebhook);
+    }
+    kinds
+}
+
+/// Post to each enabled destination channel of the space, best-effort, capped by the shared cap.
+async fn push_destinations(
+    app: &App,
+    context: &TenantContext,
+    title: &str,
+    kind: boma_domain::notification::NotificationKind,
+    outcome: Option<PushOutcome>,
+    bot_id: &BotId,
+    policy: &boma_domain::notification::NotificationPolicy,
+) {
+    let kinds = destination_kinds(policy);
+    if kinds.is_empty() {
+        return;
+    }
+    let destinations = match app.stores.destinations.list(context, None).await {
+        Ok(destinations) => destinations,
+        Err(error) => {
+            tracing::warn!(%error, "the destinations could not be read; skipping");
+            return;
+        }
+    };
+    // The cap already spent on browser sends; destinations draw from the same budget.
+    let mut remaining = match app.stores.notifications.count_today(context, bot_id).await {
+        Ok(today) => u64::from(policy.daily_cap).saturating_sub(today),
+        Err(error) => {
+            tracing::warn!(%error, "the push counter could not be read; destinations skipped");
+            return;
+        }
+    };
+    if remaining == 0 {
+        return;
+    }
+    let _ = outcome;
+    for destination in destinations {
+        if remaining == 0 {
+            return;
+        }
+        if !kinds.contains(&destination.kind) {
+            continue;
+        }
+        let webhook = match app
+            .stores
+            .destinations
+            .destination_webhook(context, &destination.id)
+            .await
+        {
+            Ok(webhook) => webhook,
+            Err(error) => {
+                tracing::warn!(%error, id = %destination.id, "the destination webhook could not be read; skipping");
+                continue;
+            }
+        };
+        let body = match destination.kind {
+            NotificationDestinationKind::SlackWebhook => serde_json::json!({ "text": title }),
+            NotificationDestinationKind::TeamsWebhook => serde_json::json!({
+                "@type": "MessageCard",
+                "@context": "http://schema.org/extensions",
+                "summary": "Boma Bot",
+                "title": "Boma Bot",
+                "text": title,
+                "potentialAction": [{
+                    "@type": "OpenUri",
+                    "name": "Open in Boma",
+                    "targets": [{ "os": "default", "uri": format!("/app/{bot_id}/") }],
+                }],
+            }),
+        };
+        let url = webhook.expose_secret();
+        match app
+            .services
+            .messaging_transport
+            .post_json(url, &[], &body, false)
+            .await
+        {
+            Ok(_) => {
+                remaining = remaining.saturating_sub(1);
+                let id = app.services.ids.new_id("log");
+                let _ = app
+                    .stores
+                    .notifications
+                    .record_send(context, &id, bot_id, kind)
+                    .await;
+                tracing::info!(destination = %destination.id, kind = %destination.kind.as_str(), "a destination delivery succeeded");
+            }
+            Err(error) => {
+                tracing::warn!(%error, destination = %destination.id, "a destination delivery failed; ignoring");
+            }
+        }
     }
 }
 
@@ -265,6 +382,11 @@ async fn push_one(
         )
         .await;
     }
+    // A member opted in to destinations fires their channel while they are parked; absent any
+    // destination or flag, nothing happens. Destinations deliver exactly the same title as the
+    // browser push — never the URI, never a machine key, never tool or message content.
+    let title = vapid_policy_title(&locale, outcome);
+    push_destinations(app, &context, &title, kind, outcome, &bot_id, &policy).await;
 }
 
 /// The delivery bundle, factored so `deliver` stays honest about what it needs.

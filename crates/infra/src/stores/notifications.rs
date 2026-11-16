@@ -53,11 +53,14 @@ fn subscription_into_domain(
 }
 
 #[derive(sqlx::FromRow)]
+#[allow(clippy::struct_excessive_bools)] // four independent wiring switches; read them separately
 struct PolicyRow {
     bot_id: String,
     notify_waiting: bool,
     notify_completed: bool,
     daily_cap: i32,
+    destination_slack_webhook: bool,
+    destination_teams_webhook: bool,
     created_at: String,
     updated_at: String,
 }
@@ -70,6 +73,8 @@ fn policy_into_domain(
         notify_waiting: row.notify_waiting,
         notify_completed: row.notify_completed,
         daily_cap: u32::try_from(row.daily_cap).unwrap_or(0),
+        destination_slack_webhook: row.destination_slack_webhook,
+        destination_teams_webhook: row.destination_teams_webhook,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -184,6 +189,7 @@ impl ports::NotificationStore for PostgresNotificationStore {
             Box::pin(async move {
                 let row = sqlx::query_as::<_, PolicyRow>(
                     "SELECT bot_id, notify_waiting, notify_completed, daily_cap,
+                            destination_slack_webhook, destination_teams_webhook,
                             boma.rfc3339(created_at) AS created_at,
                             boma.rfc3339(updated_at) AS updated_at
                        FROM notification_policies
@@ -223,16 +229,19 @@ impl ports::NotificationStore for PostgresNotificationStore {
         tenant::in_space(&self.pool, &space_id, |conn| {
             Box::pin(async move {
                 let row = sqlx::query_as::<_, PolicyRow>(
-                    "INSERT INTO notification_policies (space_id, user_id, bot_id, notify_waiting, notify_completed, daily_cap, created_at, updated_at)
+                    "INSERT INTO notification_policies (space_id, user_id, bot_id, notify_waiting, notify_completed, daily_cap, destination_slack_webhook, destination_teams_webhook, created_at, updated_at)
                      VALUES ($1, $2, $3,
                              COALESCE($4, true), COALESCE($5, false), COALESCE($6, 20),
+                             COALESCE($7, false), COALESCE($8, false),
                              now(), now())
                      ON CONFLICT (space_id, user_id, bot_id) DO UPDATE
                      SET notify_waiting = COALESCE($4, notification_policies.notify_waiting),
                          notify_completed = COALESCE($5, notification_policies.notify_completed),
                          daily_cap = COALESCE($6, notification_policies.daily_cap),
+                         destination_slack_webhook = COALESCE($7, notification_policies.destination_slack_webhook),
+                         destination_teams_webhook = COALESCE($8, notification_policies.destination_teams_webhook),
                          updated_at = now()
-                     RETURNING bot_id, notify_waiting, notify_completed, daily_cap,
+                     RETURNING bot_id, notify_waiting, notify_completed, daily_cap, destination_slack_webhook, destination_teams_webhook,
                                boma.rfc3339(created_at) AS created_at,
                                boma.rfc3339(updated_at) AS updated_at",
                 )
@@ -242,6 +251,8 @@ impl ports::NotificationStore for PostgresNotificationStore {
                 .bind(patch.notify_waiting)
                 .bind(patch.notify_completed)
                 .bind(patch.daily_cap.map(|value| i32::try_from(value).unwrap_or(i32::MAX)))
+                .bind(patch.destination_slack_webhook)
+                .bind(patch.destination_teams_webhook)
                 .fetch_one(&mut *conn)
                 .await
                 .map_err(tenant::unavailable)?;

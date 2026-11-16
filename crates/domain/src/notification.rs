@@ -69,6 +69,7 @@ pub struct NewNotificationSubscription {
 }
 
 /// The per-(space, member, bot) push policy.
+#[allow(clippy::struct_excessive_bools)] // four independent channels, each meaningfully different
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationPolicy {
     /// The bot this policy governs.
@@ -79,6 +80,10 @@ pub struct NotificationPolicy {
     pub notify_completed: bool,
     /// How many pushes this pair may send in a UTC day, across channels via later slices.
     pub daily_cap: u32,
+    /// Whether this member's pushes also fire into Slack destinations for this bot.
+    pub destination_slack_webhook: bool,
+    /// Whether this member's pushes also fire into Teams destinations for this bot.
+    pub destination_teams_webhook: bool,
     /// When it was created.
     pub created_at: String,
     /// When it was last updated.
@@ -96,6 +101,8 @@ impl NotificationPolicy {
             notify_waiting: true,
             notify_completed: false,
             daily_cap: 20,
+            destination_slack_webhook: false,
+            destination_teams_webhook: false,
             created_at: now.to_owned(),
             updated_at: now.to_owned(),
         }
@@ -113,6 +120,10 @@ pub struct SetNotificationPolicy {
     pub notify_completed: Option<bool>,
     /// Override the daily cap.
     pub daily_cap: Option<u32>,
+    /// Override the Slack-destinations flag.
+    pub destination_slack_webhook: Option<bool>,
+    /// Override the Teams-destinations flag.
+    pub destination_teams_webhook: Option<bool>,
 }
 
 /// What came of a delivery attempt, from the store's perspective.

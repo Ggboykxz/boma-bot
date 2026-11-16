@@ -9161,6 +9161,8 @@ mod notification_tests {
                     notify_waiting: None,
                     notify_completed: None,
                     daily_cap: Some(2),
+                    destination_slack_webhook: None,
+                    destination_teams_webhook: None,
                 },
             )
             .await
@@ -9247,6 +9249,8 @@ mod notification_tests {
                     notify_waiting: None,
                     notify_completed: Some(true),
                     daily_cap: None,
+                    destination_slack_webhook: None,
+                    destination_teams_webhook: None,
                 },
             )
             .await
@@ -10091,7 +10095,7 @@ impl boma_app::ports::EndpointSafetyChecker for ScriptedEndpointSafety {
 
 #[cfg(test)]
 mod destination_tests {
-    use super::TestApp;
+    use super::{TestApp, vapid_test_config};
     use secrecy::ExposeSecret;
 
     #[tokio::test]
@@ -10167,6 +10171,299 @@ mod destination_tests {
                 .await
                 .expect("a missing id deletes to false"),
         );
+    }
+
+    /// A fixture along the full stack: VAPID on, a scripted transport, one member, one bot,
+    /// and one destination of each kind created for the space.
+    struct DestinationFixture {
+        test: TestApp,
+        transport: std::sync::Arc<crate::ScriptedMessagingTransport>,
+        space_id: boma_domain::SpaceId,
+        bot_id: boma_domain::BotId,
+        user_id: boma_domain::UserId,
+        context: boma_domain::TenantContext,
+    }
+
+    async fn destination_fixture() -> DestinationFixture {
+        let transport = std::sync::Arc::new(crate::ScriptedMessagingTransport::new());
+        let test = TestApp::builder()
+            .vapid(vapid_test_config())
+            .messaging_transport(transport.clone())
+            .build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the bot exists");
+        let context = TestApp::member_context(&space_id, &owner);
+
+        for (id, kind, webhook, label) in [
+            (
+                "dest-slack",
+                boma_domain::notification::NotificationDestinationKind::SlackWebhook,
+                "https://hooks.slack.com/services/test-slack-123",
+                "#crew-slack",
+            ),
+            (
+                "dest-teams",
+                boma_domain::notification::NotificationDestinationKind::TeamsWebhook,
+                "https://webhook.office.example.com/hook",
+                "#crew-teams",
+            ),
+        ] {
+            test.app()
+                .stores
+                .destinations
+                .create(
+                    &context,
+                    boma_domain::notification::NewNotificationDestination {
+                        id: id.to_owned(),
+                        space_id: space_id.clone(),
+                        kind,
+                        label: label.to_owned(),
+                        webhook: webhook.to_owned(),
+                        created_by: owner.clone(),
+                        created_at: "2026-11-15T00:00:00Z".to_owned(),
+                    },
+                )
+                .await
+                .expect("the destination is created");
+        }
+
+        DestinationFixture {
+            test,
+            transport,
+            space_id,
+            bot_id: bot,
+            user_id: owner,
+            context,
+        }
+    }
+
+    fn target(test: &DestinationFixture) -> boma_app::push::PushTarget {
+        boma_app::push::PushTarget {
+            space_id: test.space_id.clone(),
+            user_id: test.user_id.clone(),
+            bot_id: test.bot_id.clone(),
+            run_id: boma_domain::RunId::new("run_065_test".to_owned()).expect("the id"),
+        }
+    }
+
+    #[tokio::test]
+    async fn req_065_destination_sends_only_after_member_opts_in() {
+        let test = destination_fixture().await;
+
+        boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+
+        assert!(
+            test.transport.post_json_calls().is_empty(),
+            "no destination fires when no flag is opted in",
+        );
+    }
+
+    #[tokio::test]
+    async fn req_065_destination_payloads_carry_only_titles_and_channels() {
+        let test = destination_fixture().await;
+        test.test
+            .app()
+            .stores
+            .notifications
+            .set_policy(
+                &test.context,
+                boma_domain::notification::SetNotificationPolicy {
+                    bot_id: test.bot_id.clone(),
+                    notify_waiting: None,
+                    notify_completed: None,
+                    daily_cap: None,
+                    destination_slack_webhook: Some(true),
+                    destination_teams_webhook: Some(true),
+                },
+            )
+            .await
+            .expect("the flags are set");
+
+        boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+
+        let calls = test.transport.post_json_calls();
+        assert_eq!(calls.len(), 2, "one post per enabled destination");
+        for (url, _headers, body) in calls {
+            let expected_title = match url.as_str() {
+                "https://hooks.slack.com/services/test-slack-123" => {
+                    Some(serde_json::json!({ "text": "A bot needs your answer" }))
+                }
+                "https://webhook.office.example.com/hook" => None,
+                other => panic!("unexpected destination {other}"),
+            };
+            if let Some(expected) = expected_title {
+                assert_eq!(body, expected);
+            } else {
+                let message_card = body["@type"].as_str().expect("teams @type");
+                assert_eq!(message_card, "MessageCard");
+                let summary = body["summary"].as_str().expect("teams summary");
+                assert_eq!(summary, "Boma Bot");
+                let body_text = body["text"].as_str().expect("teams text");
+                assert_eq!(body_text, "A bot needs your answer");
+                assert!(!body_text.contains("tool"), "no tool name in a push");
+                assert!(
+                    !body_text.contains("message"),
+                    "no conversation text in a push"
+                );
+                let title = body["title"].as_str().expect("teams title");
+                assert_eq!(title, "Boma Bot");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn req_065_destination_flags_are_independent_per_kind() {
+        let test = destination_fixture().await;
+        test.test
+            .app()
+            .stores
+            .notifications
+            .set_policy(
+                &test.context,
+                boma_domain::notification::SetNotificationPolicy {
+                    bot_id: test.bot_id.clone(),
+                    notify_waiting: None,
+                    notify_completed: None,
+                    daily_cap: None,
+                    destination_slack_webhook: Some(true),
+                    destination_teams_webhook: Some(false),
+                },
+            )
+            .await
+            .expect("the flags are set");
+
+        boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+
+        let calls = test.transport.post_json_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].0,
+            "https://hooks.slack.com/services/test-slack-123"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_065_destination_flag_off_means_never_send() {
+        let test = destination_fixture().await;
+        boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+        assert_eq!(test.transport.post_json_calls().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn req_065_destinations_consume_the_shared_daily_cap() {
+        let test = destination_fixture().await;
+        test.test
+            .app()
+            .stores
+            .notifications
+            .set_policy(
+                &test.context,
+                boma_domain::notification::SetNotificationPolicy {
+                    bot_id: test.bot_id.clone(),
+                    notify_waiting: None,
+                    notify_completed: None,
+                    daily_cap: Some(2),
+                    destination_slack_webhook: Some(true),
+                    destination_teams_webhook: Some(true),
+                },
+            )
+            .await
+            .expect("the cap and flags are set");
+
+        // One trigger fills the whole cap: two destinations × 1 slot each.
+        boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+        let first = test.transport.post_json_calls().len();
+        assert_eq!(
+            first, 2,
+            "one trigger fills the cap across two destinations"
+        );
+
+        // A second trigger is dropped silently: the shared cap is full.
+        boma_app::push::notify_run_waiting(test.test.app(), target(&test)).await;
+        assert_eq!(
+            test.transport.post_json_calls().len(),
+            2,
+            "a second trigger is suppressed by the same cap that the first one consumed",
+        );
+    }
+
+    #[tokio::test]
+    async fn req_065_a_wedged_destination_never_fails_delivery() {
+        let transport = std::sync::Arc::new(
+            crate::ScriptedMessagingTransport::new().with_post_json_statuses(vec![500, 500]),
+        );
+        let test = TestApp::builder()
+            .vapid(vapid_test_config())
+            .messaging_transport(transport.clone())
+            .build();
+        let owner = test
+            .seed_user("owner@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space_id = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (bot, _) = test
+            .seed_bot(&space_id, &owner, "analyst")
+            .await
+            .expect("the bot exists");
+        let context = TestApp::member_context(&space_id, &owner);
+        test.app()
+            .stores
+            .destinations
+            .create(
+                &context,
+                boma_domain::notification::NewNotificationDestination {
+                    id: "dest-wedge".to_owned(),
+                    space_id: space_id.clone(),
+                    kind: boma_domain::notification::NotificationDestinationKind::SlackWebhook,
+                    label: "#crew".to_owned(),
+                    webhook: "https://hooks.slack.com/services/test-wedge-123".to_owned(),
+                    created_by: owner.clone(),
+                    created_at: "2026-11-15T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the destination is created");
+        test.app()
+            .stores
+            .notifications
+            .set_policy(
+                &context,
+                boma_domain::notification::SetNotificationPolicy {
+                    bot_id: bot.clone(),
+                    notify_waiting: None,
+                    notify_completed: None,
+                    daily_cap: None,
+                    destination_slack_webhook: Some(true),
+                    destination_teams_webhook: None,
+                },
+            )
+            .await
+            .expect("the flags are set");
+
+        boma_app::push::notify_run_waiting(
+            test.app(),
+            boma_app::push::PushTarget {
+                space_id,
+                user_id: owner,
+                bot_id: bot,
+                run_id: boma_domain::RunId::new("run_065_wedged".to_owned()).expect("the id"),
+            },
+        )
+        .await;
+        assert_eq!(transport.post_json_calls().len(), 1);
     }
 
     #[tokio::test]

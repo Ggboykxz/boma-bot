@@ -1081,6 +1081,18 @@ impl ScriptedMessagingTransport {
         self
     }
 
+    /// Queues the JSON POST statuses to answer, popped on each call.
+    #[must_use]
+    pub fn with_post_json_statuses(mut self, statuses: Vec<u16>) -> Self {
+        for status in statuses.into_iter().rev() {
+            self.post_json_statuses
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(status);
+        }
+        self
+    }
+
     /// Queues the POST-form answers (the OAuth handshake).
     #[must_use]
     pub fn with_post_responses(mut self, responses: Vec<serde_json::Value>) -> Self {

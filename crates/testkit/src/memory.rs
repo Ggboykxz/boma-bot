@@ -8999,6 +8999,12 @@ impl boma_app::ports::NotificationStore for MemoryNotificationStore {
         if let Some(value) = patch.daily_cap {
             policy.daily_cap = value;
         }
+        if let Some(value) = patch.destination_slack_webhook {
+            policy.destination_slack_webhook = value;
+        }
+        if let Some(value) = patch.destination_teams_webhook {
+            policy.destination_teams_webhook = value;
+        }
         "2026-01-01T00:00:00Z".clone_into(&mut policy.updated_at);
         policies.insert(key, policy.clone());
         Ok(policy)

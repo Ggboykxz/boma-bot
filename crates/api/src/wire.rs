@@ -2142,6 +2142,7 @@ pub struct NotificationsUnsubscribeReply {
 /// The per-bot policy view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)] // four independent wiring switches, each engaged separately
 pub struct NotificationsPolicyView {
     /// The bot this policy governs.
     pub bot_id: String,
@@ -2151,6 +2152,10 @@ pub struct NotificationsPolicyView {
     pub notify_completed: bool,
     /// The UTC-day cap across this member and this bot.
     pub daily_cap: u32,
+    /// Whether this member's pushes also fire into Slack destinations for this bot.
+    pub destination_slack_webhook: bool,
+    /// Whether this member's pushes also fire into Teams destinations for this bot.
+    pub destination_teams_webhook: bool,
 }
 
 /// The request of `notifications.policyGet`.
@@ -2176,4 +2181,10 @@ pub struct NotificationsPolicySetRequest {
     /// Override the daily cap.
     #[serde(default)]
     pub daily_cap: Option<u32>,
+    /// Override the Slack destinations flag.
+    #[serde(default)]
+    pub destination_slack_webhook: Option<bool>,
+    /// Override the Teams destinations flag.
+    #[serde(default)]
+    pub destination_teams_webhook: Option<bool>,
 }

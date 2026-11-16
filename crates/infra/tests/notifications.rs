@@ -103,6 +103,8 @@ async fn req_064_policy_round_trip_and_the_missing_row_defaults() {
                 notify_waiting: Some(false),
                 notify_completed: Some(true),
                 daily_cap: Some(3),
+                destination_slack_webhook: None,
+                destination_teams_webhook: None,
             },
         )
         .await
@@ -120,6 +122,8 @@ async fn req_064_policy_round_trip_and_the_missing_row_defaults() {
                 notify_waiting: None,
                 notify_completed: None,
                 daily_cap: None,
+                destination_slack_webhook: None,
+                destination_teams_webhook: None,
             },
         )
         .await
