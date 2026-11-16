@@ -48,6 +48,11 @@ export function SignInScreen() {
         if (controller.signal.aborted) {
           return;
         }
+        if (body.localFirst === true) {
+          // REQ-066: the loopback local bring-up mode needs no sign-in round trip.
+          router.replace("/app/");
+          return;
+        }
         setCapabilities(body);
         setPhase("ready");
       })
@@ -57,7 +62,7 @@ export function SignInScreen() {
         }
       });
     return () => controller.abort();
-  }, [reloadToken]);
+  }, [reloadToken, router]);
 
   const load = useCallback(() => {
     setPhase("loading");
@@ -110,7 +115,7 @@ export function SignInScreen() {
   const busy = status === "submitting";
   return (
     <AuthShell title={t("signin.title")} subtitle={t("signin.subtitle")}>
-      {capabilities.password ? (
+      {capabilities.passwordAuth ? (
         <form onSubmit={submit} className="flex flex-col gap-3" aria-busy={busy}>
           <label className="flex flex-col gap-1">
             <span className="text-text-secondary text-body-2-medium">{t("signin.email")}</span>
@@ -150,26 +155,26 @@ export function SignInScreen() {
       )}
 
       <div className="border-separator-border flex flex-col gap-2 border-t pt-4 text-body-2-medium">
-        {capabilities.passkey ? (
+        {capabilities.passkeyRpId !== null || capabilities.nativePasskeys ? (
           <p className="text-text-tertiary">{t("signin.passkey-unavailable")}</p>
         ) : null}
-        {capabilities.sso.map((provider) => (
+        {capabilities.sso !== null ? (
           <a
-            key={provider}
+            key={capabilities.sso.name}
             className="boma-target boma-focus text-text-primary hover:text-text-secondary inline-flex items-center gap-2 rounded-md"
-            href={`/api/auth/${provider}`}
+            href={`/api/auth/${capabilities.sso.name}`}
           >
-            {t("signin.sso")} {provider}
+            {t("signin.sso")} {capabilities.sso.name}
           </a>
-        ))}
-        <Link className="boma-target boma-focus text-text-secondary hover:text-text-primary" href="/forgot-password">
-          {t("signin.forgot")}
-        </Link>
-        {capabilities.signup === "open" ? (
-          <Link className="boma-target boma-focus text-text-secondary hover:text-text-primary" href={`/sign-up?next=${encodeURIComponent(next)}`}>
-            {t("signin.create-account")}
+        ) : null}
+        {capabilities.passwordReset ? (
+          <Link className="boma-target boma-focus text-text-secondary hover:text-text-primary" href="/forgot-password">
+            {t("signin.forgot")}
           </Link>
         ) : null}
+        <Link className="boma-target boma-focus text-text-secondary hover:text-text-primary" href={`/sign-up?next=${encodeURIComponent(next)}`}>
+          {t("signin.create-account")}
+        </Link>
       </div>
     </AuthShell>
   );

@@ -45,6 +45,11 @@ export function SignUpScreen() {
         if (controller.signal.aborted) {
           return;
         }
+        if (body.localFirst === true) {
+          // REQ-066: the loopback local bring-up mode needs no sign-up round trip.
+          router.replace("/app/");
+          return;
+        }
         setCapabilities(body);
         setPhase("ready");
       })
@@ -54,7 +59,7 @@ export function SignUpScreen() {
         }
       });
     return () => controller.abort();
-  }, [reloadToken]);
+  }, [reloadToken, router]);
 
   const load = useCallback(() => {
     setPhase("loading");
@@ -100,17 +105,6 @@ export function SignUpScreen() {
             <Button variant="secondary" onClick={load}>{t("common.retry")}</Button>
           </div>
         </div>
-      </AuthShell>
-    );
-  }
-
-  if (capabilities.signup !== "open") {
-    return (
-      <AuthShell title={t("signup.title")}>
-        <p className="text-text-primary text-body-regular">{t("signup.closed")}</p>
-        <Link className="boma-target boma-focus text-text-secondary hover:text-text-primary" href="/sign-in">
-          {t("signin.submit")}
-        </Link>
       </AuthShell>
     );
   }

@@ -14,7 +14,8 @@
       "emailCode": false,
       "billing": false,
       "passkeyRpId": "127.0.0.1",
-      "nativePasskeys": false
+      "nativePasskeys": false,
+      "localFirst": false
     }
   },
   "notes": "Drives which sign-in controls the client renders. Absent methods are omitted, not disabled: `sso: null` means the button does not exist (REQ-040)."

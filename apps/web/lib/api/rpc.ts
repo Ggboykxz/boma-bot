@@ -742,15 +742,26 @@ export function adminPluginsDecide(
 // M10 — auth flows (spec §8.2)
 // ---------------------------------------------------------------------------
 
-/** The reply of `GET /api/auth/capabilities`. */
+/** The reply of `GET /api/auth/capabilities`. Matches the wire exactly (spec/openapi.yaml). */
 export interface AuthCapabilities {
-  version: string;
-  runtime: string;
-  signup: "open" | "closed";
-  password: boolean;
+  /** The configured SSO provider, when one is configured. */
+  sso: { name: string; availability: string } | null;
+  /** Whether a person may sign in with a password. */
+  passwordAuth: boolean;
+  /** Whether a person may reset a forgotten password. */
+  passwordReset: boolean;
+  /** Where the reset screen lives. */
+  resetUrl: string | null;
+  /** Whether a person may sign in with a code sent by e-mail. */
   emailCode: boolean;
-  passkey: boolean;
-  sso: string[];
+  /** Whether billing is offered. */
+  billing: boolean;
+  /** The relying-party id passkeys are bound to. */
+  passkeyRpId: string | null;
+  /** Whether the native client may use passkeys. */
+  nativePasskeys: boolean;
+  /** Whether the deployment runs in the loopback local bring-up mode (REQ-066). */
+  localFirst?: boolean;
 }
 
 /** `GET /api/auth/capabilities`. */

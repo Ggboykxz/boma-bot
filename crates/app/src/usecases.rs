@@ -29,7 +29,10 @@ use hmac::KeyInit as _;
 use crate::{
     accounts::Accounts,
     error::AppError,
-    ports::{AnswerCardOutcome, NewBot, NewEffect, NewMessage, NewRun, NewThread, ReactionAction},
+    ports::{
+        AnswerCardOutcome, NewAccount, NewBot, NewEffect, NewMessage, NewOrganization, NewRun,
+        NewSpace, NewThread, NewUser, ReactionAction,
+    },
     service::{Actor, App, SendOutcome},
 };
 
@@ -132,6 +135,80 @@ pub async fn resolve_actor(
             user_id: user.id.clone(),
         },
     })
+}
+
+/// The address of the implicit local-owner account (REQ-066).
+///
+/// The address is deliberately unroutable: the account cannot sign in over any transport, only
+/// the loopback local-first mode ever resolves it, and there it never needs a password at all.
+pub const LOCAL_OWNER_EMAIL: &str = "local-owner@local.invalid";
+
+/// Ensures the implicit local-owner account exists (REQ-066).
+///
+/// The local bring-up mode authenticates no one, so something must own what the local operator
+/// creates. One account answers for the whole machine: an empty installation grows it on first
+/// use, and a later restart finds the same rows. The throwaway password is generated and never
+/// stored anywhere but its hash — the account cannot and must not sign in.
+///
+/// Idempotent under concurrent first requests: the creation conflicts on the address and the
+/// losing call re-reads the winner's rows.
+///
+/// # Errors
+///
+/// Returns [`AppError::Unavailable`] when the store cannot answer, and an error when the
+/// account cannot be created.
+pub async fn ensure_local_owner(app: &App) -> Result<User, AppError> {
+    let email = Email::new(LOCAL_OWNER_EMAIL.to_owned())?;
+    if let Some((user, _)) = app.stores.users.find_by_email(&email).await? {
+        return Ok(user);
+    }
+
+    let user_id = boma_domain::UserId::new(app.services.ids.new_id("usr"))?;
+    let organization_id = boma_domain::OrganizationId::new(app.services.ids.new_id("org"))?;
+    let space_id = boma_domain::SpaceId::new(app.services.ids.new_id("spc"))?;
+    let now = app.services.clock.now();
+    let password_hash = app
+        .services
+        .hasher
+        .hash(&app.services.tokens.generate()?)
+        .await?;
+    let created = app
+        .stores
+        .accounts
+        .create_account(NewAccount {
+            user: NewUser {
+                id: user_id.clone(),
+                email: email.clone(),
+                password_hash,
+                name: "Local owner".to_owned(),
+                locale: "en-US".to_owned(),
+                created_at: now.clone(),
+            },
+            organization: NewOrganization {
+                id: organization_id.clone(),
+                name: "Local organization".to_owned(),
+                created_at: now.clone(),
+            },
+            space: NewSpace {
+                id: space_id,
+                organization_id,
+                name: "Local space".to_owned(),
+                is_default: true,
+                created_at: now,
+            },
+        })
+        .await;
+
+    match created {
+        Ok(account) => Ok(account.user),
+        Err(AppError::Conflict) => {
+            let Some((user, _)) = app.stores.users.find_by_email(&email).await? else {
+                return Err(AppError::Unavailable);
+            };
+            Ok(user)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// A space, plus the role the caller has in it.

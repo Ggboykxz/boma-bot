@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import { t } from "../lib/i18n";
+import { CAPABILITIES } from "./capabilities";
 
 /**
  * The artifact screens (spec/08-ui-ux.md §8.5, REQ-036).
@@ -76,17 +77,7 @@ async function seedGrid(page: import("@playwright/test").Page) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({
-        version: "0.1.0",
-        runtime: "sandboxed",
-        signup: "open",
-        password: true,
-        emailCode: false,
-        passkey: false,
-        sso: [],
-        provider: null,
-        revision: null,
-      }),
+body: JSON.stringify(CAPABILITIES),
     });
   });
 }

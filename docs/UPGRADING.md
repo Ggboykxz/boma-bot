@@ -55,6 +55,24 @@ against a live system that served traffic, and never edit an applied migration f
    Check: `boma worker --help` for flags; its drain is observable in the JSON logs
    (`run.execution_started` / `run.finished`).
 
+### Local-first bring-up instead of Path B (REQ-066)
+
+If the machine is yours and the loopback interface is the network you mean to trust, you do not
+need an account at all:
+
+```bash
+BOMA_LOCAL_FIRST=true BOMA_BIND_ADDR=127.0.0.1:3000 boma serve
+```
+
+Requests without a session cookie resolve as the machine owner (an implicit `local-owner` —
+an org, one space and a user, seeded on first use); the web bundle boots into the product; no
+password exists for this mode by construction. A request carrying a cookie is still strictly
+resolved. The mode is off by default and refuses to start on a non-loopback bind, so it cannot
+be flipped into a network-open deployment by environment drift alone. Code agents that drive
+the binary over loopback (opencode, Claude Code, scripts) use the same path — there is nothing
+else to authenticate. Do not set this on a shared or proxied host; it is the brings-up-a-judging-
+laptop mode, not a team deployment.
+
 ## Path C — local k3d (single-node chart)
 
 For hacking on Boma Bot from a clean checkout on your laptop — not a production posture

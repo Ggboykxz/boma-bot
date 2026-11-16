@@ -84,7 +84,13 @@ impl AppState {
         &self,
         headers: &axum::http::HeaderMap,
     ) -> Result<AuthContext, ApiError> {
-        crate::auth::authenticate(&self.app, headers, self.http.session_ttl_seconds()).await
+        crate::auth::authenticate(
+            &self.app,
+            headers,
+            self.http.session_ttl_seconds(),
+            self.http.local_first(),
+        )
+        .await
     }
 }
 

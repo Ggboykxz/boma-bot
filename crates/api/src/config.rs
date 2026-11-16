@@ -46,6 +46,14 @@ pub enum HttpConfigError {
         /// Why it was refused.
         reason: String,
     },
+    /// `BOMA_LOCAL_FIRST` was requested on a bind that is not loopback.
+    #[error(
+        "`BOMA_LOCAL_FIRST` requires a loopback bind (127.0.0.1 or ::1), got {bind}; the local-first mode is the machine owner's bring-up, never a network-open deployment"
+    )]
+    LocalFirstNonLoopback {
+        /// The bind address the operator supplied.
+        bind: SocketAddr,
+    },
 }
 
 /// How the HTTP server behaves.
@@ -64,6 +72,9 @@ pub struct HttpConfig {
     /// The directory that carries the static web export, when this surface serves it
     /// (REQ-055, ADR-013). `None` means the surface answers only the API.
     web_root: Option<String>,
+    /// REQ-066: the local bring-up mode. The operator of a loopback-only machine is the
+    /// implicit local owner; no session is required. Never valid on a non-loopback bind.
+    local_first: bool,
 }
 
 impl HttpConfig {
@@ -124,6 +135,7 @@ impl HttpConfig {
             session_ttl_seconds: Self::DEFAULT_SESSION_TTL_SECONDS,
             secure_cookies: true,
             web_root: None,
+            local_first: false,
         })
     }
 
@@ -192,6 +204,30 @@ impl HttpConfig {
         self
     }
 
+    /// Enables the local bring-up mode (REQ-066).
+    ///
+    /// The machine owner becomes the implicit local owner: a request that carries no session
+    /// cookie resolves as that principal, and the sign-in round trip disappears. The mode is
+    /// only meaningful on a loopback bind, where the network boundary is the machine itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpConfigError::LocalFirstNonLoopback`] when `local_first` is set and the
+    /// configured bind is not loopback — the mode is refused, never silently weakened.
+    pub fn with_local_first(mut self, local_first: bool) -> Result<Self, HttpConfigError> {
+        if local_first && !self.bind.ip().is_loopback() {
+            return Err(HttpConfigError::LocalFirstNonLoopback { bind: self.bind });
+        }
+        self.local_first = local_first;
+        Ok(self)
+    }
+
+    /// Whether the local bring-up mode (REQ-066) is on.
+    #[must_use]
+    pub const fn local_first(&self) -> bool {
+        self.local_first
+    }
+
     /// How long a session lives, in seconds.
     #[must_use]
     pub const fn session_ttl_seconds(&self) -> i64 {
@@ -240,12 +276,13 @@ impl fmt::Display for HttpConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "bind={} request_timeout={:?} readiness_timeout={:?} body_limit={}B trusted_proxies={}",
+            "bind={} request_timeout={:?} readiness_timeout={:?} body_limit={}B trusted_proxies={} local_first={}",
             self.bind,
             self.request_timeout,
             self.readiness_timeout,
             self.body_limit_bytes,
-            self.trusted_proxies.len()
+            self.trusted_proxies.len(),
+            self.local_first
         )
     }
 }
@@ -367,5 +404,55 @@ mod tests {
         )
         .expect("the fixture is valid");
         assert_eq!(config.trusted_proxies().len(), 1);
+    }
+
+    #[test]
+    fn req_066_local_first_defaults_to_off_and_loopback_accepts_it() {
+        let config = HttpConfig::new(
+            loopback(),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            8192,
+            Vec::new(),
+        )
+        .expect("the fixture is valid");
+        assert!(!config.local_first());
+        let enabled = config
+            .with_local_first(true)
+            .expect("loopback bind is accepted");
+        assert!(enabled.local_first());
+        let v6 = HttpConfig::new(
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 3000)),
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            8192,
+            Vec::new(),
+        )
+        .expect("the fixture is valid")
+        .with_local_first(true)
+        .expect("the ::1 bind is loopback too");
+        assert!(v6.local_first());
+        let disabled = enabled
+            .with_local_first(false)
+            .expect("turning the mode off is accepted");
+        assert!(!disabled.local_first());
+    }
+
+    #[test]
+    fn req_066_local_first_on_a_non_loopback_bind_is_a_boot_error() {
+        let public = SocketAddr::from((Ipv4Addr::new(10, 0, 0, 7), 3000));
+        let outcome = HttpConfig::new(
+            public,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+            8192,
+            Vec::new(),
+        )
+        .expect("the fixture itself is valid")
+        .with_local_first(true);
+        assert_eq!(
+            outcome,
+            Err(HttpConfigError::LocalFirstNonLoopback { bind: public })
+        );
     }
 }

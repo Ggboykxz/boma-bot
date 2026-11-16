@@ -103,6 +103,7 @@ paths:
                   billing: { type: boolean }
                   passkeyRpId: { type: [string, "null"] }
                   nativePasskeys: { type: boolean }
+                  localFirst: { type: boolean }
   /api/auth/{path}:
     parameters:
       - name: path

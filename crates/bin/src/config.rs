@@ -285,6 +285,7 @@ impl Config {
         )?)?
         .with_secure_cookies(optional_parsed(&env, "BOMA_SECURE_COOKIES", true)?)
         .with_web_root(optional(&env, "BOMA_WEB_ROOT"))
+        .with_local_first(optional_parsed(&env, "BOMA_LOCAL_FIRST", false)?)?
         .validate_web_root()?;
 
         let format = match optional(&env, "BOMA_LOG_FORMAT").as_deref() {
@@ -320,10 +321,7 @@ impl Config {
 
         let web_origin =
             optional(&env, "BOMA_WEB_ORIGIN").unwrap_or_else(|| "http://127.0.0.1:5173".to_owned());
-        let auth_capabilities = AuthCapabilities::password_only(
-            Some(format!("{web_origin}/reset-password")),
-            passkey_rp_id(&web_origin),
-        );
+        let auth_capabilities = auth_capabilities(&http, &web_origin);
 
         let provider = parse_provider(&env)?;
         Ok(Self {
@@ -364,6 +362,19 @@ impl fmt::Display for Config {
             self.capabilities.version
         )
     }
+}
+
+/// The sign-in methods the deployment offers, from the same configuration the HTTP surface uses.
+///
+/// `localFirst` (REQ-066) is carried over so the client boots into the product instead of the
+/// sign-in screen.
+fn auth_capabilities(http: &HttpConfig, web_origin: &str) -> AuthCapabilities {
+    let mut capabilities = AuthCapabilities::password_only(
+        Some(format!("{web_origin}/reset-password")),
+        passkey_rp_id(web_origin),
+    );
+    capabilities.local_first = http.local_first();
+    capabilities
 }
 
 /// The relying-party id passkeys are bound to: the host of the web origin.

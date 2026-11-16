@@ -5,6 +5,37 @@
 **M11 — complete: v0.1.0 released (2026-11-15).** M10 closed with it. This section also carries the M9 slice log. `docs/PLAN.md` marks M10/M11 done.
 Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKit/OpenBot` @ `f1905cd` — full 21-area capability matrix; you confirmed nothing is neglected): M12 external agents → M13 sign-in requests & Recorder → M14 dictation (voice/call gated on your un-defer) → M15 push + release maturity → M16 scoped auto-approvals → M17 standing instructions → M18 automatic learning (limited; will add REQ-061 on your bless) → M19 enterprise packaging → M20 browser extension → M21 skins (optional) → M22 bot-drawn component drafts (optional, your call). Mobile stays deferred per your call.
 
+- **M15.4 — local-first bring-up + release verification (2026-11-16, REQ-066, uncommitted worktree; ADR-029).**
+  - `BOMA_LOCAL_FIRST=true` (default off): loopback-only at boot (`HttpConfig::with_local_first` refuses
+    any non-loopback bind, exit 1, message names `BOMA_LOCAL_FIRST`); a request without a cookie resolves
+    as the implicit `local-owner` (org/space/user seeded on first use, idempotent across restarts); a
+    request with a cookie resolves strictly (bad cookie = 401); `GET /api/auth/capabilities` reports
+    `localFirst: true`; the web bundle (landing probe + sign-in/sign-up screens) redirects into `/app/`
+    without a round trip. Electron needs no change (already on loopback). Code agents over loopback
+    (opencode, Claude Code) use the same path — no credential to install.
+  - Verified live end to end: fresh DB → first `bots.create` seeds the owner atomically (one user/org/
+    space row each); restart → same rows, the bot persisted; bogus cookie → 401; non-loopback bind →
+    boot refused with a legible error; `/api/auth/capabilities` shows `"localFirst": true`.
+  - The web client had been written against the OpenBot-style report
+    (`version/runtime/signup/password/passkey/sso[]`) while the binary serves the spec's shape
+    (`passwordAuth/passwordReset/resetUrl/emailCode/billing/passkeyRpId/nativePasskeys`): the sign-in
+    screen would have rendered no form (and `sso.map` on `null` crashes). Fixed: web type now matches the
+    spec exactly, both screens read the real fields, Playwright fixtures replay the real document
+    (shared `tests/capabilities.ts`; the stale `signup: "closed"` test was replaced by a REQ-066
+    redirect test). Spec edits: REQ-066 (`spec/01-requirements.md`), `spec/openapi.yaml` (`localFirst`),
+    golden `auth-capabilities.json` (`localFirst: false`) — all recorded in `spec/EXPORT.md`.
+    `spec/03-api-contract.md` needed nothing (the path list is unchanged).
+  - Gates run this session: `cargo fmt`; `clippy --workspace --all-targets -D warnings` clean;
+    `cargo test --workspace --locked` — 575 tests ok; the only failures are the 12 Docker-dependent
+    computer/chromium tests (no Docker in this sandbox — CI runs them); Playwright auth/home/a11y/golden
+    clusters all pass (51 tests); web typecheck/lint/build clean; golden replay byte-identical;
+    `trace --max-missing 9` now reports 3 missing (049/056/061).
+  - Release notes for the next tag print the Sigstore verify commands; `docs/UPGRADING.md` documents
+    keyless attestation verification (owner-approved alternative to a missing Apple/MS identity;
+    proven against the v0.1.0 pack) and a "Local-first bring-up" section for the same laptop class of
+    user. Commit `67eb706` documents both. NOTE: `docs/UPGRADING.md` in this slice says "CI green on
+    every push (rust, web, chart jobs)" — corrected from an inaccurate job count.
+
 - slice 1 — REQ-054 (structured logs + metrics + CSP reports, `909dd52`, CI run 43663121560
   green): JSON logs with `traceparent`/`x-request-id`, route templates never raw paths, W3C
   parse (strict, malformed = absent), `/metrics` flagged by `BOMA_METRICS` (uniform 404

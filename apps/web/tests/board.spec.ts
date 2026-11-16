@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import { t } from "../lib/i18n";
+import { CAPABILITIES } from "./capabilities";
 
 /**
  * `/app/board` (spec/08-ui-ux.md §8.6, REQ-038).
@@ -55,17 +56,7 @@ test("REQ-038 the board renders tickets in their columns when the flag is on", a
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({
-        version: "0.1.0",
-        runtime: "sandboxed",
-        signup: "open",
-        password: true,
-        emailCode: false,
-        passkey: false,
-        sso: [],
-        provider: null,
-        revision: null,
-      }),
+body: JSON.stringify(CAPABILITIES),
     });
   });
 
@@ -90,17 +81,7 @@ test("REQ-038 the board renders the not-found shape when the flag is off", async
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({
-        version: "0.1.0",
-        runtime: "sandboxed",
-        signup: "open",
-        password: true,
-        emailCode: false,
-        passkey: false,
-        sso: [],
-        provider: null,
-        revision: null,
-      }),
+body: JSON.stringify(CAPABILITIES),
     });
   });
 

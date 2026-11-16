@@ -10,7 +10,7 @@
 | file | sha256 | bytes |
 |---|---|---|
 | 00-overview.md | aea4ebfbe8fd273cc22d8567b5808f2222a394ea3663ab96f2de476d8deb7824 | 3084 |
-| 01-requirements.md | 40d2d975e56c405f8065c3c153688e0fd2b7666c2e30f301e15d86a0da1d69dd | 32570 |
+| 01-requirements.md | 867e92c75450f0d6a331640985eb375b687f9fd5a8efc3bf610c9296175699b2 | 33705 |
 | 02-data-model.md | 98493a0b02c770bbcf84266cee603b63f574c2c63752e8787e6a182dad3d7f6f | 11359 |
 | 03-api-contract.md | a90579c93a402fd95b333f6bf563c7a52f151bb5463e5dd8edd1c864387084e7 | 7848 |
 | 04-nonfunctional.md | 92e1854118452ec50a5c5e6fcdb2933b261d3a954e2b0b3b41154306d853a42f | 8925 |
@@ -21,7 +21,7 @@
 | TRACE.md | c12ae9922a77b0406d52bbf3ad0bdc834f59432b65c453cc0bb1715a84718a4d | 11302 |
 | golden/artifact-create.json | 9455a748170b49662d5417fa283d872f750c639f86111d14d29ea81c9b59e1e9 | 783 |
 | golden/artifact-versions.json | 8cc78ffb731caeb5d81120ff89ce705bfc17c088400101dc6c674e716742d6cf | 833 |
-| golden/auth-capabilities.json | b08c24d9188ff635d439a9a8b96f9cb8b300be55abc147ae6bc800c6f12ea144 | 569 |
+| golden/auth-capabilities.json | e21d7645637ae94b9b139ea9e434eb2d81588c1e331ffd8b0f0e0f4337fe20d6 | 596 |
 | golden/bot-create.json | 229d2aaa6087b8bb272884005f83ee384ebb334035f513efaed1c1deb4a68bb1 | 671 |
 | golden/bot-webhook-denied.json | 3ad0b3ef5c179b7dc32d1d347b5f555443ab7d68143fc5395c286fb76b2f7a60 | 487 |
 | golden/computer-status.json | 5d039648feb1718b49097fcf6ebcd1a78d0318f50b297c8373d85ff11ed13abc | 634 |
@@ -56,7 +56,7 @@
 | golden/ui/REQ-037-shared-page-invalid.json | 76da4e679f64bff3e38caaac0a2a8d361c1e5a64145d3b954849d99160fd1250 | 734 |
 | golden/ui/REQ-037-shared-page.json | 29d97b6c38c4b53d1acd718b730b54fc4882899e0495464e54ce3205fb2896cd | 568 |
 | golden/unauthorized.json | f5186d278cf414fc225250badf78a5fae81cb8dc3e49c98220f6033b435b3af0 | 486 |
-| openapi.yaml | 07a3d7c395518b347e0a2397eadb6b5d063dcbaff0a4bee7b34f1ac3c86002f4 | 15925 |
+| openapi.yaml | d3a48ca13c485e2a5cc234d9f5e7f151199919b7818e3d79e0352628d38ccfd6 | 15973 |
 
 Verify later with: `sha256sum -c` against this table.
 
@@ -71,3 +71,6 @@ Verify later with: `sha256sum -c` against this table.
 | 2026-11-15T21:10:00Z | 01-requirements.md | 15c313efd5eb6084f68c3c06265ad531b80dfa345341b9a8d2eac41f80cf8f4c | 362c4406a91ba2625eb4ff927b3058907f3bceae096027fbf2bc527e3b16cb8e | 30947 | 61 | Improvement program (`docs/IMPROVEMENTS.md`, owner-approved): adds REQ-059 (external agents), REQ-060 (sign-in requests and Recorder), REQ-061 (local CLI agents). The frozen Rakazo floor (REQ-001..058) is unchanged. |
 | 2026-11-15T22:00:00Z | 01-requirements.md | 362c4406a91ba2625eb4ff927b3058907f3bceae096027fbf2bc527e3b16cb8e | 74f66fef7618143b98749414e6098c638bdfcadb7878263bb3a33d7596fbfcd4 | 31825 | 62 | Improvement program (`docs/IMPROVEMENTS.md`, owner-approved): adds REQ-064 (Web Push notifications). The frozen Rakazo floor (REQ-001..058) is unchanged. |
 | 2026-11-16T00:15:00Z | 01-requirements.md | 74f66fef7618143b98749414e6098c638bdfcadb7878263bb3a33d7596fbfcd4 | 40d2d975e56c405f8065c3c153688e0fd2b7666c2e30f301e15d86a0da1d69dd | 32570 | 63 | Improvement program (`docs/IMPROVEMENTS.md`, owner-approved): adds REQ-065 (notification destinations). The frozen Rakazo floor (REQ-001..058) is unchanged. |
+| 2026-11-16T12:00:00Z | 01-requirements.md | 40d2d975e56c405f8065c3c153688e0fd2b7666c2e30f301e15d86a0da1d69dd | 867e92c75450f0d6a331640985eb375b687f9fd5a8efc3bf610c9296175699b2 | 33705 | 64 | Improvement program (improvement-2026-11-16): adds REQ-066 (local-first bring-up). The frozen Rakazo floor (REQ-001..058) is unchanged. |
+| 2026-11-16T12:30:00Z | openapi.yaml | 07a3d7c395518b347e0a2397eadb6b5d063dcbaff0a4bee7b34f1ac3c86002f4 | d3a48ca13c485e2a5cc234d9f5e7f151199919b7818e3d79e0352628d38ccfd6 | 15973 | 64 | Improvement program (improvement-2026-11-16): the auth capabilities report gains localFirst (REQ-066). Additive; the standing properties are unchanged. |
+| 2026-11-16T13:00:00Z | golden/auth-capabilities.json | b08c24d9188ff635d439a9a8b96f9cb8b300be55abc147ae6bc800c6f12ea144 | e21d7645637ae94b9b139ea9e434eb2d81588c1e331ffd8b0f0e0f4337fe20d6 | 596 | 64 | Improvement program (improvement-2026-11-16): the fixture gains localFirst: false to match the REQ-066 report the binary serves. Additive; replayed byte-for-byte by the conformance suite. |

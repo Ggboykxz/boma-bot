@@ -54,6 +54,11 @@ pub fn cleared_session_cookie_header(secure: bool) -> String {
 
 /// Resolves the caller of a request.
 ///
+/// In the local bring-up mode (REQ-066) a request that carries no session cookie resolves as
+/// the machine's implicit local owner; a request whose cookie does not resolve is still
+/// unauthorized. Nothing else changes: the mode exists only behind a loopback bind, which the
+/// configuration refuses to weaken.
+///
 /// # Errors
 ///
 /// Returns [`ApiError::Unauthorized`] when there is no session, and [`ApiError::NotFound`] when
@@ -62,15 +67,22 @@ pub async fn authenticate(
     app: &boma_app::App,
     headers: &HeaderMap,
     session_ttl_seconds: i64,
+    local_first: bool,
 ) -> Result<AuthContext, ApiError> {
-    let Some(token) = session_cookie(headers) else {
-        return Err(ApiError::unauthorized());
-    };
-    let Some((user, _expires_at)) = usecases::resolve_session(app, token).await? else {
-        return Err(ApiError::unauthorized());
-    };
     let requested = requested_space(headers);
-    let actor = usecases::resolve_actor(app, &user, requested.as_deref()).await?;
+    let actor = match session_cookie(headers) {
+        Some(token) => {
+            let Some((user, _expires_at)) = usecases::resolve_session(app, token).await? else {
+                return Err(ApiError::unauthorized());
+            };
+            usecases::resolve_actor(app, &user, requested.as_deref()).await?
+        }
+        None if local_first => {
+            let user = usecases::ensure_local_owner(app).await?;
+            usecases::resolve_actor(app, &user, requested.as_deref()).await?
+        }
+        None => return Err(ApiError::unauthorized()),
+    };
     let _ = session_ttl_seconds;
     Ok(AuthContext { actor })
 }

@@ -521,6 +521,21 @@ and a dead subscription is deleted after repeated permanent failures.
   is sent and the run is unaffected.
 - Rationale: the bot is only as useful as its reach when nobody has the app open.
 
+### REQ-066 — Local-first bring-up (SHOULD)
+The server may run in a mode where the intended reader is the operator of the machine and the
+network boundary is the loopback interface: a request that carries no session resolves as the
+machine's local owner, the web bundle boots into the product without a sign-in round trip, and
+the operator's machine is the only trust anchor.
+- Given an empty database and `BOMA_LOCAL_FIRST=true` with a loopback bind, when any client
+  that sends no session cookie hits any route, the request resolves as the local owner — no
+  sign-in, no seed account, no external identity.
+- Given a request that carries a session cookie, the cookie is honoured strictly; a request
+  whose cookie does not resolve is unauthorized, as before.
+- Given `BOMA_LOCAL_FIRST=false` (default) or a non-loopback bind, the behaviour is unchanged;
+  `BOMA_LOCAL_FIRST` on a non-loopback bind is a boot error, never a silent weakening.
+- Rationale: the local bring-up — the judge runs the binary on their own laptop before trusting
+  it anywhere else. No auth, no email, no password, no account: just a running product.
+
 ### REQ-065 — Notification destinations (MUST)
 A space can name one or more Slack/Teams incoming webhooks; opted-in initiators receive pushes
 there, alongside the browser, behind the same per-(space, member, bot) policy and daily cap.

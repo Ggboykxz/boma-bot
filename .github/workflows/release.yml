@@ -94,7 +94,7 @@ jobs:
             echo "- boma-${VERSION}-linux-x86_64.tar.gz — the server: the boma binary, the static web build, migrations, README/LICENSE/CHANGELOG and docs/UPGRADING.md. Serve it with boma migrate && boma serve; see docs/UPGRADING.md."
             echo "- boma-desktop-${VERSION}-linux-x64.tar.gz — the Electron shell, unpacked and unsigned; see docs/UPGRADING.md (§Desktop). No auto-update; updates are manual."
             echo
-            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI 5 jobs on every push."
+            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI green on every push (rust, web, chart jobs)."
             echo
             echo "Verify the downloads (no Apple/MS identity required — these are keyless Sigstore attestations, not code-signing certificates):"
             echo

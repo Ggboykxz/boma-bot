@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures";
 import { t } from "../lib/i18n";
+import { CAPABILITIES } from "./capabilities";
 
 /**
  * The auth cluster (spec/08-ui-ux.md §8.2, REQ-040, REQ-041).
@@ -8,18 +9,6 @@ import { t } from "../lib/i18n";
  * sign-in and the recovery flow are exercised end to end in a browser fixture; the network
  * never leaves the loopback routes Playwright seeds.
  */
-
-const CAPABILITIES = {
-  version: "0.1.0",
-  runtime: "sandboxed",
-  signup: "open",
-  password: true,
-  emailCode: false,
-  passkey: false,
-  sso: [],
-  provider: null,
-  revision: null,
-};
 
 async function seedCapabilities(page: import("@playwright/test").Page) {
   await page.route("**/api/auth/capabilities", async (route) => {
@@ -78,18 +67,21 @@ test("REQ-040 an invalid sign-in shows an error that never says which side was w
   await expect(page).toHaveURL(/\/sign-in\//);
 });
 
-test("REQ-040 a closed sign-up tells the visitor instead of failing them in silence", async ({ page }) => {
+test("REQ-066 the local bring-up mode sends the visitor straight into the product", async ({ page }) => {
   await page.route("**/api/auth/capabilities", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ ...CAPABILITIES, signup: "closed" }),
+      body: JSON.stringify({ ...CAPABILITIES, localFirst: true }),
     });
   });
+  await page.route("**/rpc/bots/list", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ bots: [] }) });
+  });
 
-  await page.goto("/sign-up/");
-  await expect(page.getByText(t("en", "signup.closed"))).toBeVisible();
-  await expect(page.getByRole("button", { name: t("en", "signup.submit") })).toHaveCount(0);
+  await page.goto("/sign-in/");
+  await page.waitForURL("**/app/**", { timeout: 10_000 });
+  await expect(page.getByLabel(t("en", "signin.password"))).toHaveCount(0);
 });
 
 test("REQ-040 the forgot-password screen answers the same words regardless of whether the address exists", async ({ page }) => {

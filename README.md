@@ -80,6 +80,17 @@ Prérequis : `rustup` (le fichier `rust-toolchain.toml` épingle 1.99.1 ; la MSR
 7. Mise à jour depuis une ancienne image : voir docs/UPGRADING.md (sauvegarde, migrations, rollback).
 8. Ordinateur avec navigateur (observation et action, REQ-028) : `SANDBOX_PROVIDER=docker`, puis `BOMA_COMPUTER_IMAGE=zenika/alpine-chrome:latest`, `BOMA_COMPUTER_CMD="--headless --no-sandbox --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 about:blank"` et `BOMA_COMPUTER_CDP_PORT=9222`. Sans ces trois variables, l'ordinateur reste l'image alpine (shell et fichiers) : les cas d'usage navigateur répondent `Unavailable`, jamais de faux pixels. Ces cas d'usage ne sont pas encore exposés au fil RPC ni appelés par l'agent (voir docs/STATE.md, M4).
 
+### Bring-up local-first (REQ-066, sans compte)
+Sur ta machine seule : `BOMA_LOCAL_FIRST=true BOMA_BIND_ADDR=127.0.0.1:3000 cargo run --bin boma -- serve`.
+Une requête sans cookie de session est alors résolue comme la machine elle-même (un compte
+`local-owner` implicite est seedé au premier appel) ; le web s'ouvre directement sur le produit,
+sans formulaire. Idem pour les agents de code qui parlent au `:3000` en loopback (opencode,
+Claude Code, scripts) : même appel `fetch`, même résolution, aucune clé à installer. Une requête
+qui porte un cookie de session reste strictement résolue. Le mode est refusé au boot sur tout
+bind non-loopback (jamais un affaiblissement silencieux), il est off par défaut, et
+`GET /api/auth/capabilities` le signale via `localFirst: true`. La coque Electron pointe déjà
+sur `http://127.0.0.1:3000` : avec `BOMA_LOCAL_FIRST=true`, aucun écran de connexion n'apparaît.
+
 Le contrat de la spec reste `/health` et `/ready` ; `/healthz` et `/readyz` existent en plus comme alias exigés par AGENTS.md. L'écart est assumé et documenté dans docs/STATE.md (DEV-01).
 La licence du projet est MIT (choix de l'agent pour débloquer `cargo deny`) : change-la dans `Cargo.toml` + `LICENSE` et relance `cargo deny check` si tu veux autre chose.
 
