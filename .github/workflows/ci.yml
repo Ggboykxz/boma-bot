@@ -177,6 +177,8 @@ jobs:
         if: runner.os == 'Windows'
         run: bash ../../tools/stage-desktop-vendor.sh windows
         shell: bash
+        env:
+          VCPKG_ROOT: C:\vcpkg
       - name: Rehearse the embedded stack boot (no GUI)
         if: runner.os == 'Linux'
         run: bash ../../tools/desktop-stack-smoke.sh

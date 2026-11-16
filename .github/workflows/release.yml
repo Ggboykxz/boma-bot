@@ -144,6 +144,8 @@ jobs:
       - name: Stage the desktop vendor (embedded Postgres, boma, web)
         run: bash tools/stage-desktop-vendor.sh windows
         shell: bash
+        env:
+          VCPKG_ROOT: C:\vcpkg
 
       - name: Build the Windows pack (NSIS setup + portable zip)
         working-directory: apps/desktop
