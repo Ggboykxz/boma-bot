@@ -49,15 +49,17 @@ use crate::{
         MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply, MemoryRemoveReply,
         MemoryWriteReply, MessagesReply, MessagingInstallationView, MessagingRemoveReply,
         ModelConnectReply, ModelCredentialView, ModelCredentialsReply, ModelPreferenceReply,
-        ModelsCatalogReply, NotificationsPolicyGetRequest, NotificationsPolicySetRequest,
-        NotificationsPolicyView, NotificationsStatusReply, NotificationsSubscribeReply,
-        NotificationsUnsubscribeReply, PagesGetReply, PagesRevokeShareReply, PagesSaveReply,
-        PagesShareReply, PluginInstallView, ReactReply, RosterBotView, RoutineRemoveReply,
-        RoutineRunNowReply, RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView,
-        RunsReply, SecretForgetReply, SecretSetReply, SecretView, SecretsReply,
-        SecurityEventsReply, SendReply, SignInRequestView, SkillReply, SkillView, SkillsReply,
-        SnoozeReply, SpaceReply, SpendingLimitReply, TeachSkillReply, ThreadHeadReply,
-        TicketCommentReply, TicketCommentView, TicketReply, TicketView,
+        ModelsCatalogReply, NotificationDestinationView, NotificationsDestinationsCreateReply,
+        NotificationsDestinationsDeleteReply, NotificationsDestinationsListReply,
+        NotificationsPolicyGetRequest, NotificationsPolicySetRequest, NotificationsPolicyView,
+        NotificationsStatusReply, NotificationsSubscribeReply, NotificationsUnsubscribeReply,
+        PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
+        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
+        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
+        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply,
+        SignInRequestView, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
+        SpendingLimitReply, TeachSkillReply, ThreadHeadReply, TicketCommentReply,
+        TicketCommentView, TicketReply, TicketView,
     },
 };
 
@@ -151,6 +153,9 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::NOTIFICATIONS, "unsubscribe"),
         (namespaces::NOTIFICATIONS, "policyGet"),
         (namespaces::NOTIFICATIONS, "policySet"),
+        (namespaces::NOTIFICATIONS, "destinationsList"),
+        (namespaces::NOTIFICATIONS, "destinationsCreate"),
+        (namespaces::NOTIFICATIONS, "destinationsDelete"),
         (namespaces::SPACES, "create"),
         (namespaces::SPACES, "invite"),
         (namespaces::RUNS, "list"),
@@ -386,6 +391,21 @@ async fn rpc_inner(
         (namespaces::NOTIFICATIONS, "policySet") => notifications_policy_set(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
+        (namespaces::NOTIFICATIONS, "destinationsList") => {
+            notifications_destinations_list(state, auth, body)
+                .await
+                .map(|reply| Json(reply).into_response())
+        }
+        (namespaces::NOTIFICATIONS, "destinationsCreate") => {
+            notifications_destinations_create(state, auth, body)
+                .await
+                .map(|reply| Json(reply).into_response())
+        }
+        (namespaces::NOTIFICATIONS, "destinationsDelete") => {
+            notifications_destinations_delete(state, auth, body)
+                .await
+                .map(|reply| Json(reply).into_response())
+        }
         (namespaces::SPACES, "create") => spaces_create(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
@@ -4141,4 +4161,120 @@ async fn check_bot_live(
         return Err(ApiError::not_found());
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// M15.2 — destinations
+// ---------------------------------------------------------------------------
+
+/// The body of `notifications.destinationsList`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationsDestinationsListBody {}
+
+/// `notifications.destinationsList` — the space's channels, labels only.
+async fn notifications_destinations_list(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsDestinationsListReply, ApiError> {
+    let _: NotificationsDestinationsListBody = parse(&body)?;
+    let destinations = usecases::destinations_list(state.app(), &auth.actor.context, None).await?;
+    Ok(NotificationsDestinationsListReply {
+        destinations: destinations.into_iter().map(destination_view).collect(),
+    })
+}
+
+/// The body of `notifications.destinationsCreate` — Owner/Admin only.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationsDestinationsCreateBody {
+    /// slack_webhook | teams_webhook
+    kind: String,
+    /// A human label (`#product-releases`).
+    label: String,
+    /// The incoming-webhook URL; sealed on write and never returned again.
+    webhook: String,
+}
+
+/// `notifications.destinationsCreate` — register a webhook; Owner/Admin only.
+async fn notifications_destinations_create(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsDestinationsCreateReply, ApiError> {
+    let request: NotificationsDestinationsCreateBody = parse(&body)?;
+    let kind = match request.kind.as_str() {
+        "slack_webhook" => boma_domain::notification::NotificationDestinationKind::SlackWebhook,
+        "teams_webhook" => boma_domain::notification::NotificationDestinationKind::TeamsWebhook,
+        _ => {
+            return Err(ApiError::new(
+                ErrorCode::BadRequest,
+                "the kind must be slack_webhook or teams_webhook",
+            ));
+        }
+    };
+    let outcome = usecases::destinations_create(
+        state.app(),
+        &auth.actor.context,
+        kind,
+        &request.label,
+        &request.webhook,
+    )
+    .await
+    .map_err(|error| match error {
+        boma_app::AppError::Rule(_) => {
+            ApiError::new(ErrorCode::BadRequest, "the webhook is refused")
+        }
+        boma_app::AppError::Forbidden => ApiError::new(
+            ErrorCode::Forbidden,
+            "an owner or admin can register a destination",
+        ),
+        other => ApiError::from(other),
+    })?;
+    Ok(NotificationsDestinationsCreateReply {
+        destination: destination_view(outcome.destination),
+    })
+}
+
+/// The body of `notifications.destinationsDelete` — Owner/Admin only.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NotificationsDestinationsDeleteBody {
+    /// The destination to remove.
+    id: String,
+}
+
+/// `notifications.destinationsDelete` — remove a destination; Owner/Admin only.
+async fn notifications_destinations_delete(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<NotificationsDestinationsDeleteReply, ApiError> {
+    let request: NotificationsDestinationsDeleteBody = parse(&body)?;
+    if request.id.trim().is_empty() {
+        return Err(ApiError::new(ErrorCode::BadRequest, "the id is required"));
+    }
+    let removed =
+        usecases::destinations_delete(state.app(), &auth.actor.context, request.id.trim())
+            .await
+            .map_err(|error| match error {
+                boma_app::AppError::Forbidden => ApiError::new(
+                    ErrorCode::Forbidden,
+                    "an owner or admin can remove a destination",
+                ),
+                other => ApiError::from(other),
+            })?;
+    Ok(NotificationsDestinationsDeleteReply { removed })
+}
+
+fn destination_view(
+    destination: boma_domain::notification::NotificationDestination,
+) -> NotificationDestinationView {
+    NotificationDestinationView {
+        id: destination.id,
+        kind: destination.kind.as_str().to_owned(),
+        label: destination.label,
+        created_at: destination.created_at,
+    }
 }

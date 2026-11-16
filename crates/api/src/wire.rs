@@ -2188,3 +2188,41 @@ pub struct NotificationsPolicySetRequest {
     #[serde(default)]
     pub destination_teams_webhook: Option<bool>,
 }
+
+/// A destination view — never the webhook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationDestinationView {
+    /// The id of the destination.
+    pub id: String,
+    /// Slack incoming webhook or Teams incoming webhook.
+    pub kind: String,
+    /// A human name for the channel.
+    pub label: String,
+    /// When it was created.
+    pub created_at: String,
+}
+
+/// The reply of `notifications.destinationsList`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsDestinationsListReply {
+    /// Newest first.
+    pub destinations: Vec<NotificationDestinationView>,
+}
+
+/// The reply of `notifications.destinationsCreate`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsDestinationsCreateReply {
+    /// The created destination, without the webhook.
+    pub destination: NotificationDestinationView,
+}
+
+/// The reply of `notifications.destinationsDelete`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationsDestinationsDeleteReply {
+    /// Whether a row was removed.
+    pub removed: bool,
+}

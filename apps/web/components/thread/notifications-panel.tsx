@@ -10,8 +10,12 @@ import {
   notificationsStatus,
   notificationsSubscribe,
   notificationsUnsubscribe,
+  notificationsDestinationsList,
+  notificationsDestinationsCreate,
+  notificationsDestinationsDelete,
   applicationServerKeyBytes,
   uint8ArrayToBase64Url,
+  type NotificationDestinationView,
   type NotificationsPolicyView,
 } from "@/lib/api/rpc";
 import { useTranslation } from "@/lib/use-translation";
@@ -45,6 +49,53 @@ export function NotificationsPanel({ botId }: { botId: string }) {
     "loading" | "unsupported" | "disabled" | "off" | "on" | "busy" | "failed"
   >(() => (isPushSupported() ? "loading" : "unsupported"));
   const [policy, setPolicy] = useState<NotificationsPolicyView | null>(null);
+  const [destinations, setDestinations] = useState<NotificationDestinationView[]>([]);
+  const [creatingDestination, setCreatingDestination] = useState(false);
+  const [destinationEnabledFlags, setDestinationEnabledFlags] = useState<"ready" | "failed">("ready");
+  const [newKind, setNewKind] = useState<"slack_webhook" | "teams_webhook">("slack_webhook");
+  const [newLabel, setNewLabel] = useState("");
+  const [newWebhook, setNewWebhook] = useState("");
+
+  const refreshDestinations = async () => {
+    try {
+      const reply = await notificationsDestinationsList();
+      setDestinations(reply.destinations);
+      setDestinationEnabledFlags("ready");
+    } catch {
+      setDestinations([]);
+    }
+  };
+
+  const addDestination = async () => {
+    const label = newLabel.trim();
+    const webhook = newWebhook.trim();
+    if (!label || !webhook) {
+      return;
+    }
+    setCreatingDestination(true);
+    try {
+      await notificationsDestinationsCreate({ kind: newKind, label, webhook });
+      setNewLabel("");
+      setNewWebhook("");
+      await refreshDestinations();
+    } catch {
+      setDestinationEnabledFlags("failed");
+    } finally {
+      setCreatingDestination(false);
+    }
+  };
+
+  const removeDestination = async (id: string) => {
+    setCreatingDestination(true);
+    try {
+      await notificationsDestinationsDelete({ id });
+      await refreshDestinations();
+    } catch {
+      setDestinationEnabledFlags("failed");
+    } finally {
+      setCreatingDestination(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -74,6 +125,19 @@ export function NotificationsPanel({ botId }: { botId: string }) {
         const current = await notificationsPolicyGet({ botId }).catch(() => null);
         if (active && current) {
           setPolicy(current);
+        }
+        if (active) {
+          // Destinations are space-owned; load them independently of the browser state.
+          void (async () => {
+            try {
+              const reply = await notificationsDestinationsList();
+              if (active) {
+                setDestinations(reply.destinations);
+              }
+            } catch {
+              /* the admins own the webhook; members just see the list */
+            }
+          })();
         }
       })
       .catch(() => {
@@ -135,13 +199,14 @@ export function NotificationsPanel({ botId }: { botId: string }) {
       if (current) {
         setPolicy(current);
       }
+      await refreshDestinations();
     } catch {
       setPhase("failed");
     }
   };
 
   const patchPolicy = async (
-    patch: Partial<Pick<NotificationsPolicyView, "notifyWaiting" | "notifyCompleted" | "dailyCap">>,
+    patch: Partial<Pick<NotificationsPolicyView, "notifyWaiting" | "notifyCompleted" | "dailyCap" | "destinationSlackWebhook" | "destinationTeamsWebhook">>,
   ) => {
     const next = await notificationsPolicySet({ botId, ...patch }).catch(() => null);
     if (next) {
@@ -202,6 +267,24 @@ export function NotificationsPanel({ botId }: { botId: string }) {
             {t("thread.notifications.completed")}
           </label>
           <label className="text-text-secondary flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={policy.destinationSlackWebhook}
+              onChange={(event) => void patchPolicy({ destinationSlackWebhook: event.target.checked })}
+              className="accent-accent-600"
+            />
+            {t("thread.notifications.destinations.slack")}
+          </label>
+          <label className="text-text-secondary flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={policy.destinationTeamsWebhook}
+              onChange={(event) => void patchPolicy({ destinationTeamsWebhook: event.target.checked })}
+              className="accent-accent-600"
+            />
+            {t("thread.notifications.destinations.teams")}
+          </label>
+          <label className="text-text-secondary flex items-center gap-1 text-xs">
             {t("thread.notifications.dailyCap")}
             <input
               type="number"
@@ -214,6 +297,70 @@ export function NotificationsPanel({ botId }: { botId: string }) {
             />
           </label>
         </form>
+      ) : null}
+      {phase === "on" ? (
+        <div className="border-border-separator-border flex w-full flex-col gap-1 rounded-xl border p-2 text-xs">
+          <p className="text-text-secondary text-xs font-semibold" title={t("thread.notifications.destinations.tooltip")}>
+            {t("thread.notifications.destinations")}
+          </p>
+          {destinations.length === 0 ? (
+            <p className="text-text-tertiary text-xs">{t("thread.notifications.destinations.empty")}</p>
+          ) : null}
+          {destinations.map((destination) => (
+            <div key={destination.id} className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-border-separator-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-tertiary">
+                {destination.kind.replace("_webhook", "")}
+              </span>
+              <span className="text-text-primary">{destination.label}</span>
+              <button
+                type="button"
+                onClick={() => void removeDestination(destination.id)}
+                disabled={creatingDestination}
+                className="boma-focus ml-auto rounded-md px-1 py-0.5 text-text-tertiary transition-colors hover:text-text-error-primary"
+                aria-label={`Remove destination ${destination.label}`}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <form
+            className="mt-1 flex flex-wrap items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void addDestination();
+            }}
+          >
+            <select
+              value={newKind}
+              onChange={(event) => setNewKind(event.target.value as typeof newKind)}
+              aria-label={t("thread.notifications.destinations.kind")}
+              className="rounded-md border border-border-button-default bg-background-secondary-default px-2 py-1 text-xs text-text-primary"
+            >
+              <option value="slack_webhook">{t("thread.notifications.destinations.slack")}</option>
+              <option value="teams_webhook">{t("thread.notifications.destinations.teams")}</option>
+            </select>
+            <input
+              value={newLabel}
+              onChange={(event) => setNewLabel(event.target.value)}
+              placeholder={t("thread.notifications.destinations.label")}
+              aria-label={t("thread.notifications.destinations.label")}
+              className="w-28 rounded-md border border-border-button-default bg-background-secondary-default px-2 py-1 text-xs text-text-primary outline-none"
+            />
+            <input
+              value={newWebhook}
+              onChange={(event) => setNewWebhook(event.target.value)}
+              placeholder="https://"
+              aria-label={t("thread.notifications.destinations.url")}
+              className="w-40 rounded-md border border-border-button-default bg-background-secondary-default px-2 py-1 text-xs text-text-primary outline-none"
+            />
+            <Button type="submit" variant="ghost" size="xs" disabled={creatingDestination || !newLabel.trim() || !newWebhook.trim()}>
+              {t("thread.notifications.destinations.add")}
+            </Button>
+          </form>
+          {destinationEnabledFlags === "failed" ? (
+            <p role="alert" className="text-text-error-primary">{t("thread.error.send")}</p>
+          ) : null}
+        </div>
       ) : null}
       {phase === "failed" ? (
         <p role="alert" className="text-text-error-primary text-xs">

@@ -1510,6 +1510,10 @@ export interface NotificationsPolicyView {
   notifyWaiting: boolean;
   notifyCompleted: boolean;
   dailyCap: number;
+  /** Member-opted-in: Slack destinations receive pushes for this bot. */
+  destinationSlackWebhook: boolean;
+  /** Member-opted-in: Teams destinations receive pushes for this bot. */
+  destinationTeamsWebhook: boolean;
 }
 
 export async function notificationsPolicyGet(
@@ -1524,6 +1528,9 @@ export interface NotificationsPolicySetRequest {
   notifyWaiting?: boolean;
   notifyCompleted?: boolean;
   dailyCap?: number;
+  // destination bits
+  destinationSlackWebhook?: boolean;
+  destinationTeamsWebhook?: boolean;
 }
 
 export async function notificationsPolicySet(
@@ -1552,4 +1559,54 @@ export function uint8ArrayToBase64Url(bytes: Uint8Array): string {
     raw += String.fromCharCode(bytes[index]);
   }
   return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export interface NotificationDestinationView {
+  /** The id of the destination. */
+  id: string;
+  /** slack_webhook | teams_webhook */
+  kind: string;
+  /** A human label for the channel. */
+  label: string;
+  /** When it was created. */
+  createdAt: string;
+}
+
+export interface NotificationsDestinationsListReply {
+  destinations: NotificationDestinationView[];
+}
+
+export async function notificationsDestinationsList(signal?: AbortSignal): Promise<NotificationsDestinationsListReply> {
+  return call<NotificationsDestinationsListReply>("notifications", "destinationsList", {}, signal);
+}
+
+export interface NotificationsDestinationsCreateRequest {
+  /** slack_webhook | teams_webhook */
+  kind: string;
+  /** A human label. */
+  label: string;
+  /** The incoming webhook URL — sealed on write and never echoed. */
+  webhook: string;
+}
+
+export interface NotificationsDestinationsCreateReply {
+  destination: NotificationDestinationView;
+}
+
+export async function notificationsDestinationsCreate(
+  request: NotificationsDestinationsCreateRequest,
+  signal?: AbortSignal,
+): Promise<NotificationsDestinationsCreateReply> {
+  return call<NotificationsDestinationsCreateReply>("notifications", "destinationsCreate", request, signal);
+}
+
+export interface NotificationsDestinationsDeleteReply {
+  removed: boolean;
+}
+
+export async function notificationsDestinationsDelete(
+  request: { id: string },
+  signal?: AbortSignal,
+): Promise<NotificationsDestinationsDeleteReply> {
+  return call<NotificationsDestinationsDeleteReply>("notifications", "destinationsDelete", request, signal);
 }

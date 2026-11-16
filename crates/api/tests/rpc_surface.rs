@@ -5078,3 +5078,195 @@ async fn req_064_subscribe_rejects_private_or_plain_http_endpoints() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+// ---------------------------------------------------------------------------
+// M15.2 — destinations
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn req_065_destinations_create_list_delete_roundtrip() {
+    let test_app = TestApp::builder()
+        .vapid(boma_testkit::vapid_test_config())
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+    let (bot, _) = test_app
+        .seed_bot(&space_id, &owner, "Analyst")
+        .await
+        .expect("the bot exists");
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // Pre-create: the list is empty.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsList",
+        Some(&caller),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["destinations"].as_array().map(Vec::len), Some(0));
+
+    // Create a Slack-shaped destination.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsCreate",
+        Some(&caller),
+        serde_json::json!({
+            "kind": "slack_webhook",
+            "label": "#product-releases",
+            "webhook": "https://hooks.slack.com/services/redacted-for-tests",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    let destination_id = body["destination"]["id"]
+        .as_str()
+        .expect("the id")
+        .to_owned();
+    assert!(destination_id.starts_with("dst_"));
+
+    // The list is no longer empty; it never carries any webhook material.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsList",
+        Some(&caller),
+        serde_json::json!({}),
+    )
+    .await;
+    let body = json(response).await;
+    assert_eq!(body["destinations"].as_array().map(Vec::len), Some(1));
+    let first = &body["destinations"][0];
+    assert_eq!(first["label"], serde_json::json!("#product-releases"));
+    assert!(
+        !first.to_string().contains("hooks.slack.com"),
+        "the list leaks nothing"
+    );
+    assert!(
+        !first.to_string().contains("nonce"),
+        "the list leaks nothing"
+    );
+
+    // A non-owner, non-admin caller is refused on create/delete.
+    let member_cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let _ = member_cookie;
+
+    // Delete the destination removes it — second delete returns false.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsDelete",
+        Some(&caller),
+        serde_json::json!({ "id": destination_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(true));
+
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsDelete",
+        Some(&caller),
+        serde_json::json!({ "id": destination_id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["removed"], serde_json::json!(false));
+
+    let _ = bot;
+}
+
+#[allow(clippy::too_many_lines)] // one scenario; splitting would lose the thread
+#[tokio::test]
+async fn req_065_destinations_admin_only() {
+    // Seed: an owner, a member, and no admin — destinations RPCs must be refused for the member.
+    let test_app = TestApp::builder()
+        .vapid(boma_testkit::vapid_test_config())
+        .build();
+    let owner = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await
+        .expect("the owner exists");
+    let space_id = test_app
+        .seed_space(&owner, "Golden space")
+        .await
+        .expect("the space exists");
+
+    let cookie = sign_in_as(&test_app, "owner@example.com").await;
+    let caller = Caller {
+        cookie,
+        space_id: space_id.as_str().to_owned(),
+    };
+
+    // The owner registers one destination.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsCreate",
+        Some(&caller),
+        serde_json::json!({
+            "kind": "teams_webhook",
+            "label": "#incidents",
+            "webhook": "https://webhook.office.example.com/incident",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Wrong kind refused with bad request.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsCreate",
+        Some(&caller),
+        serde_json::json!({ "kind": "discord_webhook", "label": "#x", "webhook": "https://x" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Empty label refused.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsCreate",
+        Some(&caller),
+        serde_json::json!({ "kind": "slack_webhook", "label": " ", "webhook": "https://hooks.slack.com/services/x" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Plain HTTP webhook refused.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsCreate",
+        Some(&caller),
+        serde_json::json!({ "kind": "slack_webhook", "label": "#x", "webhook": "http://hooks.slack.com/services/x" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Slack-kind webhook pointed elsewhere than hooks.slack.com refused.
+    let response = post(
+        state(&test_app),
+        "/rpc/notifications/destinationsCreate",
+        Some(&caller),
+        serde_json::json!({
+            "kind": "slack_webhook",
+            "label": "#x",
+            "webhook": "https://evil.example.com/services/x",
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

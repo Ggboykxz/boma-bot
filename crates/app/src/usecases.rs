@@ -9389,3 +9389,115 @@ fn req_signin_url_must_parse(origin: &str) -> Result<(), AppError> {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// M15.2 — destinations (REQ-065)
+// ---------------------------------------------------------------------------
+
+/// The roles that may manage a space's destinations (REQ-065).
+const DESTINATIONS_MANAGERS: &[boma_domain::SpaceRole] =
+    &[boma_domain::SpaceRole::Owner, boma_domain::SpaceRole::Admin];
+
+/// Outcome of creating a destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestinationCreated {
+    /// The stored destination (no webhook material).
+    pub destination: boma_domain::notification::NotificationDestination,
+}
+
+/// The space's destinations, newest first. Any member may read them — labels, kinds and kinds
+/// only.
+///
+/// # Errors
+///
+/// Returns an error when the store cannot answer.
+pub async fn destinations_list(
+    app: &App,
+    context: &TenantContext,
+    kind: Option<boma_domain::notification::NotificationDestinationKind>,
+) -> Result<Vec<boma_domain::notification::NotificationDestination>, AppError> {
+    app.stores.destinations.list(context, kind).await
+}
+
+/// Registers an incoming webhook for this space.
+///
+/// The webhook is sealed on write and never returned by any other path (REQ-046-style
+/// sealing); only the label and the kind persist in the readable shape.
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not Owner/Admin, [`AppError::NotFound`]
+/// when the space does not exist, [`AppError::Rule`] when the URL fails shape (https, Slack
+/// host prefix).
+#[allow(clippy::too_many_arguments)]
+pub async fn destinations_create(
+    app: &App,
+    context: &TenantContext,
+    kind: boma_domain::notification::NotificationDestinationKind,
+    label: &str,
+    webhook: &str,
+) -> Result<DestinationCreated, AppError> {
+    let trimmed_label = label.trim();
+    if trimmed_label.is_empty() {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "the destination label is required".to_owned(),
+        )));
+    }
+    let webhook_url = webhook.trim();
+    if let Some(prefix) = kind.webhook_prefix()
+        && !webhook_url.starts_with(prefix)
+    {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a slack webhook must start with https://hooks.slack.com/".to_owned(),
+        )));
+    }
+    if !webhook_url.starts_with("https://") {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a webhook must be an https URL".to_owned(),
+        )));
+    }
+    if webhook_url.contains('@') {
+        return Err(AppError::Rule(boma_domain::DomainError::InvalidName(
+            "a webhook carries no credentials".to_owned(),
+        )));
+    }
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    require_space_role(app, context, &space_id, DESTINATIONS_MANAGERS).await?;
+    let user_id = context.user_id().cloned().ok_or(AppError::Forbidden)?;
+    let now = app.services.clock.now();
+    let id = app.services.ids.new_id("dst");
+    let created = app
+        .stores
+        .destinations
+        .create(
+            context,
+            boma_domain::notification::NewNotificationDestination {
+                id,
+                space_id,
+                kind,
+                label: trimmed_label.to_owned(),
+                webhook: webhook.trim().to_owned(),
+                created_by: user_id,
+                created_at: now,
+            },
+        )
+        .await?;
+    Ok(DestinationCreated {
+        destination: created,
+    })
+}
+
+/// Removes a destination; Owner/Admin only.
+///
+/// # Errors
+///
+/// Returns [`AppError::Forbidden`] when the caller is not Owner/Admin.
+pub async fn destinations_delete(
+    app: &App,
+    context: &TenantContext,
+    id: &str,
+) -> Result<bool, AppError> {
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    require_space_role(app, context, &space_id, DESTINATIONS_MANAGERS).await?;
+    app.stores.destinations.delete(context, id).await
+}

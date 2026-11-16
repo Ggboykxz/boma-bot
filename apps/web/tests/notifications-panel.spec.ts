@@ -7,7 +7,7 @@ import { expect, test, applySeed } from "./fixtures";
  * The endpoints and keys are stubbed; no push ever leaves the test.
  */
 
-test("REQ-064 the notifications panel enable-policy-disable flow round-trips", async ({ page }) => {
+test("REQ-065 the notifications panel enable-policy-destination-disable flow round-trips", async ({ page }) => {
   await applySeed(page, "thread-empty");
 
   const calls: Array<Record<string, unknown>> = [];
@@ -55,7 +55,47 @@ test("REQ-064 the notifications panel enable-policy-disable flow round-trips", a
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ botId: "bot_golden", notifyWaiting: true, notifyCompleted: body.notifyCompleted === true, dailyCap: 20 }),
+      body: JSON.stringify({
+        botId: "bot_golden",
+        notifyWaiting: body.notifyWaiting ?? true,
+        notifyCompleted: body.notifyCompleted === true,
+        dailyCap: 20,
+        destinationSlackWebhook: body.destinationSlackWebhook === true,
+        destinationTeamsWebhook: body.destinationTeamsWebhook === true,
+      }),
+    });
+  });
+  await page.route("**/rpc/notifications/destinationsList", async (route) => {
+    calls.push({ procedure: "destinationsList" });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ destinations: [] }),
+    });
+  });
+  await page.route("**/rpc/notifications/destinationsCreate", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    calls.push({ procedure: "destinationsCreate", ...body });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        destination: {
+          id: "dst_added_1",
+          kind: body.kind,
+          label: body.label,
+          createdAt: "2026-11-16T00:00:00Z",
+        },
+      }),
+    });
+  });
+  await page.route("**/rpc/notifications/destinationsDelete", async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    calls.push({ procedure: "destinationsDelete", ...body });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ removed: true }),
     });
   });
 
@@ -124,5 +164,21 @@ test("REQ-064 the notifications panel enable-policy-disable flow round-trips", a
   await completedRow.click();
   await expect.poll(() =>
     calls.find((entry) => entry.procedure === "policySet" && entry.notifyCompleted === true),
+  ).toBeTruthy();
+
+  // Toggle the Slack destination flag for this bot; the full view round-trips.
+  const slackRow = page.getByLabel(/^Slack$/);
+  await expect(slackRow).toBeVisible();
+  await slackRow.click();
+  await expect.poll(() =>
+    calls.find((entry) => entry.procedure === "policySet" && entry.destinationSlackWebhook === true),
+  ).toBeTruthy();
+
+  // Add a Slack destination — owner role is stubbed at the mock layer.
+  await page.getByLabel(/Label|Nom|שם/).fill("#product-releases");
+  await page.getByLabel(/Webhook|כתובת/).fill("https://hooks.slack.com/services/test-abc123");
+  await page.getByRole("button", { name: /Add a destination|Ajouter une destination|הוסף יעד/ }).click();
+  await expect.poll(() =>
+    calls.find((entry) => entry.procedure === "destinationsCreate" && entry.label === "#product-releases"),
   ).toBeTruthy();
 });
