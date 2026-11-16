@@ -4085,6 +4085,8 @@ pub struct ProviderRequest {
     /// The skills this run may load, name and one line each (REQ-035). Always carries the
     /// built-ins; taught and plugin skills of the space ride along.
     pub skills: Vec<SkillContext>,
+    /// The run this turn belongs to; providers that park approval cards need it (REQ-061).
+    pub run_id: boma_domain::RunId,
 }
 
 /// Produces the next turn of the assistant's answer.

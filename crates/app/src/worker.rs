@@ -328,6 +328,7 @@ impl Worker {
             tools: tools.clone(),
             memory,
             skills,
+            run_id: run.id.clone(),
         };
 
         // An external executor answers over AG-UI instead of the deployment's internal model.
@@ -562,8 +563,11 @@ impl Worker {
                 if let Some(spec) = spec {
                     return Arc::new(crate::acp_provider::AcpProvider::new(
                         *spec,
+                        Arc::clone(&self.app),
+                        scoped,
                         None,
                         crate::acp::DEFAULT_PROMPT_TIMEOUT,
+                        crate::acp_provider::AcpProvider::default_permission_timeout(),
                     ));
                 }
                 tracing::warn!(run = %run.id, executor = %attachment.executor, "the attachment names an unknown executor; the internal model answers this turn");

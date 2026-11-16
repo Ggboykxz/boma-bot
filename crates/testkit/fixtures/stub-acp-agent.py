@@ -7,13 +7,15 @@ session/prompt (two agent_message_chunk notifications then end_turn), session/cl
 import json
 import sys
 
-NEXT_ID = 1
+NEXT_ID = 1000
+ASK_PERMISSION = "--ask-permission" in sys.argv
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
 
 def main():
+    global NEXT_ID
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -39,8 +41,44 @@ def main():
                 "result": {"sessionId": "stub_session_1"},
             })
         elif method == "session/prompt":
-            text = msg["params"]["prompt"][0]["text"]
-            for chunk in ["stub says: ", text.upper()]:
+            if ASK_PERMISSION:
+                # Ask the client for permission before answering, wait for its decision,
+                # and echo it so tests can assert which outcome landed.
+                perm_id = NEXT_ID
+                NEXT_ID += 1
+                send({
+                    "jsonrpc": "2.0",
+                    "id": perm_id,
+                    "method": "session/request_permission",
+                    "params": {
+                        "sessionId": msg["params"]["sessionId"],
+                        "toolCall": {
+                            "toolCallId": "tc_1",
+                            "title": "edit file",
+                            "kind": "edit",
+                            "status": "pending",
+                        },
+                        "options": [
+                            {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                            {"optionId": "reject_once", "name": "Reject once", "kind": "reject_once"},
+                        ],
+                    },
+                })
+                outcome = None
+                while True:
+                    line = sys.stdin.readline()
+                    if not line:
+                        break
+                    reply = json.loads(line)
+                    if reply.get("id") == perm_id:
+                        outcome = reply.get("result")
+                        break
+                detail = json.dumps(outcome)
+                chunks = ["permission:", detail, f" after:{msg['params']['prompt'][0]['text']}"]
+            else:
+                text = msg["params"]["prompt"][0]["text"]
+                chunks = ["stub says: ", text.upper()]
+            for chunk in chunks:
                 send({
                     "jsonrpc": "2.0",
                     "method": "session/update",

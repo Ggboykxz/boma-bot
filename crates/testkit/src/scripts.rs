@@ -688,6 +688,7 @@ mod tests {
             tools: Vec::new(),
             memory: Vec::new(),
             skills: Vec::new(),
+            run_id: boma_domain::RunId::new("run_1").expect("an id is accepted"),
         }
     }
 

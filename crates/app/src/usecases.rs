@@ -6691,6 +6691,130 @@ pub async fn append_tool_result(
 ///
 /// Returns [`AppError::Unavailable`] when a store cannot answer.
 #[allow(clippy::too_many_lines)] // mints the card, appends the blocks and pings the initiator — one flow, in order
+/// Creates the approval card for a waiting turn, pings the initiator once, drops the card
+/// block into the thread and flips the run to `WaitingInput`. Shared by the internal tool park
+/// and the ACP permission park (REQ-017).
+///
+/// # Errors
+///
+/// Returns an error when the card, the message or the status flip cannot be written.
+struct WaitingCard<'a> {
+    bot_id: boma_domain::BotId,
+    thread: &'a Thread,
+    run_id: &'a boma_domain::RunId,
+    user_id: boma_domain::UserId,
+    now: &'a str,
+    fence: Option<i64>,
+}
+
+async fn create_waiting_card(
+    app: &App,
+    context: &TenantContext,
+    args: WaitingCard<'_>,
+) -> Result<Option<boma_domain::Card>, AppError> {
+    let thread = args.thread;
+    let run_id = args.run_id;
+    let bot_id = args.bot_id.clone();
+    let user_id = args.user_id;
+    let now = args.now;
+    let card = match app
+        .stores
+        .cards
+        .create(
+            context,
+            crate::ports::NewCard {
+                id: boma_domain::CardId::new(app.services.ids.new_id("card"))?,
+                space_id: thread.space_id.clone(),
+                thread_id: thread.id.clone(),
+                kind: boma_domain::CardKind::Approval,
+                created_at: now.to_owned(),
+                run_id: Some(run_id.clone()),
+            },
+        )
+        .await
+    {
+        Ok(card) => Some(card),
+        Err(AppError::Conflict) => {
+            // A card is already pending for this run (crash replay): keep it, the person answers
+            // the one they can see, and the flip below stays idempotent.
+            tracing::info!(run = %run_id, "an approval card is already pending; the replay is absorbed");
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    if let Some(card) = &card {
+        crate::push::notify_run_waiting(
+            app,
+            crate::push::PushTarget {
+                space_id: thread.space_id.clone(),
+                user_id: user_id.clone(),
+                bot_id: bot_id.clone(),
+                run_id: run_id.clone(),
+            },
+        )
+        .await;
+        let stored = app
+            .stores
+            .messages
+            .insert(
+                context,
+                NewMessage {
+                    id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                    space_id: thread.space_id.clone(),
+                    thread_id: thread.id.clone(),
+                    role: boma_domain::MessageRole::System,
+                    blocks: vec![boma_domain::Block::Card {
+                        card_id: card.id.as_str().to_owned(),
+                        kind: "approval".to_owned(),
+                    }],
+                    bot_id: Some(bot_id),
+                    author_user_id: None,
+                    run_id: Some(run_id.clone()),
+                    client_nonce: None,
+                    created_at: now.to_owned(),
+                    reply_to_message_id: None,
+                    reply_quote: None,
+                },
+            )
+            .await?;
+        app.stores
+            .events
+            .append(
+                context,
+                crate::ports::NewEvent {
+                    space_id: thread.space_id.clone(),
+                    thread_id: thread.id.clone(),
+                    kind: boma_domain::EventType::Message,
+                    payload: serde_json::json!({
+                        "messageId": stored.message.id.as_str(),
+                        "seq": stored.message.seq,
+                    }),
+                    created_at: app.services.clock.now(),
+                },
+            )
+            .await?;
+    }
+    set_run_status(
+        app,
+        context,
+        run_id.as_str(),
+        RunStatus::WaitingInput,
+        args.fence,
+        None,
+    )
+    .await?;
+    Ok(card)
+}
+
+/// Parks the write-class tool calls a model just made: persists them, opens the approval card
+/// the person answers, sets the run to `WaitingInput`.
+///
+/// The card and the room copy are created by the shared helper; nothing else differs from the
+/// ACP permission park except the names and the dispatch semantics.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
 pub async fn park_tool_calls(
     app: &App,
     context: &TenantContext,
@@ -6719,96 +6843,117 @@ pub async fn park_tool_calls(
             Err(error) => return Err(error),
         }
     }
-    let card = match app
-        .stores
-        .cards
-        .create(
-            context,
-            crate::ports::NewCard {
-                id: boma_domain::CardId::new(app.services.ids.new_id("card"))?,
-                space_id: thread.space_id.clone(),
-                thread_id: thread.id.clone(),
-                kind: boma_domain::CardKind::Approval,
-                created_at: now.clone(),
-                run_id: Some(run.id.clone()),
-            },
-        )
-        .await
-    {
-        Ok(card) => Some(card),
-        Err(AppError::Conflict) => {
-            // A card is already pending for this run (crash replay): keep it, the person answers
-            // the one they can see, and the flip below stays idempotent.
-            tracing::info!(run = %run.id, "an approval card is already pending; the replay is absorbed");
-            None
-        }
-        Err(error) => return Err(error),
-    };
-    if let Some(card) = card {
-        // The person sees the card as part of the thread (the UI renders the block), and the
-        // initiator is pinged once — once per card actually created, never on a replay.
-        crate::push::notify_run_waiting(
-            app,
-            crate::push::PushTarget {
-                space_id: thread.space_id.clone(),
-                user_id: run.user_id.clone(),
-                bot_id: claimed.bot.id.clone(),
-                run_id: run.id.clone(),
-            },
-        )
-        .await;
-        // The person sees the card as part of the thread (the UI renders the block).
-        let stored = app
-            .stores
-            .messages
-            .insert(
-                context,
-                NewMessage {
-                    id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
-                    space_id: thread.space_id.clone(),
-                    thread_id: thread.id.clone(),
-                    role: boma_domain::MessageRole::System,
-                    blocks: vec![boma_domain::Block::Card {
-                        card_id: card.id.as_str().to_owned(),
-                        kind: "approval".to_owned(),
-                    }],
-                    bot_id: Some(bot_id),
-                    author_user_id: None,
-                    run_id: Some(run.id.clone()),
-                    client_nonce: None,
-                    created_at: now,
-                    reply_to_message_id: None,
-                    reply_quote: None,
-                },
-            )
-            .await?;
-        app.stores
-            .events
-            .append(
-                context,
-                crate::ports::NewEvent {
-                    space_id: thread.space_id.clone(),
-                    thread_id: thread.id.clone(),
-                    kind: boma_domain::EventType::Message,
-                    payload: serde_json::json!({
-                        "messageId": stored.message.id.as_str(),
-                        "seq": stored.message.seq,
-                    }),
-                    created_at: app.services.clock.now(),
-                },
-            )
-            .await?;
-    }
-    set_run_status(
+    create_waiting_card(
         app,
         context,
-        run.id.as_str(),
-        RunStatus::WaitingInput,
-        Some(run.lease_fence),
-        None,
+        crate::usecases::WaitingCard {
+            bot_id,
+            thread,
+            run_id: &run.id,
+            user_id: run.user_id.clone(),
+            now: &now,
+            fence: Some(run.lease_fence),
+        },
     )
     .await?;
     Ok(())
+}
+
+/// The outcome of parking an ACP permission request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpPermissionParked {
+    /// The approval card the person answers.
+    pub card_id: boma_domain::CardId,
+    /// The correlation id the executor used for the call.
+    pub call_id: String,
+}
+
+/// Parks an ACP `session/request_permission` as an approval card (REQ-061, REQ-017).
+///
+/// The pending call is named `acp:perm:<kind>`, which is the marker `answer_card` uses to
+/// resolve it without dispatching anything — the executor performs the tool itself once it
+/// receives our answer. The executor's process is parked inside the provider pass until the
+/// person answers; nothing else about the internal tool flow changes.
+///
+/// # Errors
+///
+/// Returns an error when the pending call or the card cannot be written, and an error when the
+/// store cannot answer.
+/// The run context a ACP permission card belongs to.
+pub struct AcpPark<'a> {
+    /// The run waiting on the permission.
+    pub run_id: &'a boma_domain::RunId,
+    /// The bot the executor works for.
+    pub bot: &'a Bot,
+    /// The thread the run writes to.
+    pub thread: &'a Thread,
+}
+
+/// Parks an ACP `session/request_permission` as an approval card (REQ-061, REQ-017).
+///
+/// The pending call is named `acp:perm:<kind>`, which is the marker `answer_card` uses to
+/// resolve it without dispatching anything — the executor performs the tool itself once it
+/// receives our answer. The executor's process is parked inside the provider pass until the
+/// person answers; nothing else about the internal tool flow changes.
+///
+/// # Errors
+///
+/// Returns an error when the pending call or the card cannot be written, and an error when the
+/// store cannot answer.
+pub async fn park_acp_permission(
+    app: &App,
+    context: &TenantContext,
+    park: AcpPark<'_>,
+    tool_call: &serde_json::Value,
+    options: &serde_json::Value,
+    call_id: &str,
+) -> Result<AcpPermissionParked, AppError> {
+    let run_id = park.run_id;
+    let bot = park.bot;
+    let thread = park.thread;
+    let now = app.services.clock.now();
+    let kind = tool_call
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("other")
+        .to_owned();
+    let pending = crate::ports::NewPendingToolCall {
+        run_id: run_id.clone(),
+        call_id: call_id.to_owned(),
+        space_id: thread.space_id.clone(),
+        thread_id: thread.id.clone(),
+        name: format!("acp:perm:{kind}"),
+        arguments: serde_json::json!({
+            "toolCall": tool_call,
+            "options": options,
+        }),
+        created_at: now.clone(),
+    };
+    match app.stores.pending_tool_calls.create(context, pending).await {
+        Ok(_) => {}
+        Err(AppError::Conflict) => {
+            tracing::info!(%call_id, "the ACP permission call is already registered; the replay is absorbed");
+        }
+        Err(error) => return Err(error),
+    }
+    let card = create_waiting_card(
+        app,
+        context,
+        WaitingCard {
+            bot_id: bot.id.clone(),
+            thread,
+            run_id,
+            user_id: bot.user_id.clone(),
+            now: &now,
+            fence: None,
+        },
+    )
+    .await?;
+    let card = card.ok_or(AppError::Conflict)?;
+    Ok(AcpPermissionParked {
+        card_id: card.id,
+        call_id: call_id.to_owned(),
+    })
 }
 
 /// Marks the parked calls of a run refused, appends their refusals as `role=tool` messages, and
@@ -7397,6 +7542,52 @@ async fn execute_approved_tool(
 ///
 /// Returns [`AppError::NotFound`] when the card does not exist in the tenant, and
 /// [`AppError::Conflict`] when it was already answered.
+/// Resolves ACP permission calls in place: nothing executes — the executor performs the tool
+/// itself once it receives our answer from the blocked provider pass.
+///
+/// # Errors
+///
+/// Returns an error when a store cannot answer.
+async fn resolve_acp_perm_calls(
+    app: &App,
+    context: &TenantContext,
+    run_id: &boma_domain::RunId,
+    parked: &[crate::ports::PendingToolCall],
+    answer: &str,
+) -> Result<(), AppError> {
+    let now = app.services.clock.now();
+    for call in parked {
+        if !call.name.starts_with("acp:perm:") {
+            continue;
+        }
+        if answer == "approve" {
+            let result = serde_json::json!({ "accepted": true });
+            let _ = app
+                .stores
+                .pending_tool_calls
+                .mark_applied(context, run_id, &call.call_id, result, &now)
+                .await;
+        } else {
+            let _ = app
+                .stores
+                .pending_tool_calls
+                .mark_refused(context, run_id, &call.call_id, &now)
+                .await;
+        }
+    }
+    Ok(())
+}
+
+/// Answers a card and, when the answer approves it, records and performs its effect exactly
+/// once (REQ-017).
+///
+/// Answering an already-answered card is idempotent: the recorded effect is never executed a
+/// second time, and the answer itself is refused once the card is closed.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when the card does not exist in the tenant, and
+/// [`AppError::Conflict`] when it was already answered.
 pub async fn answer_card(
     app: &App,
     context: &TenantContext,
@@ -7480,15 +7671,20 @@ pub async fn answer_card(
         // Parked calls apply only from the card that parked them: approve applies, anything else
         // refuses; question cards have no parked calls.
         let mut child_created = false;
-        if is_approval {
+        let acp_perm = parked.iter().any(|call| call.name.starts_with("acp:perm:"));
+        if acp_perm {
+            resolve_acp_perm_calls(app, context, run_id, &parked, answer).await?;
+        } else if is_approval {
             child_created =
                 apply_pending_tool_calls(app, context, run_id, &bot, &thread, answer == "approve")
                     .await?;
         }
         // The run that was waiting on the card resumes (REQ-017): parked on the queue, so the
         // claim picks it up again. A child run created by an approval re-queues the parent when
-        // it completes (REQ-019); resuming now would race its result.
-        if !child_created {
+        // it completes (REQ-019); resuming now would race its result. An ACP permission park is
+        // answered inside the provider pass that holds the executor open, so it does not
+        // re-queue here — the turn resumes with the permission response.
+        if !child_created && !acp_perm {
             set_run_status(app, context, run_id.as_str(), RunStatus::Queued, None, None).await?;
         }
     }

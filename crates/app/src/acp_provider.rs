@@ -10,14 +10,14 @@
 //! legible [`AppError::Unavailable`] before the run writes anything, which the worker records
 //! as a failed run (REQ-061, second acceptance criterion).
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 
-use crate::acp::AcpSession;
+use crate::acp::{AcpSession, PermissionDecider as AcpPermissionDecider};
 
 use crate::{
-    AppError,
+    App, AppError,
     ports::{ModelProvider, ProviderRequest, ProviderTurn},
 };
 
@@ -47,12 +47,18 @@ pub const fn executors() -> &'static [ExecutorSpec] {
 }
 
 /// A local ACP executor, stateless per turn.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AcpProvider {
     spec: ExecutorSpec,
+    app: Arc<App>,
+    context: boma_domain::TenantContext,
     workspace_root: PathBuf,
     prompt_timeout: Duration,
+    permission_timeout: Duration,
 }
+
+/// The default deadline for a permission card to be answered before it is answered `cancelled`.
+const DEFAULT_PERMISSION_TIMEOUT: Duration = Duration::from_hours(24);
 
 impl AcpProvider {
     /// Builds a provider over `spec`. `workspace_root` defaults to a per-process directory under
@@ -60,8 +66,11 @@ impl AcpProvider {
     #[must_use]
     pub fn new(
         spec: ExecutorSpec,
+        app: Arc<App>,
+        context: boma_domain::TenantContext,
         workspace_root: Option<PathBuf>,
         prompt_timeout: Duration,
+        permission_timeout: Duration,
     ) -> Self {
         let workspace_root = workspace_root.unwrap_or_else(|| {
             std::env::var_os("BOMA_ACP_WORKSPACES").map_or_else(
@@ -71,9 +80,18 @@ impl AcpProvider {
         });
         Self {
             spec,
+            app,
+            context,
             workspace_root,
             prompt_timeout,
+            permission_timeout,
         }
+    }
+
+    /// The permission timeout used when a test does not pin one.
+    #[must_use]
+    pub const fn default_permission_timeout() -> Duration {
+        DEFAULT_PERMISSION_TIMEOUT
     }
 
     fn fresh_workspace(&self, thread_id: &str) -> Result<PathBuf, AppError> {
@@ -91,6 +109,102 @@ impl AcpProvider {
         }
         Ok(workspace)
     }
+}
+
+/// Waits for the person to answer the approval card parked for an ACP permission, then composes
+/// the permission response the agent expects.
+struct PermissionDecider {
+    app: Arc<App>,
+    context: boma_domain::TenantContext,
+    run_id: boma_domain::RunId,
+    bot: boma_domain::Bot,
+    thread: boma_domain::Thread,
+    timeout: Duration,
+}
+
+#[async_trait]
+impl AcpPermissionDecider for PermissionDecider {
+    async fn decide(&mut self, params: &serde_json::Value) -> serde_json::Value {
+        use serde_json::json;
+        let tool_call = params
+            .get("toolCall")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let options = params.get("options").cloned().unwrap_or_else(|| json!([]));
+        let call_id = tool_call
+            .get("toolCallId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("acp-permission")
+            .to_owned();
+        let parked = crate::usecases::park_acp_permission(
+            &self.app,
+            &self.context,
+            crate::usecases::AcpPark {
+                run_id: &self.run_id,
+                bot: &self.bot,
+                thread: &self.thread,
+            },
+            &tool_call,
+            &options,
+            &call_id,
+        )
+        .await;
+        let card_id = match parked {
+            Ok(parked) => parked.card_id,
+            Err(error) => {
+                tracing::warn!(%error, "the ACP permission could not be parked; the call is refused");
+                return json!({ "outcome": { "outcome": "cancelled" } });
+            }
+        };
+        let Some(answer) = self.wait_for_answer(&card_id).await else {
+            tracing::warn!("the ACP permission card timed out unanswered; the call is refused");
+            return json!({ "outcome": { "outcome": "cancelled" } });
+        };
+        if answer == "approve"
+            && let Some(option_id) = choose_option(&options)
+        {
+            return json!({ "outcome": { "outcome": "selected", "optionId": option_id } });
+        }
+        json!({ "outcome": { "outcome": "cancelled" } })
+    }
+}
+
+impl PermissionDecider {
+    async fn wait_for_answer(&self, card_id: &boma_domain::CardId) -> Option<String> {
+        let started = std::time::Instant::now();
+        loop {
+            if started.elapsed() >= self.timeout {
+                return None;
+            }
+            if let Ok(Some(card)) = self.app.stores.cards.find(&self.context, card_id).await
+                && card.status != boma_domain::CardStatus::Pending
+            {
+                return card.answer;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+}
+
+/// Chooses the option for an approved permission, preferring `allow_once` (least persistence),
+/// then any allow-flavoured option, else the first one.
+fn choose_option(options: &serde_json::Value) -> Option<String> {
+    let options = options.as_array()?;
+    let pick = options
+        .iter()
+        .find(|option| option.get("kind").and_then(serde_json::Value::as_str) == Some("allow_once"))
+        .or_else(|| {
+            options.iter().find(|option| {
+                option
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| kind.starts_with("allow"))
+            })
+        })
+        .or_else(|| options.first())?;
+    pick.get("optionId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
 }
 
 /// The turn context the executor sees: prior messages, memory, skills, then the prompt.
@@ -153,6 +267,14 @@ impl ModelProvider for AcpProvider {
             &workspace,
             HANDSHAKE_TIMEOUT,
         )?;
+        session.set_permission_decider(Box::new(PermissionDecider {
+            app: Arc::clone(&self.app),
+            context: self.context.clone(),
+            run_id: request.run_id.clone(),
+            bot: request.bot.clone(),
+            thread: request.thread.clone(),
+            timeout: self.permission_timeout,
+        }));
         let _stderr = session.drain_stderr();
         session.initialize().await?;
         let session_id = session.session_new(&cwd).await?;

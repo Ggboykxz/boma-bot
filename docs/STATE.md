@@ -70,6 +70,31 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
     retention policy knob (`BOMA_ACP_KEEP_WORKSPACES`); `opencode acp` startup args are a GUESS
     until the OpenCode ACP path is exercised on a real machine.
 
+- **M23 slice 2 — ACP permissions feed the approval gateway (2026-11-16, REQ-061; CI green at push).**
+  The hard half of M23 done for real, not mocked: the executor's `session/request_permission`
+  blocks its session inside `session/prompt`; a `PermissionDecider` in `AcpProvider` parks an
+  approval card via the same machinery as internal tool parks (`park_acp_permission` →
+  `create_waiting_card`, shared helper) and polls the card until the person answers; the blocked
+  provider pass then sends `session/response` with `selected` (preferring `allow_once`) on
+  approve, or `cancelled` on anything else, and the turn ends normally with the person's decision
+  reflected in the answer. `answer_card` resolves `acp:perm:*` calls in place (nothing executes —
+  the executor does its own tool once authorised) and deliberately does **not** re-queue the run:
+  the provider pass that parked it owns it. The room still gets the card as a system block and
+  the initiator still gets the push ping (REQ-017 semantics).
+  - `ProviderRequest` gained `run_id` (tool approvals inside provider passes need it; agui/openai/
+    scripted providers ignore it).
+  - Stub extended (`--ask-permission`): requests permission with two options, waits, echoes the
+    outcome — `req_061_an_acp_permission_answered_approve` and
+    `..._deny_is_refused` both pass end to end (answer attributed to the bot; the port now blocks
+    until the person answers).
+  - Gates: fmt; clippy `-D warnings` clean (let-chains, no-arg-packing workarounds for arity);
+    `cargo test --workspace --locked` — 580 ok; only the 12 pre-existing Docker-dependent tests
+    fail in this sandbox (no Docker; CI runs them).
+  - NOT in this slice (recorded): OpenCode matrix rows beyond the first; `BOMA_ACP_KEEP_WORKSPACES`;
+    a spawn window for ACP questions answered outside the approver window (the poll is 500 ms,
+    decision expires after `permission_timeout` → `cancelled`); stall on `still_live` during
+    permission wait (cancel needs the person to answer or the timeout); workspace GC.
+
 - **v0.2.2 — the brand ships (2026-11-16, commit `e01087c`, tag `v0.2.2`, release run 43858391776 green).**
   The owner-supplied robot-cat head (`assets/brand/boma-bot-head.svg`, provided in chat 2026-11-16;
   master embedded verbatim) replaces the rejected enclosure mark everywhere: `icon.ico` 16…1024,

@@ -10542,27 +10542,53 @@ mod acp_agent_tests {
         )],
     };
 
-    fn stub_provider(root: &std::path::Path) -> Arc<dyn boma_app::ports::ModelProvider> {
+    const STUB_ASK_PERMISSION_SPEC: boma_app::acp_provider::ExecutorSpec =
+        boma_app::acp_provider::ExecutorSpec {
+            id: "stub-ask",
+            command: "python3",
+            args: &[
+                concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/stub-acp-agent.py"),
+                "--ask-permission",
+            ],
+        };
+
+    fn stub_provider(
+        app: &boma_app::service::App,
+        context: &boma_domain::TenantContext,
+        root: &std::path::Path,
+        permission_timeout: std::time::Duration,
+    ) -> Arc<dyn boma_app::ports::ModelProvider> {
         Arc::new(boma_app::acp_provider::AcpProvider::new(
             STUB_SPEC,
+            Arc::new(app.clone()),
+            context.clone(),
             Some(root.to_path_buf()),
             std::time::Duration::from_secs(30),
+            permission_timeout,
         ))
     }
 
-    fn missing_provider(root: &std::path::Path) -> Arc<dyn boma_app::ports::ModelProvider> {
+    fn missing_provider(
+        app: &boma_app::service::App,
+        context: &boma_domain::TenantContext,
+        root: &std::path::Path,
+    ) -> Arc<dyn boma_app::ports::ModelProvider> {
         Arc::new(boma_app::acp_provider::AcpProvider::new(
             boma_app::acp_provider::ExecutorSpec {
                 id: "missing-xyz",
                 command: "boma-acp-no-such-binary-xyz",
                 args: &[],
             },
+            Arc::new(app.clone()),
+            context.clone(),
             Some(root.to_path_buf()),
             std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(5),
         ))
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn req_061_an_acp_executor_answers_in_the_room() {
         let workspace_root =
             std::env::temp_dir().join(format!("boma-test-acp-{}", std::process::id()));
@@ -10600,7 +10626,12 @@ mod acp_agent_tests {
         let app = Arc::new(test.app().clone());
         let worker = Worker::new(
             app,
-            stub_provider(&workspace_root),
+            stub_provider(
+                test.app(),
+                &context,
+                &workspace_root,
+                std::time::Duration::from_secs(5),
+            ),
             "worker-acp-1".to_owned(),
         );
         assert!(
@@ -10706,7 +10737,7 @@ mod acp_agent_tests {
         let app = Arc::new(test.app().clone());
         let worker = Worker::new(
             app,
-            missing_provider(&workspace_root),
+            missing_provider(test.app(), &context, &workspace_root),
             "worker-acp-2".to_owned(),
         );
         assert!(
@@ -10794,5 +10825,208 @@ mod acp_agent_tests {
             .await
             .expect("the store answers");
         assert!(after.is_none(), "detach removed the attachment");
+    }
+
+    async fn find_approval_card(
+        test: &TestApp,
+        context: &boma_domain::TenantContext,
+        thread_id: &boma_domain::ThreadId,
+    ) -> String {
+        for _ in 0..200 {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let page = test
+                .app()
+                .stores
+                .messages
+                .page(context, thread_id, None, 10)
+                .await
+                .expect("the page answers");
+            if let Some(card_id) = page
+                .messages
+                .iter()
+                .flat_map(|message| message.blocks.iter())
+                .find_map(|block| match block {
+                    boma_domain::Block::Card { card_id, .. } => Some(card_id.clone()),
+                    _ => None,
+                })
+            {
+                return card_id;
+            }
+        }
+        panic!("the approval card never appeared in the thread");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_061_an_acp_permission_answered_approve() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("boma-test-acp-perm-approve-{}", std::process::id()));
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("acp-approve@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let (bot_id, thread_id) = test
+            .seed_bot(&space.id, &user_id, "executor")
+            .await
+            .expect("the bot exists");
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "edit the file please".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            Arc::new(boma_app::acp_provider::AcpProvider::new(
+                STUB_ASK_PERMISSION_SPEC,
+                Arc::new(test.app().clone()),
+                context.clone(),
+                Some(workspace_root.clone()),
+                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(5),
+            )),
+            "worker-acp-3".to_owned(),
+        );
+        let handle = tokio::spawn(async move { worker.step().await });
+
+        let card_id = find_approval_card(&test, &context, &thread_id).await;
+
+        boma_app::usecases::answer_card(test.app(), &context, &card_id, "approve")
+            .await
+            .expect("the person approves the ACP permission");
+
+        let answered = handle
+            .await
+            .expect("the worker task joins")
+            .expect("the worker answers");
+        assert!(answered, "the worker claimed the queued run");
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread_id, None, 10)
+            .await
+            .expect("the page answers");
+        let reply = page
+            .messages
+            .iter()
+            .find(|message| message.role == boma_domain::MessageRole::Bot)
+            .expect("the executor's answer is attributed to the bot");
+        let reply_text = reply
+            .blocks
+            .iter()
+            .filter_map(boma_domain::Block::as_text)
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            reply_text.contains("allow_once"),
+            "the executor received the person's decision: {reply_text}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn req_061_an_acp_permission_answered_deny_is_refused() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("boma-test-acp-perm-deny-{}", std::process::id()));
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("acp-deny@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let (bot_id, thread_id) = test
+            .seed_bot(&space.id, &user_id, "executor")
+            .await
+            .expect("the bot exists");
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot_id.to_string(),
+                text: "edit the file please".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let worker = Worker::new(
+            Arc::new(test.app().clone()),
+            Arc::new(boma_app::acp_provider::AcpProvider::new(
+                STUB_ASK_PERMISSION_SPEC,
+                Arc::new(test.app().clone()),
+                context.clone(),
+                Some(workspace_root.clone()),
+                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(5),
+            )),
+            "worker-acp-4".to_owned(),
+        );
+        let handle = tokio::spawn(async move { worker.step().await });
+
+        let card_id = find_approval_card(&test, &context, &thread_id).await;
+
+        boma_app::usecases::answer_card(test.app(), &context, &card_id, "deny")
+            .await
+            .expect("the person refuses the ACP permission");
+
+        let answered = handle
+            .await
+            .expect("the worker task joins")
+            .expect("the worker answers");
+        assert!(answered, "the worker claimed the queued run");
+
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread_id, None, 10)
+            .await
+            .expect("the page answers");
+        let reply = page
+            .messages
+            .iter()
+            .find(|message| message.role == boma_domain::MessageRole::Bot)
+            .expect("the executor's answer is attributed to the bot");
+        let reply_text = reply
+            .blocks
+            .iter()
+            .filter_map(boma_domain::Block::as_text)
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            reply_text.contains("cancelled"),
+            "the executor received the refusal: {reply_text}"
+        );
     }
 }

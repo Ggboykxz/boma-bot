@@ -20,6 +20,15 @@ const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 
 const READ_CAPACITY: usize = 8 * 1024;
 
+/// Something that decides an ACP permission request; the application layer implements it
+/// (REQ-061). The decider returns the exact `result` object the agent expects for its
+/// `session/request_permission` response.
+#[async_trait::async_trait]
+pub trait PermissionDecider: Send {
+    /// The params of the permission request; the response object for the agent.
+    async fn decide(&mut self, params: &Value) -> Value;
+}
+
 /// What an attached ACP executor answers, once attached.
 pub struct AcpSession {
     child: Child,
@@ -27,6 +36,7 @@ pub struct AcpSession {
     stdout: BufReader<ChildStdout>,
     next_id: u64,
     timeout: Duration,
+    permission_decider: Option<Box<dyn PermissionDecider>>,
 }
 
 impl std::fmt::Debug for AcpSession {
@@ -68,8 +78,15 @@ impl AcpSession {
             stdout: BufReader::with_capacity(READ_CAPACITY, stdout),
             next_id: 1,
             timeout: io_timeout,
+            permission_decider: None,
         };
         Ok(session)
+    }
+
+    /// Attaches a permission decider; the app layer parks an approval card and answers it from
+    /// here (REQ-061). Without one, permission requests are answered `cancelled`.
+    pub fn set_permission_decider(&mut self, decider: Box<dyn PermissionDecider>) {
+        self.permission_decider = Some(decider);
     }
 
     /// Drains stderr into the trace log; never on the critical path.
@@ -245,6 +262,22 @@ impl AcpSession {
             }
             let value: Value = serde_json::from_str(trimmed).map_err(|_| AppError::Unavailable)?;
             match value.get("method").and_then(Value::as_str) {
+                Some("session/request_permission") => {
+                    let agent_id = value.get("id").and_then(Value::as_u64).unwrap_or(0);
+                    let response = if let Some(decider) = &mut self.permission_decider {
+                        decider
+                            .decide(value.get("params").unwrap_or(&Value::Null))
+                            .await
+                    } else {
+                        json!({ "outcome": { "outcome": "cancelled" } })
+                    };
+                    self.send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": agent_id,
+                        "result": response,
+                    }))
+                    .await?;
+                }
                 Some("session/update") => {
                     let update = value.pointer("/params/update");
                     let chunk_text = update
