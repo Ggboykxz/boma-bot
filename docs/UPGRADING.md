@@ -55,6 +55,39 @@ against a live system that served traffic, and never edit an applied migration f
    Check: `boma worker --help` for flags; its drain is observable in the JSON logs
    (`run.execution_started` / `run.finished`).
 
+## Path C — local k3d (single-node chart)
+
+For hacking on Boma Bot from a clean checkout on your laptop — not a production posture
+(ADR-016). There is no HA, no TLS opinion, and no rolling upgrade; one node runs everything,
+and Postgres lives in-cluster with a throwaway PVC.
+
+1. Install k3d and helm (`brew install k3d helm` or the distro equivalent).
+2. Create a cluster:
+   `k3d cluster create boma -p 3000:3000@loadbalancer`
+3. Install the app:
+   ```bash
+   MASTER_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+   helm install boma deploy/helm/boma-bot \
+     --set boma.masterKey="$MASTER_KEY" \
+     --set image.repository=boma-bot \
+     --set image.tag=0.1.0
+   ```
+4. Wait for the Job (`kubectl get jobs`), then port-forward:
+   `kubectl port-forward svc/boma-bot-app 3000:3000 &` and open <http://127.0.0.1:3000>.
+5. Probe: `/health`, `/ready`, `/healthz`, `/readyz` — expect `{"ok": true}`.
+
+What the chart carries: app (api + worker), an in-cluster Postgres with a throwaway PVC, a
+`migrate` Job (helm hook), the service, and one ConfigMap + two Secrets. It requires the
+`BOMA_MASTER_KEY` to be set — omitting it fails the chart with a legible message, never a
+silent degraded boot.
+
+Delete everything: `helm uninstall boma && k3d cluster delete boma`.
+
+For anything beyond a laptop: point `externalPostgres.dsn` at a real Postgres, leave the
+in-cluster one disabled, and put a reverse proxy with TLS in front of the service yourself.
+The chart never creates TLS; an ingress is opt-in and references an existing secret you supply
+via `ingress.tls`.
+
 ## Recovering
 
 - **App unhealthy after upgrade**: stop it, restore

@@ -128,13 +128,38 @@ of `access_grants` by a gate; role change / member removal verbs (the AC does no
       → fail-fast at boot. The public key is derived from the private one; no key is generated,
       cached, or leaked by the deployment.
     - OpenSSL headers declared (pkg-config + libssl-dev) for `web-push` → `ece` → `openssl-sys`.
-    - REQ-049 (voice) untouched; desktop signing untouched (identity blocked); destinations and
-      k3d chart are M15.2/M15.3.
+    - REQ-049 (voice) untouched; desktop signing untouched (identity blocked).
     - `cargo deny` advisory tripwires hit twice on `web-push`'s chain (rsa via jwt-simple/
       superboring; crypto-bigint via jwt-simple -> p256 -> ecdsa -> elliptic-curve). No fix
       exists inside the semver windows available (web-push 0.11.0 pins jwt-simple ^0.12.11).
       Documented ignores in deny.toml with dated rationale; the threat model (signature-only,
       deployment-owned service-identity key, no decryption) is recorded there.
+  - M15.2 (this slice) — destinations (Slack/Teams incoming webhooks), REQ-065:
+    migration `0057_notification_destinations.sql` (space-sealed Slack/Teams webhook, tenant
+    RLS), `0058_notification_destination_flags.sql` (two boolean destination flags on
+    `notification_policies`, default off). The same policy row gates the destination sends as
+    the browser push; the daily cap is shared between browser + destinations; the title shipped
+    to a channel is the same title the browser push carries (never tool names, never message
+    text, never user names). Destinations route through the same fan-out function in
+    `crates/app/src/push.rs` — one code path, two sinks. RPC additions: `destinationsList`
+    (any member), `destinationsCreate`/`Delete` (Owner/Admin). The panel shows member-opted-in
+    flags; a section to register channels appears when the user is subscribed.
+    `req_065_*` tests at all layers: memory double, PG integration (RLS, cap, round-trip),
+    app delivery fan-out with the shared cap boundary pinned, wire RPC round-trip, e2e panel.
+    `cargo deny check` stays green with two documented advisory ignores (web-push chain, 2026-11).
+    Out-of-scope-by-design: anything richer than one-line pushes to a channel (payload text
+    stays title-only).
+  - M15.3 (this slice) — k3d single-node Helm chart: `deploy/helm/boma-bot/` renders the whole
+    stack (in-cluster Postgres 17.11-alpine on a throwaway PVC by default; optional external
+    `externalPostgres.dsn`), the app and worker deployments, a helm-pre-hook `migrate` Job, and
+    a single `Service`; optional ingress with an `ingress.tls` secret reference (default off, no
+    TLS opinion). The chart refuses to boot without `boma.masterKey` (legible failure, not a
+    silent degraded mode). CI runs `helm lint` + `helm template` in two paths (in-cluster and
+    external-postgres) on every push. Linux-laptop install: `k3d cluster create boma
+    -p 3000:3000@loadbalancer` + `helm install boma deploy/helm/boma-bot --set
+    boma.masterKey=… --set image.repository=boma-bot --set image.tag=0.1.0`. Documented as
+    "Path C — local k3d" in docs/UPGRADING.md with the honest limits (no HA, no rolling
+    upgrade, no TLS default, throwaway Postgres). Desktop signing still blocked on an identity.
   - M12.2 (this slice) — external agents are clickable: thread header now carries an inline
     panel (inline form for base URL + agent name + secret name) calling
     `/rpc/bots/externalAgentStatus`, `bots.connectExternal`, `botsDisconnectExternal`;

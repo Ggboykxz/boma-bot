@@ -202,3 +202,26 @@ jobs:
       - name: stop the stack and its volume
         if: always()
         run: docker compose down -v
+
+  chart:
+    # The chart is the documented single-node path; a broken chart is no better than a broken compose.
+    name: chart (helm lint + template)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install helm
+        run: |
+          curl -fsSL https://get.helm.sh/helm-v3.22.1-linux-amd64.tar.gz -o /tmp/helm.tgz
+          tar -xzf /tmp/helm.tgz -C /tmp
+          sudo cp /tmp/linux-amd64/helm /usr/local/bin/helm
+          helm version --short
+
+      - name: lint the chart
+        run: helm lint deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway
+
+      - name: render the in-cluster path
+        run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set image.repository=boma-bot --set image.tag=0.1.0
+
+      - name: render the external-postgres path
+        run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set postgresql.enabled=false --set externalPostgres.dsn=postgres://boma:ci@example.com:5432/boma

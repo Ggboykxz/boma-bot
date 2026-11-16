@@ -1,0 +1,67 @@
+# Local k3d bring-up only — this chart is not a production posture (docs/UPGRADING.md §Path C).
+# Single node, no HA, throwaway in-cluster Postgres. For anything real: bring your own database,
+# put a reverse proxy with TLS in front, and never reuse this values file.
+
+image:
+  repository: boma-bot
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# The only secret that MUST be overridden before `helm install`; without it the boot fails fast.
+# Pick a real deployment-wide vault key — losing it loses every sealed secret (REQ-046).
+# Generate with: python3 -c 'import secrets; print(secrets.token_hex(32))'
+boma:
+  masterKey: ""
+
+postgresql:
+  enabled: true
+  user: boma
+  password: boma
+  database: boma
+  storage: 1Gi
+  # image for in-cluster bring-up; do not use in production
+  image: postgres:17.11-alpine
+
+externalPostgres:
+  # When set, overrides the in-cluster database. Format: postgres://user:pass@host:5432/db
+  dsn: ""
+
+resources:
+  app:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  worker:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  postgres:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+# The app is served by the Rust binary which also serves the static web bundle.
+service:
+  type: ClusterIP
+  port: 3000
+
+# Optional ingress for exposing the service; if you use it, put a real TLS certificate on it.
+# Default: disabled. Point your Caddy/Traefik/ingress-nginx at the service instead.
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls: []
+    # - secretName: boma-bot-tls
+    #   hosts:
+    #     - boma.example.com

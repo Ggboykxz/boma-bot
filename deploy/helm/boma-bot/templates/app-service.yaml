@@ -1,0 +1,16 @@
+{{- /* Service for the app; single-node bring-up only */ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "boma-bot.fullname" . }}-app
+  labels:
+    {{- include "boma-bot.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "boma-bot.name" . }}-app
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: 3000
+      protocol: TCP
+      name: http

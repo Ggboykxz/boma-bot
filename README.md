@@ -74,6 +74,9 @@ Prérequis : `rustup` (le fichier `rust-toolchain.toml` épingle 1.99.1 ; la MSR
    `npm --prefix apps/web ci` puis `npm --prefix apps/web run dev`.
 5. Portes qualité : `make check` (fmt, clippy, types, tests, couverture, deny, machete, trace, secrets) et `make ui-test` (Playwright, goldens UI, axe).
 6. Docker : `docker compose up --build` ; le service `migrate` applique les migrations avant que `app` ne serve.
+   Pour un k3d local tout-en-un : `k3d cluster create boma -p 3000:3000@loadbalancer` puis
+   `helm install boma deploy/helm/boma-bot --set boma.masterKey="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"` ;
+   voir docs/UPGRADING.md pour le détail et les limites.
 7. Mise à jour depuis une ancienne image : voir docs/UPGRADING.md (sauvegarde, migrations, rollback).
 8. Ordinateur avec navigateur (observation et action, REQ-028) : `SANDBOX_PROVIDER=docker`, puis `BOMA_COMPUTER_IMAGE=zenika/alpine-chrome:latest`, `BOMA_COMPUTER_CMD="--headless --no-sandbox --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 about:blank"` et `BOMA_COMPUTER_CDP_PORT=9222`. Sans ces trois variables, l'ordinateur reste l'image alpine (shell et fichiers) : les cas d'usage navigateur répondent `Unavailable`, jamais de faux pixels. Ces cas d'usage ne sont pas encore exposés au fil RPC ni appelés par l'agent (voir docs/STATE.md, M4).
 

@@ -1,0 +1,16 @@
+{{- /* ConfigMap of the non-secret runtime environment (ADR-018) */ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "boma-bot.fullname" . }}-env
+  labels:
+    {{- include "boma-bot.labels" . | nindent 4 }}
+data:
+  BOMA_BIND_ADDR: "0.0.0.0:3000"
+  BOMA_LOG_FORMAT: json
+  BOMA_LOG_FILTER: info
+  BOMA_VERSION: {{ .Chart.AppVersion | quote }}
+  BOMA_RUNTIME: sandboxed
+  SANDBOX_PROVIDER: none
+  BOMA_JOBS: postgres
+  BOMA_REALTIME: postgres

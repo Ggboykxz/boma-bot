@@ -1,0 +1,33 @@
+{{- /*
+Helm hook: runs after the database is ready, before app/worker become Ready.
+Mirror compose.yaml: db -> migrate -> app -> worker. No traffic against an unmigrated database.
+*/ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "boma-bot.fullname" . }}-migrate
+  labels:
+    {{- include "boma-bot.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: hook-succeeded
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "boma-bot.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ printf "%s:%s" .Values.image.repository .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "boma-bot.fullname" . }}-env
+            - secretRef:
+                name: {{ include "boma-bot.fullname" . }}-db
+            - secretRef:
+                name: {{ include "boma-bot.fullname" . }}-master-key

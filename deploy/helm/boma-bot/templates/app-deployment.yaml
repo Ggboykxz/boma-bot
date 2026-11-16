@@ -1,0 +1,43 @@
+{{- /* app Deployment — serves the API and the static web bundle */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "boma-bot.fullname" . }}-app
+  labels:
+    {{- include "boma-bot.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "boma-bot.name" . }}-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "boma-bot.name" . }}-app
+        {{- include "boma-bot.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: app
+          image: {{ printf "%s:%s" .Values.image.repository .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - containerPort: 3000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: {{ include "boma-bot.fullname" . }}-env
+            - secretRef:
+                name: {{ include "boma-bot.fullname" . }}-db
+            - secretRef:
+                name: {{ include "boma-bot.fullname" . }}-master-key
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+            initialDelaySeconds: 10
+          resources:
+            {{- toYaml .Values.resources.app | nindent 12 }}
