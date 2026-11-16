@@ -24,7 +24,6 @@ use crate::{
 pub fn router(state: AppState) -> Router {
     let http = state.http().clone();
     let middleware_state = state.clone();
-    let state2 = state.clone();
 
     let main = Router::new()
         .route("/health", get(health::liveness))
@@ -123,7 +122,16 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/assets/page-runtime.js",
             get(pages::page_runtime_js),
         )
-        .merge(rpc::router())
+        .merge(rpc::router());
+    // Every route above, and the fallback below, carries the body cap, the request timeout, the
+    // security headers and request logging — exactly once. The automation surface sits outside
+    // the global timeout by design (see below) and carries its own equivalent layers instead.
+    let automation_wait = state.app().services.automation_wait_timeout_seconds;
+    let automation = automation::router(state.clone(), automation_wait);
+    let root = Router::new()
+        .merge(main)
+        .fallback(web_fallback)
+        .with_state(state)
         .layer(DefaultBodyLimit::max(http.body_limit_bytes()))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -145,17 +153,9 @@ pub fn router(state: AppState) -> Router {
             middleware_state,
             correlation::log_http,
         ));
-    // The automation surface sits outside the global request timeout: `wait=true` calls are long
-    // polls by design. It carries its own equivalent layers, sized to the configured wait.
-    let automation_wait = state.app().services.automation_wait_timeout_seconds;
     Router::new()
-        .nest(
-            "/api/v1/automation",
-            automation::router(state, automation_wait),
-        )
-        .merge(main)
-        .fallback(web_fallback)
-        .with_state(state2)
+        .nest("/api/v1/automation", automation)
+        .merge(root)
 }
 
 /// The static-adjacent fallback (REQ-055).

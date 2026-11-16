@@ -1022,6 +1022,30 @@ async fn req_055_the_export_serves_directory_index_pages_at_the_origin() {
 }
 
 #[tokio::test]
+async fn req_055_the_web_fallback_carries_the_same_security_headers_as_the_api() {
+    // Regression: the static export path once answered without nosniff/no-referrer/no-store (and
+    // outside request logging) because the fallback sat outside the middleware layers.
+    let (state, _root) = state_with_web_root(true);
+    let response = get_accept(state, "/", "text/html").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers
+            .get("x-content-type-options")
+            .and_then(|v| v.to_str().ok()),
+        Some("nosniff")
+    );
+    assert_eq!(
+        headers.get("referrer-policy").and_then(|v| v.to_str().ok()),
+        Some("no-referrer")
+    );
+    assert!(
+        headers.get("cache-control").is_some(),
+        "a cache-control header is present"
+    );
+}
+
+#[tokio::test]
 async fn req_055_an_unknown_api_path_keeps_the_json_404_even_with_the_export_next_to_it() {
     let (state, _) = state_with_web_root(true);
     let response = get_accept(state, "/api/unknown/thing", "text/html").await;

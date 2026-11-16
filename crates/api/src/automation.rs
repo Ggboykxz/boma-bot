@@ -479,8 +479,10 @@ async fn approvals_answer(
 /// Builds the automation surface; nested into the root router under `/api/v1/automation`,
 /// *outside* the global request timeout: `wait=true` calls are long polls by design. The surface
 /// carries the same response-header layers and request logging as the main router, a 64 KiB
-/// body cap, and its own timeout sized to the configured automation wait plus a grace.
-pub fn router(correlation_state: AppState, wait_timeout_seconds: u64) -> Router<AppState> {
+/// body cap, and its own timeout sized to the configured automation wait plus a grace. The
+/// returned router is final (it owns its state) so the root may nest it without supplying one.
+pub fn router(state: AppState, wait_timeout_seconds: u64) -> Router {
+    let correlation_state = state.clone();
     Router::new()
         .route("/agents", axum::routing::get(agents_list))
         .route(
@@ -518,4 +520,5 @@ pub fn router(correlation_state: AppState, wait_timeout_seconds: u64) -> Router<
             correlation_state,
             correlation::log_http,
         ))
+        .with_state(state)
 }
