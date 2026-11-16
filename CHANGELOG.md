@@ -4,6 +4,14 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.2.2] - 2026-11-16
+
+Patch release of v0.2.1: ships the new brand. The enclosure/ticks mark authored for v0.2.0 was
+rejected by the owner; the shipping brand is the owner-supplied robot-cat head (dark gunmetal,
+cyan glowing eyes — `assets/brand/boma-bot-head.svg`). New app icons everywhere (desktop NSIS
+installer art, web favicon/apple-touch/icon, README lockup, landing and auth shells). No product
+changes.
+
 ## [0.2.1] - 2026-11-16
 
 Patch release of v0.2.0: the v0.2.0 release published the Linux artifacts, but its Windows desktop
