@@ -138,6 +138,13 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
+      - name: Build the web client
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
       - name: "Install OpenSSL for openssl-sys (web-push to ece)"
         shell: bash
         run: vcpkg install openssl:x64-windows-static-md
