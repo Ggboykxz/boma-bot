@@ -168,7 +168,7 @@ Sizes: S ≤ 1 week, M ≤ 3 weeks, L ≤ 6 weeks of single-maintainer work.
 | M25 | Pause/resume & delegation control surface | REQ-067 (SHOULD), REQ-068 (SHOULD) | pause flips pending runs to paused; Stop/Resume/Reassign/Archive/Restore delegation controls in rooms | M |
 | M26 | Discord + WhatsApp fronts | REQ-070 (SHOULD) | front registry extended; parity with Slack/Telegram ingress; owners configure the front (flag/secret) | M |
 | M27 | Embedded browser pane | REQ-071 (SHOULD) | full CDP browser in the desktop client; computer-takeover machinery reused | L |
-| M28 | Local automation API + CLI | REQ-072 (MUST) | token-gated automation endpoint; `boma-cli`; same use cases, same approval gates, same run semantics as interactive | M |
+| M28 | Local automation API + CLI | REQ-072 (MUST) | **landed 2026-11-16**: token-gated `/api/v1/automation/*` (agents, send/wait, routine run, approvals list/answer) + `boma automation` CLI; same use cases, same gates. One clause outstanding: «start a fresh chat» — one persistent conversation per agent in this build, no use case for a second; recorded in STATE.md | M |
 | M29 | User theme palettes | REQ-073 (SHOULD) | `themes/` JSON palettes, live reload, malformed files ignored with a log line | S |
 | M30 | Distribution parity | — | AppImage, Nix flake (unfree predicate), Umbrel store entry, AWS ECS task (packaging + docs; ADRs) | M |
 | M31 | Curated first-party agents and skills | REQ-074 (SHOULD) | our own curated set, one-click install, distinct from community plugins; REQ-034-reviewed community path unchanged | M |

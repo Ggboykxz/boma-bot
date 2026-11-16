@@ -11,7 +11,8 @@ use axum::{
 use tower_http::{set_header::SetResponseHeaderLayer, timeout::TimeoutLayer};
 
 use crate::{
-    authroutes, correlation, error::ApiError, health, pages, public, rpc, screen, state::AppState,
+    authroutes, automation, correlation, error::ApiError, health, pages, public, rpc, screen,
+    state::AppState,
 };
 
 /// Builds the HTTP surface.
@@ -23,8 +24,9 @@ use crate::{
 pub fn router(state: AppState) -> Router {
     let http = state.http().clone();
     let middleware_state = state.clone();
+    let state2 = state.clone();
 
-    Router::new()
+    let main = Router::new()
         .route("/health", get(health::liveness))
         .route("/healthz", get(health::liveness))
         .route("/ready", get(health::readiness))
@@ -122,8 +124,6 @@ pub fn router(state: AppState) -> Router {
             get(pages::page_runtime_js),
         )
         .merge(rpc::router())
-        .fallback(web_fallback)
-        .with_state(state)
         .layer(DefaultBodyLimit::max(http.body_limit_bytes()))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -144,7 +144,18 @@ pub fn router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             middleware_state,
             correlation::log_http,
-        ))
+        ));
+    // The automation surface sits outside the global request timeout: `wait=true` calls are long
+    // polls by design. It carries its own equivalent layers, sized to the configured wait.
+    let automation_wait = state.app().services.automation_wait_timeout_seconds;
+    Router::new()
+        .nest(
+            "/api/v1/automation",
+            automation::router(state, automation_wait),
+        )
+        .merge(main)
+        .fallback(web_fallback)
+        .with_state(state2)
 }
 
 /// The static-adjacent fallback (REQ-055).

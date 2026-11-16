@@ -2929,6 +2929,18 @@ impl MemoryCardStore {
 
 #[async_trait::async_trait]
 impl CardStore for MemoryCardStore {
+    async fn list_pending(&self, context: &TenantContext) -> Result<Vec<Card>, AppError> {
+        let state = read(&self.state);
+        let mut pending: Vec<Card> = state
+            .cards
+            .iter()
+            .filter(|row| visible(context, &row.space_id) && row.card.status == CardStatus::Pending)
+            .map(|row| row.card.clone())
+            .collect();
+        pending.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        Ok(pending)
+    }
+
     async fn find(&self, context: &TenantContext, id: &CardId) -> Result<Option<Card>, AppError> {
         let state = read(&self.state);
         let Some(row) = state.cards.iter().find(|row| row.card.id == *id) else {

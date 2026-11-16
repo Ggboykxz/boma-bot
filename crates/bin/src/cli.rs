@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 
-use crate::{commands, config::Config, probe, telemetry};
+use crate::{automation, commands, config::Config, probe, telemetry};
 
 /// `boma` — server, worker and operator tools for Boma Bot.
 #[derive(Debug, Parser)]
@@ -51,6 +51,12 @@ enum Command {
         #[arg(long, default_value = "/ready")]
         path: String,
     },
+    /// Drive the deployment's local automation surface (REQ-072); never reachable without a
+    /// deployment-wide bearer.
+    Automation {
+        #[command(subcommand)]
+        command: automation::AutomationCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -76,6 +82,7 @@ pub async fn run() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Automation { command } => automation::run(command).await,
         Command::Serve => commands::serve(load_config()?).await,
         Command::Worker => commands::worker(load_config()?).await,
         Command::Migrate => commands::migrate(load_config()?).await,
@@ -103,6 +110,7 @@ mod tests {
             (vec!["boma", "migrate"], "migrate"),
             (vec!["boma", "rekey"], "rekey"),
             (vec!["boma", "probe"], "probe"),
+            (vec!["boma", "automation", "agents"], "automation"),
         ] {
             let cli = Cli::try_parse_from(&arguments).expect("the command parses");
             let name = match cli.command {
@@ -112,6 +120,7 @@ mod tests {
                 Command::Rekey => "rekey",
                 Command::Probe { .. } => "probe",
                 Command::Admin { .. } => "admin",
+                Command::Automation { .. } => "automation",
             };
             assert_eq!(name, expected);
         }

@@ -6,6 +6,7 @@
 
 #![deny(missing_docs)]
 
+mod automation;
 mod cli;
 mod commands;
 mod computer;

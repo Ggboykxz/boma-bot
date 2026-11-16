@@ -136,6 +136,8 @@ pub struct Config {
     pub billing: BillingSettings,
     /// The SCIM sync settings (REQ-045).
     pub scim: ScimSettings,
+    /// The local automation surface (REQ-072).
+    pub automation: AutomationSettings,
     /// Whether to print the one-time invitation link (REQ-042). This deployment has no outbound
     /// mail by default; `true` writes exactly one line with the inviter id and the link per invite.
     pub print_invite_link: bool,
@@ -195,6 +197,20 @@ pub struct ScimSettings {
     /// The at-least-16-character bearer (`BOMA_SCIM_TOKEN`), unknown to the app itself.
     /// `None` means the SCIM surface answers 404 for every request, exactly as if it were absent.
     pub token: Option<String>,
+}
+
+/// The local automation surface (REQ-072): a deployment-wide bearer and the bot ids it may drive.
+///
+/// `token` unset means the automation surface answers 404 for every request. `agents` lists the
+/// bot ids the token may drive; `*` means every bot. See `.env.example`.
+#[derive(Debug, Clone)]
+pub struct AutomationSettings {
+    /// The at-least-16-character bearer (`BOMA_AUTOMATION_TOKEN`).
+    pub token: Option<String>,
+    /// The bot ids the token may drive; `*` as the only entry means all of them.
+    pub agents: Vec<String>,
+    /// How long `POST /api/v1/automation/.../messages?wait=true` waits for a terminal run.
+    pub wait_timeout_seconds: u64,
 }
 
 /// The bring-your-own-key OpenAI-compatible provider (REQ-015).
@@ -344,6 +360,7 @@ impl Config {
             public_base_url: parse_public_base_url(&env)?,
             billing: parse_billing(&env)?,
             scim: parse_scim(&env)?,
+            automation: parse_automation(&env)?,
             print_reset_link: optional_parsed(&env, "BOMA_AUTH_PRINT_RESET_LINK", false)?,
             print_invite_link: optional_parsed(&env, "BOMA_SPACES_PRINT_INVITE_LINK", false)?,
         })
@@ -617,6 +634,59 @@ fn parse_scim(env: &BTreeMap<String, String>) -> Result<ScimSettings, ConfigErro
         (false, Some(_)) => Err(ConfigError::Billing(
             "BOMA_SCIM_TOKEN without BOMA_SCIM=true does nothing; set both".to_owned(),
         )),
+    }
+}
+
+/// Parses the automation surface (REQ-072).
+///
+/// `BOMA_AUTOMATION_TOKEN` at-least-16, `BOMA_AUTOMATION_AGENTS` comma-separated bot ids
+/// (`*` for all) and `BOMA_AUTOMATION_WAIT_TIMEOUT_SECONDS` (default 120). A half-configured
+/// surface refuses to boot, exactly like billing.
+fn parse_automation(env: &BTreeMap<String, String>) -> Result<AutomationSettings, ConfigError> {
+    let token = optional(env, "BOMA_AUTOMATION_TOKEN");
+    let agents = parse_string_list(env, "BOMA_AUTOMATION_AGENTS");
+    let wait_timeout_seconds =
+        optional_parsed(env, "BOMA_AUTOMATION_WAIT_TIMEOUT_SECONDS", 120_u64)?;
+    if wait_timeout_seconds == 0 || wait_timeout_seconds > 86_400 {
+        return Err(ConfigError::Invalid {
+            name: "BOMA_AUTOMATION_WAIT_TIMEOUT_SECONDS",
+            value: "must be between 1 and 86400 seconds".to_owned(),
+        });
+    }
+    match (token.as_deref(), agents.as_slice()) {
+        (None, []) => Ok(AutomationSettings {
+            token: None,
+            agents: Vec::new(),
+            wait_timeout_seconds,
+        }),
+        (Some(value), list) if value.len() >= 16 => {
+            if list.is_empty() {
+                return Err(ConfigError::Invalid {
+                    name: "BOMA_AUTOMATION_AGENTS",
+                    value: "set at least one bot id, or `*`, when BOMA_AUTOMATION_TOKEN is set"
+                        .to_owned(),
+                });
+            }
+            Ok(AutomationSettings {
+                token: Some(value.to_owned()),
+                agents: list.to_vec(),
+                wait_timeout_seconds,
+            })
+        }
+        (Some(_), _) => Err(ConfigError::Invalid {
+            name: "BOMA_AUTOMATION_TOKEN",
+            value: "must be at least 16 characters".to_owned(),
+        }),
+        (None, list) if !list.is_empty() => Err(ConfigError::Invalid {
+            name: "BOMA_AUTOMATION_TOKEN",
+            value: "BOMA_AUTOMATION_AGENTS without BOMA_AUTOMATION_TOKEN does nothing; set both"
+                .to_owned(),
+        }),
+        (None, _) => Ok(AutomationSettings {
+            token: None,
+            agents: Vec::new(),
+            wait_timeout_seconds,
+        }),
     }
 }
 

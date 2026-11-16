@@ -1168,3 +1168,256 @@ async fn req_055_a_parent_dot_path_never_resolves_to_the_export() {
     let response = get_accept(state, "/definitely-not-in-the-export.txt", "text/html").await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// ---------------------------------------------------------------------------
+// M28 — local automation surface (REQ-072): token-gated, allow-listed, same use cases
+// ---------------------------------------------------------------------------
+
+const AUTOMATION_TOKEN: &str = "automaton-token-not-a-real-secret-0123456789";
+
+fn automation_world(agents: &[&str]) -> (AppState, boma_testkit::TestApp) {
+    let test_app = TestApp::builder()
+        .automation(AUTOMATION_TOKEN, agents)
+        .build();
+    let state = AppState::new(
+        Readiness::new(vec![Arc::new(Probe { healthy: true })]),
+        capabilities(),
+        auth_capabilities(),
+        http_config(),
+        test_app.app().clone(),
+    );
+    (state, test_app)
+}
+
+async fn automation_post(state: AppState, path: &str, bearer: &str, body: &str) -> Response {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body(Body::from(body.to_owned()))
+        .expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+async fn automation_get(state: AppState, path: &str, bearer: &str) -> Response {
+    let request = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body(Body::empty())
+        .expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answers")
+}
+
+#[tokio::test]
+async fn req_072_the_surface_is_absent_without_config_and_requires_one_bearer() {
+    // The surface is absent entirely when BOMA_AUTOMATION_TOKEN is unset.
+    let bare_app = TestApp::builder().build();
+    let bare_state = AppState::new(
+        Readiness::new(vec![Arc::new(Probe { healthy: true })]),
+        capabilities(),
+        auth_capabilities(),
+        http_config(),
+        bare_app.app().clone(),
+    );
+    let response = automation_get(bare_state, "/api/v1/automation/agents", AUTOMATION_TOKEN).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // With the surface on, a wrong bearer is refused and the right one lists agents.
+    let (state, test_app) = automation_world(&["*"]);
+    let _ = test_app
+        .seed_user("owner@example.com", "correct horse battery")
+        .await;
+    let response =
+        automation_get(state.clone(), "/api/v1/automation/agents", "not-the-token").await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = automation_get(state, "/api/v1/automation/agents", AUTOMATION_TOKEN).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn req_072_wrong_bearer_and_unknown_agents_are_refused_uniformly() {
+    // The allow-list does not contain `bot-does-not-exist`, so the refusal precedes every
+    // lookup and does not depend on any bot existing.
+    let (state, _test_app) = automation_world(&["some-other-bot"]);
+    let path = "/api/v1/automation/agents/bot-does-not-exist/messages";
+    let response = automation_post(
+        state.clone(),
+        path,
+        "not-the-token",
+        r#"{"text":"plan my week"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response =
+        automation_post(state, path, AUTOMATION_TOKEN, r#"{"text":"plan my week"}"#).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn req_072_a_run_poll_reads_the_state_and_unknown_runs_are_not_found() {
+    use boma_app::usecases::{create_bot, ensure_local_owner, resolve_actor};
+    let (state, test_app) = automation_world(&["*"]);
+    let owner = ensure_local_owner(test_app.app())
+        .await
+        .expect("the local owner exists");
+    let actor = resolve_actor(test_app.app(), &owner, None)
+        .await
+        .expect("the local owner has a space");
+    let bot = create_bot(test_app.app(), &actor.context, "Assistant", None, None)
+        .await
+        .expect("the bot is created");
+
+    let send_path = format!("/api/v1/automation/agents/{}/messages", bot.bot.id.as_str());
+    let response = automation_post(
+        state.clone(),
+        &send_path,
+        AUTOMATION_TOKEN,
+        r#"{"text":"hold the thought"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body")
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+    let run_id = json["runId"].as_str().expect("the run id").to_owned();
+
+    let run_path = format!("/api/v1/automation/runs/{run_id}");
+    let response = automation_get(state.clone(), &run_path, AUTOMATION_TOKEN).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body")
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+    assert_eq!(json["runId"], run_id);
+    assert!(json["status"].is_string());
+
+    let response = automation_get(state.clone(), &run_path, "not-the-token").await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = automation_get(
+        state,
+        "/api/v1/automation/runs/run-does-not-exist",
+        AUTOMATION_TOKEN,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn req_072_an_enabled_agent_answers_and_its_approvals_round_trip() {
+    use boma_app::usecases::{create_bot, ensure_local_owner, resolve_actor};
+    let (state, test_app) = automation_world(&["*"]);
+    // The automation surface acts as the deployment's local owner (like local-first, REQ-066):
+    // create the bot in the local owner's space, not as another member.
+    let owner = ensure_local_owner(test_app.app())
+        .await
+        .expect("the local owner exists");
+    let actor = resolve_actor(test_app.app(), &owner, None)
+        .await
+        .expect("the local owner has a space");
+    let context = actor.context;
+    let bot = create_bot(test_app.app(), &context, "Assistant", None, None)
+        .await
+        .expect("the bot is created");
+
+    // The scripted provider answers with a sign-in request, which parks an approval card.
+    let provider = Arc::new(boma_testkit::ScriptedProvider::new_turn(vec![
+        boma_app::ports::ProviderTurn::ToolCalls(vec![boma_app::ports::ToolCallRequest {
+            id: "call_signin".to_owned(),
+            name: "signin.site".to_owned(),
+            arguments: serde_json::json!({
+                "origin": "https://vendor-contoso.example.com",
+                "displayName": "the invoice vendor",
+            }),
+        }]),
+        boma_app::ports::ProviderTurn::Chunks(vec![
+            "I will open the invoice vendor once they authorise me.".to_owned(),
+        ]),
+    ]));
+    let worker = boma_app::worker::Worker::new(
+        Arc::new(test_app.app().clone()),
+        provider,
+        "worker-1".to_owned(),
+    );
+
+    let agents_path = "/api/v1/automation/agents".to_owned();
+    let response = automation_get(state.clone(), &agents_path, AUTOMATION_TOKEN).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body")
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+    let agents = json["agents"].as_array().expect("the agents list");
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent["id"] == bot.bot.id.as_str())
+    );
+
+    let send_path = format!("/api/v1/automation/agents/{}/messages", bot.bot.id.as_str());
+    let response = automation_post(
+        state.clone(),
+        &send_path,
+        AUTOMATION_TOKEN,
+        r#"{"text":"open the invoice page please"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The worker answers; the sign-in request parks the card.
+    assert!(worker.step().await.expect("the worker answers"));
+
+    let approvals_path = "/api/v1/automation/approvals";
+    let response = automation_get(state.clone(), approvals_path, AUTOMATION_TOKEN).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body")
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+    let approvals = json["approvals"].as_array().expect("the approvals list");
+    assert_eq!(
+        approvals.len(),
+        1,
+        "the sign-in request is the pending approval"
+    );
+    let card_id = approvals[0]["id"].as_str().expect("the card id").to_owned();
+    assert_eq!(approvals[0]["kind"], "approval");
+
+    let answer_path = format!("/api/v1/automation/approvals/{card_id}/answer");
+    let response = automation_post(
+        state,
+        &answer_path,
+        AUTOMATION_TOKEN,
+        r#"{"answer":"approve"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body")
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid json");
+    assert_eq!(json["answer"], "approve");
+}

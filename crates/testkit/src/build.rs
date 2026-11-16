@@ -321,6 +321,8 @@ pub struct TestAppBuilder {
     model_transport: Option<Arc<crate::ScriptedModelTransport>>,
     /// The SCIM token the tests sign with (REQ-045).
     scim_token: Option<String>,
+    automation_token: Option<String>,
+    automation_agents: Vec<String>,
 }
 
 impl Default for TestAppBuilder {
@@ -350,6 +352,8 @@ impl Default for TestAppBuilder {
             billing_webhook_secret: None,
             model_transport: None,
             scim_token: None,
+            automation_token: None,
+            automation_agents: Vec::new(),
         }
     }
 }
@@ -525,6 +529,14 @@ impl TestAppBuilder {
         self
     }
 
+    /// Builds the application with the automation surface enabled (REQ-072).
+    #[must_use]
+    pub fn automation(mut self, token: &str, agents: &[&str]) -> Self {
+        self.automation_token = Some(token.to_owned());
+        self.automation_agents = agents.iter().map(|agent| (*agent).to_owned()).collect();
+        self
+    }
+
     /// The instant the clock stands at when its script is exhausted.
     #[must_use]
     pub fn fixed_clock(mut self, instant: &str) -> Self {
@@ -666,6 +678,11 @@ impl TestAppBuilder {
             self.billing_webhook_secret.map(secrecy::SecretString::from),
         )
         .with_scim_option(self.scim_token.clone())
+        .with_automation_option(
+            self.automation_token.clone(),
+            self.automation_agents.clone(),
+            120,
+        )
         .with_vapid(self.vapid.clone())
         .with_endpoint_safety(self.endpoint_safety.clone());
         let services = if let Some(runtime) = self.runtime {
@@ -847,6 +864,109 @@ mod tests {
             !reason.contains("sqlx") && !reason.contains("panic"),
             "the reason names the rule, not the internals of a dependency: {reason}"
         );
+    }
+
+    #[tokio::test]
+    async fn req_024_a_routine_woken_run_answers_in_the_room() {
+        // Regression: the worker used to read the routine's prompt under the system context,
+        // where the store's member-only lookup returns NotFound — one routine-fired run killed
+        // the whole worker. The lookup is space-scoped now; this test drives the exact path.
+        use crate::ScriptedProvider;
+        use boma_app::worker::Worker;
+
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "Analyst", None, None)
+            .await
+            .expect("the bot is created");
+
+        test.app()
+            .stores
+            .routines
+            .create(
+                &context,
+                boma_app::ports::NewRoutine {
+                    id: boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+                    space_id: space.id.clone(),
+                    bot_id: bot.bot.id.clone(),
+                    thread_id: bot.bot.thread_id.clone(),
+                    user_id: user_id.clone(),
+                    name: "Morning digest".to_owned(),
+                    prompt: "Summarise overnight commits.".to_owned(),
+                    crons: vec!["* * * * *".to_owned()],
+                    timezone: "UTC".to_owned(),
+                    active: false,
+                    notify: false,
+                    github_enabled: false,
+                    email_senders: Vec::new(),
+                    next_run_at: None,
+                    created_at: "2026-01-01T00:00:00Z".to_owned(),
+                },
+            )
+            .await
+            .expect("the routine is created");
+
+        // A routine-woken run carries the routine id; the worker answers it like any turn.
+        let run_id = boma_domain::RunId::new("run_routine".to_owned()).expect("the id is valid");
+        test.app()
+            .stores
+            .runs
+            .create(boma_app::ports::NewRun {
+                id: run_id.clone(),
+                space_id: space.id.clone(),
+                bot_id: bot.bot.id.clone(),
+                thread_id: bot.bot.thread_id.clone(),
+                user_id: user_id.clone(),
+                trigger: boma_domain::RunTrigger::Routine,
+                client_nonce: None,
+                source_message_id: None,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+                model_provider: None,
+                model_id: None,
+                model_pinned: false,
+                parent_run_id: None,
+                routine_id: Some(
+                    boma_domain::RoutineId::new("rtn_1".to_owned()).expect("the id is valid"),
+                ),
+            })
+            .await
+            .expect("the routine-woken run is created");
+
+        let app = Arc::new(test.app().clone());
+        let worker = Worker::new(
+            app,
+            Arc::new(ScriptedProvider::new_turn(vec![
+                boma_app::ports::ProviderTurn::Chunks(vec!["Three commits yesterday.".to_owned()]),
+            ])),
+            "worker-1".to_owned(),
+        );
+        assert!(
+            worker.step().await.expect("the worker answers"),
+            "the worker claimed the routine-woken run"
+        );
+
+        let page = test
+            .app()
+            .stores
+            .runs
+            .list(&context, Some(&bot.bot.id), None, 10)
+            .await
+            .expect("the activity answers");
+        let run = page.runs.into_iter().next().expect("the run is listed").run;
+        assert_eq!(run.status, RunStatus::Completed);
     }
 
     #[tokio::test]

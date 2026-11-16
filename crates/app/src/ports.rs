@@ -1126,6 +1126,16 @@ pub trait CardStore: Send + Sync {
     /// and an error when the database cannot answer.
     async fn create(&self, context: &TenantContext, card: NewCard) -> Result<Card, AppError>;
 
+    /// The pending approval cards of the caller's space, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot answer.
+    async fn list_pending(
+        &self,
+        context: &TenantContext,
+    ) -> Result<Vec<boma_domain::Card>, AppError>;
+
     /// Marks a card as answered with `answer`, refusing a card that was already answered.
     ///
     /// # Errors

@@ -274,6 +274,12 @@ pub struct Services {
     /// Whether the SCIM sync surface exists (`BOMA_SCIM`), and the bearer an enterprise
     /// directory presents on it. `None` means the routes are uniformly absent (REQ-045).
     pub scim_token: Option<secrecy::SecretString>,
+    /// The automation bearer of the local automation surface (REQ-072); `None` disables it.
+    pub automation_token: Option<secrecy::SecretString>,
+    /// The bot ids the automation token may drive; `None` means all of them.
+    pub automation_agents: Option<Vec<String>>,
+    /// How long the automation surface waits for a run when `wait=true` (REQ-072).
+    pub automation_wait_timeout_seconds: u64,
     /// The counters the process keeps; exposed at `/metrics` when the deployment enables it.
     pub metrics: Arc<crate::metrics::Metrics>,
     /// Whether `GET /metrics` answers (BOMA_METRICS). Off by default; the endpoint is absent,
@@ -355,6 +361,9 @@ impl Services {
             billing_webhook_secret: None,
             billing_enabled: false,
             scim_token: None,
+            automation_token: None,
+            automation_agents: None,
+            automation_wait_timeout_seconds: 120,
             metrics: Arc::new(crate::metrics::Metrics::new()),
             metrics_enabled: false,
             vapid: None,
@@ -424,6 +433,24 @@ impl Services {
     #[must_use]
     pub fn with_scim_option(mut self, token: Option<String>) -> Self {
         self.scim_token = token.map(secrecy::SecretString::from);
+        self
+    }
+
+    /// Builds the services with the automation surface wired from deployment config, when present.
+    #[must_use]
+    pub fn with_automation_option(
+        mut self,
+        token: Option<String>,
+        agents: Vec<String>,
+        wait_timeout_seconds: u64,
+    ) -> Self {
+        self.automation_token = token.map(secrecy::SecretString::from);
+        self.automation_agents = if agents.iter().any(|agent| agent == "*") {
+            None
+        } else {
+            Some(agents)
+        };
+        self.automation_wait_timeout_seconds = wait_timeout_seconds.max(1);
         self
     }
 

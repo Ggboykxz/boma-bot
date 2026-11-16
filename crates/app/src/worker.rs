@@ -337,14 +337,21 @@ impl Worker {
             }
         }
         // A routine-woken run has no person message in the history: the prompt is the routine's.
+        // The lookup is space-scoped (like the skills read above): `RoutineStore::find` is a
+        // member-only path, and the run always knows its space.
         let prompt = match &run.routine_id {
-            Some(routine_id) => self
-                .app
-                .stores
-                .routines
-                .find(context, routine_id)
-                .await?
-                .map_or_else(|| prompt_of(&history), |routine| routine.prompt),
+            Some(routine_id) => {
+                let scoped = TenantContext::Member {
+                    space_id: run.space_id.clone(),
+                    user_id: run.user_id.clone(),
+                };
+                self.app
+                    .stores
+                    .routines
+                    .find(&scoped, routine_id)
+                    .await?
+                    .map_or_else(|| prompt_of(&history), |routine| routine.prompt)
+            }
             None => prompt_of(&history),
         };
         // The catalogue is built per pass: the bot's grant and the space's installs can change

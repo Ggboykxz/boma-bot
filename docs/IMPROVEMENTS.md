@@ -176,7 +176,7 @@ The owner's instruction: **Boma Bot must do everything nightly-labs/openbot does
 | M25 | Pause/resume + Reassign control surface in rooms | REQ-067 (SHOULD), REQ-068 (SHOULD) | M | pause FIFO flip; reassign with stop-at-boundary |
 | M26 | Discord + WhatsApp fronts | REQ-070 (SHOULD) | M | front registry extension, same auth/audit seam |
 | M27 | Embedded desktop browser (optional) | REQ-071 (SHOULD) | L | Electron CDP pane; computer-takeover machinery reused |
-| M28 | Local automation API + CLI | REQ-072 (MUST) | M | token-gated `POST /v1/agents/...`; `boma-cli`; same use cases, same gates |
+| M28 | Local automation API + CLI | REQ-072 (MUST) | M | **landed 2026-11-16**: token-gated `/api/v1/automation/*` + `boma automation` CLI (agents, send with `wait`, routine run, approvals list/answer); same gates. «Fresh chat» clause outstanding — see STATE.md |
 | M29 | User theme palettes | REQ-073 (SHOULD) | S | themes dir + live reload |
 | M30 | Distribution parity | — | M | AppImage, Nix flake, Umbrel, ECS (packaging + docs; ADRs per item) |
 | M31 | Curated first-party agents and skills | REQ-074 (SHOULD) | M | our own content, one-click install, REQ-034-adjacent |

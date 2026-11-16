@@ -5,6 +5,66 @@
 **M11 — complete: v0.1.0 released (2026-11-15).** M10 closed with it. This section also carries the M9 slice log. `docs/PLAN.md` marks M10/M11 done.
 Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKit/OpenBot` @ `f1905cd` — full 21-area capability matrix; you confirmed nothing is neglected): M12 external agents → M13 sign-in requests & Recorder → M14 dictation (voice/call gated on your un-defer) → M15 push + release maturity → M16 scoped auto-approvals → M17 standing instructions → M18 automatic learning (limited; will add REQ-061 on your bless) → M19 enterprise packaging → M20 browser extension → M21 skins (optional) → M22 bot-drawn component drafts (optional, your call). Mobile stays deferred per your call.
 
+- **M28 — local automation API + operator CLI (2026-11-16, REQ-072; this commit).**
+  - The token-gated automation surface landed: `/api/v1/automation/*`, off unless both
+    `BOMA_AUTOMATION_TOKEN` (≥16 chars) and `BOMA_AUTOMATION_AGENTS` (comma-separated bot ids, or
+    `*` for every bot) are set — a half-configured surface refuses to boot, like billing.
+    `BOMA_AUTOMATION_WAIT_TIMEOUT_SECONDS` bounds `wait=true` calls (default 120, max 86400).
+    The bearer is checked in constant time (hash on both sides, like SCIM), and every call
+    resolves as the deployment's local owner (REQ-066 principal) — the machine is the trust
+    anchor; loopback-first, like everything else here.
+  - Routes: `GET /agents` (the allow-listed bots, name + description), `POST /agents/{bot_id}/messages`
+    (`{text, wait?, timeoutSeconds?}`; `wait=true` polls the run at 250 ms and returns the terminal
+    status, or 408 with the run id when the timeout bites), `POST /agents/{bot_id}/routines/{id}/run`
+    (fires a routine once, same wait semantics), `GET /approvals` (pending cards, oldest first),
+    `POST /approvals/{card_id}/answer` (`approve`/`deny`, through the same `answer_card` machinery).
+    Refusals are uniform: absent surface → 404, wrong bearer → 401, bot not allow-listed → 403
+    (never naming which bots exist); approval gates apply exactly as in interactive runs — a
+    `signin.site` parked mid-automation run shows up in `/approvals`.
+  - `CardStore::list_pending` added to the port and all three implementations (Postgres, in-memory,
+    wired in testkit). `Services` gained `automation_token` / `automation_agents` /
+    `automation_wait_timeout_seconds` with `with_automation_option` (same shape as SCIM).
+  - The operator CLI: `boma automation agents|send|approvals|answer|routine-run`. Output goes
+    through the log subscriber (`print_stdout` is denied workspace-wide; `BOMA_LOG_FORMAT=json`
+    yields the body in the `body` field); scripts that need the payload call HTTP directly —
+    that is the stable interface.
+  - **« Start a fresh chat » is NOT implemented, deliberately.** This build has exactly one
+    persistent conversation per agent (`threads.bot_id` is 1:1), and no use case exists for a
+    second conversation. Shipping a fake would break the honesty bar; the clause needs a product
+    decision (multi-thread per agent, or an explicit thread-reset use case). REQ-072 is covered by
+    test for the trace ratchet, with this gap recorded here, in `docs/PLAN.md` and
+    `docs/IMPROVEMENTS.md`.
+  - Trace budget 12 → 7 (Makefile, CI, this file): 049, 056, 068, 070, 071, 073, 074 remain
+    missing; `req_072_*` covers 072; the ratchet only ever decreases.
+  - **Smoke-exposed pre-existing production bug, fixed here:** the live smoke (real `boma serve` +
+    `boma worker` against a fresh Postgres) showed a routine-woken run **kills the worker
+    process** — the worker looked up the routine's prompt under the `System` context, where
+    `RoutineStore::find` is member-only (`ok_or(NotFound)` on the missing `space_id`), and the
+    `?` in `Worker::step` exits the process on one failing run. In-memory tests never caught it
+    (their `find` accepts `System` via `visible()`). Fixed by scoping the prompt lookup to the
+    run's space (`TenantContext::Member`, mirroring the skills read). Regressions:
+    `req_024_a_routine_woken_run_answers_in_the_room` (testkit) and
+    `req_024_a_routine_woken_run_executes_in_postgres` (PG; verified to fail on the unfixed code
+    with `the worker answers: NotFound`). Related observation, recorded not changed: any step
+    error (not just this one) exits the worker process; the supervisor decides restart policy.
+  - **`wait=true` is a long poll by design and now survives the global 30 s request timeout:** the
+    automation surface moved outside the global `TimeoutLayer` (it carries its own, sized to
+    `BOMA_AUTOMATION_WAIT_TIMEOUT_SECONDS` + 5 s grace, a 64 KiB body cap, the same
+    `nosniff`/`no-referrer`/`no-store` headers and the same request logging). New route
+    `GET /api/v1/automation/runs/{run_id}` for poll-style clients; new CLI job
+    `boma automation run-status --run <id>`. Wire test
+    `req_072_a_run_poll_reads_the_state_and_unknown_runs_are_not_found`.
+  - CLI smoke (binaries + fresh DB): `boma serve` + `boma worker` up; `bots.create` over loopback
+    RPC; `boma automation agents` listed the bot (401 with a wrong bearer, exit 1); `send --wait`
+    → `completed`; `routines/create` + `boma automation routine-run --wait` → `completed` (worker
+    intact); `approvals` → `{"approvals":[]}`; `run-status` → `completed`; exit codes 0/1 as
+    expected. CLI output goes through the log subscriber: `BOMA_LOG_FORMAT=json` carries the body
+    in the `body` field; scripts that need the payload call HTTP directly.
+    `BOMA_AUTOMATION_CLIENT_TIMEOUT_SECONDS` (default 300) bounds the CLI's whole-request wait.
+  - Gates: `cargo fmt`; clippy `-D warnings` clean; workspace tests green (fresh database on
+    127.0.0.1:5433, migrations run in the tests): 4 × `req_072_*` green, `req_024` × 2 regressions
+    green; the only failures in this sandbox remain the pre-existing Docker-dependent computer
+    tests (no Docker daemon here; CI runs them).
 - **M15.5 — branding + Windows desktop + v0.2.0 (2026-11-16, owner-approved; CI green at release time).**
   - **Brand (revised 2026-11-16, after the owner rejected the first mark)**: the first mark authored
     by this agent (12-tick enclosure around an amber core) was rejected. The shipping brand is now the

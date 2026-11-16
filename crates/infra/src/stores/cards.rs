@@ -27,6 +27,26 @@ impl PostgresCardStore {
 
 #[async_trait::async_trait]
 impl CardStore for PostgresCardStore {
+    async fn list_pending(&self, context: &TenantContext) -> Result<Vec<Card>, AppError> {
+        let rows = tenant::with_tenant(&self.pool, context, |conn| {
+            Box::pin(async move {
+                sqlx::query_as::<_, CardRow>(
+                    "SELECT id, space_id, thread_id, run_id, kind, status, answer,
+                            boma.rfc3339(created_at) AS created_at,
+                            boma.rfc3339(answered_at) AS answered_at
+                     FROM cards
+                     WHERE status = 'pending'
+                     ORDER BY created_at ASC",
+                )
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(tenant::unavailable)
+            })
+        })
+        .await?;
+        rows.into_iter().map(rows::card).collect()
+    }
+
     async fn find(&self, context: &TenantContext, id: &CardId) -> Result<Option<Card>, AppError> {
         let id = id.as_str().to_owned();
         let row = tenant::with_tenant(&self.pool, context, |conn| {

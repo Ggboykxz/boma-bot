@@ -1626,6 +1626,106 @@ async fn req_022_the_worker_injects_only_memory_of_the_runs_space_in_postgres() 
     fresh.dispose().await;
 }
 
+#[tokio::test]
+async fn req_024_a_routine_woken_run_executes_in_postgres() {
+    // Regression: the worker used to look up a routine-woken run's routine under the system
+    // context, where the member-only store refuses with NotFound — one routine-fired run killed
+    // the worker process. The prompt lookup is space-scoped now; this drives the exact path on
+    // Postgres, where the bug lived.
+    let fresh = common::fresh_database().await;
+    let database = &fresh.database;
+    let app = app(database);
+    let (user_id, space_id, context, email, organization_id) = space(&app, "routine-worker").await;
+    let bot = boma_app::usecases::create_bot(&app, &context, "Analyst", None, None)
+        .await
+        .expect("the bot is created");
+    let bot_id = bot.bot.id.clone();
+
+    let routine_id = boma_domain::RoutineId::new(ids().new_id("rtn")).expect("an id is valid");
+    app.stores
+        .routines
+        .create(
+            &context,
+            boma_app::ports::NewRoutine {
+                id: routine_id.clone(),
+                space_id: space_id.clone(),
+                bot_id: bot_id.clone(),
+                thread_id: bot.bot.thread_id.clone(),
+                user_id: user_id.clone(),
+                name: "Morning digest".to_owned(),
+                prompt: "Summarise overnight commits.".to_owned(),
+                crons: vec!["@once".to_owned()],
+                timezone: "UTC".to_owned(),
+                active: false,
+                notify: false,
+                github_enabled: false,
+                email_senders: Vec::new(),
+                next_run_at: None,
+                created_at: CREATED_AT.to_owned(),
+            },
+        )
+        .await
+        .expect("the routine is created");
+
+    let run_id = boma_domain::RunId::new(ids().new_id("run")).expect("an id is valid");
+    let run_id_for_check = run_id.clone();
+    app.stores
+        .runs
+        .create(boma_app::ports::NewRun {
+            id: run_id,
+            space_id: space_id.clone(),
+            bot_id: bot_id.clone(),
+            thread_id: bot.bot.thread_id.clone(),
+            user_id: user_id.clone(),
+            trigger: boma_domain::RunTrigger::Routine,
+            client_nonce: None,
+            source_message_id: None,
+            created_at: CREATED_AT.to_owned(),
+            model_provider: None,
+            model_id: None,
+            model_pinned: false,
+            parent_run_id: None,
+            routine_id: Some(routine_id),
+        })
+        .await
+        .expect("the routine-woken run is created");
+
+    let provider = Arc::new(CapturingProvider::default());
+    let worker = boma_app::worker::Worker::new(
+        Arc::new(app.clone()),
+        provider.clone(),
+        "worker-1".to_owned(),
+    );
+    assert!(
+        worker.step().await.expect("the worker answers"),
+        "the worker claimed the routine-woken run"
+    );
+
+    let request = provider
+        .requests
+        .lock()
+        .expect("the requests are captured")
+        .first()
+        .cloned()
+        .expect("the provider was asked");
+    assert_eq!(
+        request.prompt, "Summarise overnight commits.",
+        "the routine's own prompt reaches the model, not the (empty) thread history"
+    );
+
+    let run = app
+        .stores
+        .runs
+        .find(&context, &run_id_for_check)
+        .await
+        .expect("the store answers")
+        .expect("the run exists");
+    assert_eq!(run.status, boma_domain::RunStatus::Completed);
+
+    cleanup(database, &organization_id, &email).await;
+    fresh.dispose().await;
+}
+
 const CREATED_AT: &str = "2026-01-01T00:00:00Z";
 
 fn test_master_key() -> BTreeMap<String, String> {
