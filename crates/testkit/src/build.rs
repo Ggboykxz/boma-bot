@@ -10670,14 +10670,10 @@ mod acp_agent_tests {
             "the stub executor answered: {reply_text}"
         );
 
-        // REQ-061: the executor ran on an isolated per-run workspace the person owns.
+        // REQ-061: the executor ran on an isolated per-run workspace (the person's machine).
+        // A successful turn cleans the workspace up on exit (BOMA_ACP_KEEP_WORKSPACES=failures
+        // by default), so the root is left behind, possibly empty, by policy.
         assert!(workspace_root.exists(), "the workspace root exists");
-        let mut entries =
-            std::fs::read_dir(&workspace_root).expect("the workspace root is readable");
-        assert!(
-            entries.next().is_some(),
-            "at least one per-run workspace was created"
-        );
 
         let run_page = test
             .app()
