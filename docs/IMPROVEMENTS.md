@@ -152,3 +152,41 @@ Mobile stays deferred; REQ-049 stays deferred until you un-defer it.
 License rules: identical to Target A — MIT ideas / AGPL code never enters; every borrowed concept
 lands behind its ADR with provenance named (AG-UI, ACP, Dhall-free front registry, crash-safe-queue
 design).
+
+## Target B completion — the owner's word (2026-11-16)
+
+The owner's instruction: **Boma Bot must do everything nightly-labs/openbot does**, reimplemented
+"avec notre charte" — approval gates stay, ours are ours, nothing of theirs ships. Confirmed scope:
+
+- **REQ-056 (mobile iOS + Android) un-deferred** by owner decision (was deferred by owner decision
+  before; parity with nightly-labs requires it — Expo/React Native + our RPC contract).
+- **Service hébergé (openbot.run/app) is OUT of scope** — self-host only (binary, compose, k3d,
+  Helm, machines of the operator). No Cloudflare Workers/D1 SaaS in this repository.
+- **Distributions** to reach parity: AppImage, Nix flake (unfree-allow predicate), Umbrel, AWS ECS
+  task — no code, packaging and docs only; tracked as program rows, ADR-recorded when each lands.
+- **Curated first-party agents and skills packs** (M31): authored in this repository (we cannot
+  ship their catalog), installed one step, flagged first-party (REQ-074).
+- Their `danger-full-access` posture stays out; their approval-free defaults stay out; everything
+  lands behind our spec + test naming + gates.
+
+| # | Milestone | REQ ids | Size | Notes |
+|---|---|---|---|---|
+| M23 | Local CLI agents via ACP (phase 2 of agent interop) | REQ-061 (MUST) | L | agent-spawn, isolated workspace per run, ACP flavor; M12 ordering done |
+| M24 | Context-window compaction | REQ-069 (SHOULD) | M | automatic compaction; lossless elision policy; person-legible |
+| M25 | Pause/resume + Reassign control surface in rooms | REQ-067 (SHOULD), REQ-068 (SHOULD) | M | pause FIFO flip; reassign with stop-at-boundary |
+| M26 | Discord + WhatsApp fronts | REQ-070 (SHOULD) | M | front registry extension, same auth/audit seam |
+| M27 | Embedded desktop browser (optional) | REQ-071 (SHOULD) | L | Electron CDP pane; computer-takeover machinery reused |
+| M28 | Local automation API + CLI | REQ-072 (MUST) | M | token-gated `POST /v1/agents/...`; `boma-cli`; same use cases, same gates |
+| M29 | User theme palettes | REQ-073 (SHOULD) | S | themes dir + live reload |
+| M30 | Distribution parity | — | M | AppImage, Nix flake, Umbrel, ECS (packaging + docs; ADRs per item) |
+| M31 | Curated first-party agents and skills | REQ-074 (SHOULD) | M | our own content, one-click install, REQ-034-adjacent |
+| M32 | Mobile iOS + Android | REQ-056 (SHOULD) | XL | Expo/RN; REQ-056 un-deferred by owner 2026-11-16; after M23–M31 |
+| M33 | Local model server discovery | REQ-075 (SHOULD) | S | Ollama/LM Studio loopback discovery in the provider picker |
+
+Mobile (M32) is the only milestone that may wait for bandwidth; every other row ships.
+
+### License rules restated (nothing of theirs ships)
+
+Clean-room reimplementation of ideas only; no code, assets, wording or catalog data enters; their
+`catalog.json` stays out (we author our own curated set in M31); license PolyForm Noncommercial
+governs their code, not our MIT reimplementation.

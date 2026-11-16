@@ -10,7 +10,7 @@
 | file | sha256 | bytes |
 |---|---|---|
 | 00-overview.md | aea4ebfbe8fd273cc22d8567b5808f2222a394ea3663ab96f2de476d8deb7824 | 3084 |
-| 01-requirements.md | 867e92c75450f0d6a331640985eb375b687f9fd5a8efc3bf610c9296175699b2 | 33705 |
+| 01-requirements.md | 941cb69035bfe15f9aef97942afbc882cf27659cb1f764c9d52f34070743bb4e | 38689 |
 | 02-data-model.md | 98493a0b02c770bbcf84266cee603b63f574c2c63752e8787e6a182dad3d7f6f | 11359 |
 | 03-api-contract.md | a90579c93a402fd95b333f6bf563c7a52f151bb5463e5dd8edd1c864387084e7 | 7848 |
 | 04-nonfunctional.md | 92e1854118452ec50a5c5e6fcdb2933b261d3a954e2b0b3b41154306d853a42f | 8925 |
@@ -74,3 +74,4 @@ Verify later with: `sha256sum -c` against this table.
 | 2026-11-16T12:00:00Z | 01-requirements.md | 40d2d975e56c405f8065c3c153688e0fd2b7666c2e30f301e15d86a0da1d69dd | 867e92c75450f0d6a331640985eb375b687f9fd5a8efc3bf610c9296175699b2 | 33705 | 64 | Improvement program (improvement-2026-11-16): adds REQ-066 (local-first bring-up). The frozen Rakazo floor (REQ-001..058) is unchanged. |
 | 2026-11-16T12:30:00Z | openapi.yaml | 07a3d7c395518b347e0a2397eadb6b5d063dcbaff0a4bee7b34f1ac3c86002f4 | d3a48ca13c485e2a5cc234d9f5e7f151199919b7818e3d79e0352628d38ccfd6 | 15973 | 64 | Improvement program (improvement-2026-11-16): the auth capabilities report gains localFirst (REQ-066). Additive; the standing properties are unchanged. |
 | 2026-11-16T13:00:00Z | golden/auth-capabilities.json | b08c24d9188ff635d439a9a8b96f9cb8b300be55abc147ae6bc800c6f12ea144 | e21d7645637ae94b9b139ea9e434eb2d81588c1e331ffd8b0f0e0f4337fe20d6 | 596 | 64 | Improvement program (improvement-2026-11-16): the fixture gains localFirst: false to match the REQ-066 report the binary serves. Additive; replayed byte-for-byte by the conformance suite. |
+| 2026-11-16T14:00:00Z | 01-requirements.md | 867e92c75450f0d6a331640985eb375b687f9fd5a8efc3bf610c9296175699b2 | 941cb69035bfe15f9aef97942afbc882cf27659cb1f764c9d52f34070743bb4e | 38689 | 73 | Improvement program (improvement-2026-11-16): the nightly-labs/openbot parity surface, owner-approved 2026-11-16 — adds REQ-067 (pause/resume runs), REQ-068 (reassign delegations), REQ-069 (window-aware compaction), REQ-070 (Discord/WhatsApp fronts), REQ-071 (embedded persistent browser), REQ-072 (local automation API + CLI), REQ-073 (user theme palettes), REQ-074 (curated first-party agents/skills), REQ-075 (local model server discovery). Also records the un-deferral of REQ-056 (mobile), which stays unbuilt and missing. The frozen Rakazo floor (REQ-001..058) is unchanged. |

@@ -536,6 +536,77 @@ the operator's machine is the only trust anchor.
 - Rationale: the local bring-up — the judge runs the binary on their own laptop before trusting
   it anywhere else. No auth, no email, no password, no account: just a running product.
 
+### REQ-067 — Pause and resume runs in the queue (SHOULD)
+A queued run may be paused and resumed instead of cancelled; a paused run leaves the FIFO, is never
+claimed by a worker, and returns to the queue at the same position on resume.
+- Given a queued run and a member with run access, when they pause it, then the run is `paused` and
+  no worker claims it; resuming returns it to `queued`.
+- Given a running run, when they pause it, then the request fails with a conflict class error and
+  the run is untouched.
+- Rationale: long-running agent work needs "not now, but later".
+
+### REQ-068 — Reassign a delegated task in a room (SHOULD)
+A delegation in a group room may be reassigned from one member bot to another member of the same
+room; the previous delegate's active run stops at the next tool boundary; the room shows the move.
+- Given a group with a working delegation and another capable member bot, when a member reassigns
+  it, then the old delegate receives a stop at its boundary, the new delegate gets the task with
+  the same context, and the room attributes the hand-off.
+- Rationale: agents and humans both change their mind about who should do this.
+
+### REQ-069 — Window-aware context compaction (SHOULD)
+Before a run's assembled context exceeds the model's window budget, the system compacts older
+history lossily (eliding tool payloads, keeping messages) and tells the person it happened; a turn
+never dies of "prompt is too long" when compaction can save it.
+- Given a thread whose next turn would exceed the window, when the turn starts, then the oldest
+  tool payloads and bulky messages are elided with a note marker and the turn runs.
+- Rationale: long sessions are the normal case, not the edge case.
+
+### REQ-070 — Discord and WhatsApp fronts (SHOULD)
+The messaging front registry may host Discord and WhatsApp channels; a person can address a bot
+from either, and the same per-front authentication and audit rules as Slack apply.
+- Given a configured Discord bot token and WhatsApp Cloud API credentials, when a person messages
+  the bot there, then the message lands in a bot thread and a run starts, attributed per front.
+- Given a front is not configured, when its webhook receives a POST, then it refuses as before.
+- Rationale: agents where the work already happens.
+
+### REQ-071 — Embedded persistent browser for the agent (SHOULD)
+The desktop app may host a persistent browser pane the agent opens, inspects and drives; the
+person holds the takeover at all times; credentials typed into it are never readable by the agent.
+- Given the desktop app, when a run needs a signed-in page, then the agent asks for it, the pane
+  opens, and the person decides at the gate whether the agent sees values or only structure.
+- Rationale: the browser is the agent's hands; the person keeps the keys.
+
+### REQ-072 — Local automation API and CLI (MUST)
+A deployment may expose a token-gated local automation endpoint so scripts and operators can send
+a message to an agent, wait for the answer, run a routine, list pending approvals and answer them,
+and start a fresh chat — each call maps to the existing use case with the same authorization rules.
+- Given an agent with automation enabled and an operator token, when a script POSTs a message and
+  waits, then the same approval gates and run semantics apply, and the answer returns to the script.
+- Rationale: the machine the agent lives on is also the machine of the operator.
+
+### REQ-073 — User theme palettes (SHOULD)
+The web and desktop clients read user-written JSON palettes from the deployment's theme folder and
+apply them live; a malformed palette is ignored and the saved choice stands.
+- Given a themes directory with a valid `ocean.json`, when it appears or changes, then the theme
+  picker lists it and the UI follows without a restart.
+- Given an invalid file, when it appears, then it is ignored and the log names it.
+- Rationale: people run their own machines their own way.
+
+### REQ-074 — Curated first-party agents and skills (SHOULD)
+The deployment may ship a small curated set of first-party agents and skills (e.g. reviewer,
+bug-fixer, security reviewer), authored in this repository, installable in one step, distinct from
+community plugin submissions, and removable like any plugin.
+- Given a fresh deployment, when an operator opens the catalogue, then the first-party set is
+  flagged as first-party and installs without a review round trip.
+- Rationale: the empty room teaches itself.
+
+### REQ-075 — Local model server discovery (SHOULD)
+The deployment detects loopback model servers (Ollama, LM Studio) and offers their models in the
+provider picker without external accounts; discovery is best-effort and never blocks startup.
+- Given Ollama on 127.0.0.1:11434, when the models are listed, then the available tags appear in
+  the picker; when it is absent, the picker shows what the configured provider exposes.
+- Rationale: local models are the zero-key path.
+
 ### REQ-065 — Notification destinations (MUST)
 A space can name one or more Slack/Teams incoming webhooks; opted-in initiators receive pushes
 there, alongside the browser, behind the same per-(space, member, bot) policy and daily cap.

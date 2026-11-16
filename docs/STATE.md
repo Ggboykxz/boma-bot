@@ -51,6 +51,20 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   new art. Windows assets re-attested and verified this session (exit 0 ×3, SAN =
   `release.yml@refs/tags/v0.2.2`); v0.2.1's release page now carries a banner to v0.2.2.
 
+- **Full-parity decision + spec extension (2026-11-16, README/AGENTS mandate).** The owner's
+  word: Boma Bot must do everything nightly-labs/openbot does, "tout mais avec notre charte".
+  Recorded: REQ-056 (mobile) un-deferred by owner; the hosted SaaS (openbot.run/app) is out of
+  scope (self-host only); M30 distribution + M31 curated content join the program; M33 local model
+  discovery. Nine new REQs appended (REQ-067..075) — pause/resume (067), reassign (068), compaction
+  (069), Discord/WhatsApp fronts (070), embedded browser (071), local automation API + CLI (072),
+  theme palettes (073), curated first-party agents/skills (074), loopback model discovery (075).
+  REQ-056 and the new SHOULD/MUST ids stay unimplemented; the trace budget moves 9 → 12 (Makefile,
+  CI, STATE note here) — a deliberate, documented loosening for queued-not-built work; the budget
+  tightens again as each REQ lands.
+- ADR-030 accepted for M23 (REQ-061): ACP over stdio as subprocesses, isolated per-run workspaces,
+  approvals via the existing gate, stub agent for wire replay tests. First executors: OpenCode +
+  Claude Code + stub; the rest of the provider matrix lands one row at a time.
+
 - **M15.4 — local-first bring-up + release verification (2026-11-16, REQ-066, uncommitted worktree; ADR-029).**
   - `BOMA_LOCAL_FIRST=true` (default off): loopback-only at boot (`HttpConfig::with_local_first` refuses
     any non-loopback bind, exit 1, message names `BOMA_LOCAL_FIRST`); a request without a cookie resolves

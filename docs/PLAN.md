@@ -163,12 +163,18 @@ Sizes: S ≤ 1 week, M ≤ 3 weeks, L ≤ 6 weeks of single-maintainer work.
 | M20 | Browser extension | — | sign-in, thread read, approval answering, takeover | M |
 | M21 | Skins / white-label (optional) | — | only on your word; kept honest, no brand-relocation scope creep | S |
 | M22 | Bot-drawn component drafts (optional) | — | draft/publish workflow; decided at M15 checkpoint if enabled | L |
-| M23 | Local CLI agents via ACP (agent interop phase 2) | REQ-061 (new, MUST) | ACP executors (Codex, Claude Code, OpenCode, Cursor, Cline, …) attached as bots; isolated per-run workspace; approvals via the existing gate; unreachable executors fail the run visibly | L |
-| M24 | Context-window compaction | — (extends REQ-021) | automatic compaction at 100K–1M window thresholds (esp. Claude); capacity-aware, user-legible, lossless tool history elision | M |
-| M25 | Pause/resume & delegation control surface | — | pause/resume/cancel queued sends; Stop/Resume/Reassign/Archive/Restore delegation controls in rooms | M |
-| M26 | Discord + WhatsApp fronts | REQ-048 extend | front registry extended; parity with Slack/Telegram ingress; owners configure the front (flag/secret) | M |
-| M27 | Embedded browser pane (optional) | — | full CDP browser in the desktop client; computer-takeover machinery reused | L |
-| — | Deferred | REQ-049 (COULD, voice), REQ-056 (SHOULD, mobile) | Recorded in `docs/STATE.md` with reason; trace_check ORPHAN explained | — |
+| M23 | Local CLI agents via ACP (agent interop phase 2) | REQ-061 (MUST) | ACP executors (Codex, Claude Code, OpenCode, Cursor, Cline, …) attached as bots; isolated per-run workspace; approvals via the existing gate; unreachable executors fail the run visibly | L |
+| M24 | Context-window compaction | REQ-069 (SHOULD) | automatic compaction at 100K–1M window thresholds (esp. Claude); capacity-aware, user-legible, lossless tool history elision | M |
+| M25 | Pause/resume & delegation control surface | REQ-067 (SHOULD), REQ-068 (SHOULD) | pause flips pending runs to paused; Stop/Resume/Reassign/Archive/Restore delegation controls in rooms | M |
+| M26 | Discord + WhatsApp fronts | REQ-070 (SHOULD) | front registry extended; parity with Slack/Telegram ingress; owners configure the front (flag/secret) | M |
+| M27 | Embedded browser pane | REQ-071 (SHOULD) | full CDP browser in the desktop client; computer-takeover machinery reused | L |
+| M28 | Local automation API + CLI | REQ-072 (MUST) | token-gated automation endpoint; `boma-cli`; same use cases, same approval gates, same run semantics as interactive | M |
+| M29 | User theme palettes | REQ-073 (SHOULD) | `themes/` JSON palettes, live reload, malformed files ignored with a log line | S |
+| M30 | Distribution parity | — | AppImage, Nix flake (unfree predicate), Umbrel store entry, AWS ECS task (packaging + docs; ADRs) | M |
+| M31 | Curated first-party agents and skills | REQ-074 (SHOULD) | our own curated set, one-click install, distinct from community plugins; REQ-034-reviewed community path unchanged | M |
+| M32 | Mobile iOS + Android | REQ-056 (SHOULD) | **un-deferred by owner 2026-11-16**; Expo/RN against the same RPC contract; sign-in, threads, computer viewing, artifacts, push | XL |
+| M33 | Local model server discovery | REQ-075 (SHOULD) | loopback discovery of Ollama/LM Studio in the provider picker; never blocks startup | S |
+| — | Deferred | REQ-049 (COULD, voice) | Mobile (REQ-056) un-deferred 2026-11-16 → M32; voice stays deferred by owner decision | — |
 
 Every milestone ends with: fmt + clippy clean, tests green, the REQ ids in test names, and a STATE.md
 update. A milestone is not "done" because code exists; it is done when its exit criteria are observed.
