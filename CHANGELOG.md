@@ -4,6 +4,14 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.2.1] - 2026-11-16
+
+Patch release of v0.2.0: the v0.2.0 release published the Linux artifacts, but its Windows desktop
+job failed its own verification step before uploading — `gh attestation verify` accepts exactly one
+file, and the workflow passed three in one call. The Windows assets were never published. Nothing
+in the product changed; the Windows installer and portable zip ship here with the documented
+attestation flow intact. Verify with `gh attestation verify` as shown in docs/UPGRADING.md.
+
 ## [0.2.0] - 2026-11-16
 
 The first release after the v0.1.0 baseline: the improvement program (M12, M13.1, M15) and the

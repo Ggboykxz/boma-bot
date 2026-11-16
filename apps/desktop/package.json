@@ -1,6 +1,6 @@
 {
   "name": "@boma/desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Boma Bot desktop shell (REQ-055): Electron, a session partition it owns, WebAuthn via the loopback origin, signed auto-update wiring.",
   "license": "MIT",

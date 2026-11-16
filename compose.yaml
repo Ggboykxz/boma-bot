@@ -8,7 +8,7 @@ x-app-environment: &app-environment
   BOMA_BIND_ADDR: 0.0.0.0:3000
   BOMA_LOG_FORMAT: json
   BOMA_LOG_FILTER: ${BOMA_LOG_FILTER:-info}
-  BOMA_VERSION: ${BOMA_VERSION:-0.2.0}
+  BOMA_VERSION: ${BOMA_VERSION:-0.2.1}
   BOMA_REVISION: ${BOMA_REVISION:-}
   BOMA_RUNTIME: sandboxed
   # The provider variable is `SANDBOX_PROVIDER` (spec/01-requirements.md REQ-027); a `BOMA_SANDBOX`
