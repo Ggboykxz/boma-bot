@@ -160,6 +160,12 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm run smoke
+      - name: Build the web client
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
       - name: Stage the desktop vendor (embedded Postgres, boma, web)
         if: runner.os == 'Linux'
         run: bash ../../tools/stage-desktop-vendor.sh linux
