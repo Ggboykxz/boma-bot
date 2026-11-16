@@ -5,6 +5,7 @@
 
 pub mod account_export;
 pub mod accounts;
+pub mod acp_agents;
 pub mod admin;
 pub mod artifacts;
 pub mod audit;

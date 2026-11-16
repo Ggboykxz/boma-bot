@@ -4358,6 +4358,38 @@ pub trait ExternalAgentStore: Send + Sync {
     ) -> Result<Option<boma_domain::external::ExternalAgent>, AppError>;
 }
 
+/// Local ACP CLI executors (REQ-061, improvement program).
+#[async_trait]
+pub trait AcpAgentStore: Send + Sync {
+    /// Attaches a bot to a local ACP executor, replacing any previous attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn attach(
+        &self,
+        config: boma_domain::acp::NewAcpAgent,
+    ) -> Result<boma_domain::acp::AcpAgent, AppError>;
+
+    /// Detaches a bot from its ACP executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn detach(&self, context: &TenantContext, bot_id: &BotId) -> Result<(), AppError>;
+
+    /// The ACP configuration for a bot, when one is attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store cannot answer.
+    async fn find(
+        &self,
+        context: &TenantContext,
+        bot_id: &BotId,
+    ) -> Result<Option<boma_domain::acp::AcpAgent>, AppError>;
+}
+
 /// Sign-in request lifecycle (REQ-060, improvement program).
 #[async_trait]
 pub trait SignInStore: Send + Sync {

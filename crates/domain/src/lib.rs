@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 
 pub mod account;
+pub mod acp;
 pub mod artifact;
 pub mod audit;
 pub mod billing;

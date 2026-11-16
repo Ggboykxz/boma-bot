@@ -2034,6 +2034,28 @@ pub struct ExternalAgentDisconnectedReply {
     pub disconnected: bool,
 }
 
+/// The reply of `bots.connectAcp` — one local executor now answers for the bot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentConnectedReply {
+    /// The bot now connected.
+    pub bot_id: String,
+    /// The known executor id it runs on.
+    pub executor: String,
+    /// When the attachment was saved.
+    pub attached_at: String,
+}
+
+/// The reply of `bots.disconnectAcp`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentDisconnectedReply {
+    /// The bot it detached.
+    pub bot_id: String,
+    /// Always true when the handler returns.
+    pub detached: bool,
+}
+
 /// One sign-in request, as returned over RPC (never plaintext secrets).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

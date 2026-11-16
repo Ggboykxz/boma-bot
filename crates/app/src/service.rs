@@ -85,6 +85,8 @@ pub struct Stores {
     pub groups: Arc<dyn crate::ports::GroupStore>,
     /// The external agents of the improvement program (REQ-059).
     pub external_agents: Arc<dyn crate::ports::ExternalAgentStore>,
+    /// The local ACP CLI executors of the improvement program (REQ-061).
+    pub acp_agents: Arc<dyn crate::ports::AcpAgentStore>,
     /// The sign-in requests of the improvement program (REQ-060).
     pub signin_requests: Arc<dyn crate::ports::SignInStore>,
     /// The Web Push subscriptions and per-bot policy (REQ-064).
@@ -162,6 +164,7 @@ impl Stores {
         password_resets: Arc<dyn crate::ports::PasswordResetStore>,
         groups: Arc<dyn crate::ports::GroupStore>,
         external_agents: Arc<dyn crate::ports::ExternalAgentStore>,
+        acp_agents: Arc<dyn crate::ports::AcpAgentStore>,
         signin_requests: Arc<dyn crate::ports::SignInStore>,
         notifications: Arc<dyn crate::ports::NotificationStore>,
         destinations: Arc<dyn crate::ports::NotificationDestinationStore>,
@@ -198,6 +201,7 @@ impl Stores {
             password_resets,
             groups,
             external_agents,
+            acp_agents,
             signin_requests,
             notifications,
             destinations,

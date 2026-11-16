@@ -42,6 +42,34 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   `gh attestation verify <file> --repo Ggboykxz/boma-bot` exits 0 for all three; the setup.exe
   certificate SAN decodes to `https://github.com/Ggboykxz/boma-bot/.github/workflows/release.yml@refs/tags/v0.2.1`.
   Linux and Windows CI legs both green on `windows-latest` and `ubuntu-24.04`.
+- **M23 slice 1 — ACP local executors landed (2026-11-16, REQ-061; ADR-030; CI green at push).**
+  - `crates/app/src/acp.rs` (moved from infra into app on layering grounds): newline-delimited
+    JSON-RPC 2.0 stdio client; `initialize → session/new → session/prompt → session/close`; the
+    per-line reader uses `fill_buf/consume` so a chunk may carry several lines and the 4 MiB cap is
+    enforced before allocation; wall-clock timeout per request; child reaped on drop.
+  - `crates/app/src/acp_provider.rs`: `AcpProvider` behind the same `ModelProvider` port every run
+    sees — fresh 0700 workspace per turn under `BOMA_ACP_WORKSPACES` (or a per-process temp dir),
+    full thread context (memory, skills, history) rendered into the prompt, streamed
+    `agent_message_chunk` updates collapsed into one answer; an empty answer is a legible
+    `Unavailable`, never an empty bubble. Worker's `provider_for` prefers an attached ACP executor
+    over any AG-UI attachment, registry-validated (`opencode acp` today — other providers land one
+    wire-tested row at a time); an unknown executor id logs and falls back to the internal model.
+  - `bots.connectAcp` / `bots.disconnectAcp` RPC (`connectAcp` execution = known registry only),
+    migration `0059_acp_agents.sql` (RLS, additive), PG + in-memory stores, full wiring (bin,
+    testkit, api/infra test suites).
+  - Wire proof: `req_061_an_acp_executor_answers_in_the_room` (stub ACP agent at
+    `crates/testkit/fixtures/stub-acp-agent.py` replays initialize/prompt end to end; the answer
+    is attributed to the bot in the room; the per-run workspace is created and holds the run dir),
+    `req_061_a_missing_executor_fails_the_run_legibly` (bogus-binary → run `Failed` with a
+    dependency-shaped reason, no internals), `req_061_attach_and_detach_roundtrip_and_unknown_executors_are_refused`.
+  - Gates: `cargo fmt`; clippy `-D warnings` clean; `cargo test --workspace --locked` — 578 ok;
+    the only failures remain the 12 pre-existing Docker-dependent computer tests (no Docker in this
+    sandbox; CI runs them); trace 11 missing (049, 056, 067..075), budget 12 holds.
+  - NOT in this slice (recorded): permission-request bridging to approval cards (ACP agents that
+    call tools currently require their own permission path); the full provider matrix; workspace
+    retention policy knob (`BOMA_ACP_KEEP_WORKSPACES`); `opencode acp` startup args are a GUESS
+    until the OpenCode ACP path is exercised on a real machine.
+
 - **v0.2.2 — the brand ships (2026-11-16, commit `e01087c`, tag `v0.2.2`, release run 43858391776 green).**
   The owner-supplied robot-cat head (`assets/brand/boma-bot-head.svg`, provided in chat 2026-11-16;
   master embedded verbatim) replaces the rejected enclosure mark everywhere: `icon.ico` 16…1024,

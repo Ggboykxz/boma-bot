@@ -9325,6 +9325,82 @@ pub async fn connect_external_agent(
     })
 }
 
+/// The outcome of attaching a bot to a local ACP executor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpAgentAttached {
+    /// The bot.
+    pub bot_id: boma_domain::BotId,
+    /// The executor id the bot now runs on.
+    pub executor: String,
+    /// When the attachment was saved.
+    pub attached_at: String,
+}
+
+/// Attaches a bot to a local ACP executor from the compiled-in registry (REQ-061).
+///
+/// # Errors
+///
+/// Returns [`AppError::Rule`] when the executor is not one this build knows, [`AppError::NotFound`]
+/// when the bot does not exist in this space, and an error when the store cannot answer.
+pub async fn attach_acp_agent(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+    executor: &str,
+) -> Result<AcpAgentAttached, AppError> {
+    let spec = crate::acp_provider::executors()
+        .iter()
+        .find(|spec| spec.id == executor)
+        .ok_or_else(|| {
+            AppError::Rule(boma_domain::DomainError::InvalidName(format!(
+                "this build does not know the executor `{executor}`"
+            )))
+        })?;
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    let bot = app
+        .stores
+        .bots
+        .find(context, &bot_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if bot.is_archived() {
+        return Err(AppError::NotFound);
+    }
+    let space_id = context.space_id().cloned().ok_or(AppError::NotFound)?;
+    let now = app.services.clock.now();
+    let stored = app
+        .stores
+        .acp_agents
+        .attach(boma_domain::acp::NewAcpAgent {
+            bot_id: bot_id.clone(),
+            space_id,
+            executor: spec.id.to_owned(),
+            saved_at: now.clone(),
+        })
+        .await?;
+    tracing::info!(bot_id = %stored.bot_id, executor = %stored.executor, "the bot now runs the local ACP executor");
+    Ok(AcpAgentAttached {
+        bot_id: stored.bot_id,
+        executor: stored.executor,
+        attached_at: stored.updated_at,
+    })
+}
+
+/// Detaches a bot from its local ACP executor; the bot falls back to the deployment's internal
+/// provider after this call.
+///
+/// # Errors
+///
+/// Returns [`AppError::NotFound`] when no attachment exists.
+pub async fn detach_acp_agent(
+    app: &App,
+    context: &TenantContext,
+    bot_id: &str,
+) -> Result<(), AppError> {
+    let bot_id = boma_domain::BotId::new(bot_id.to_owned()).map_err(|_| AppError::NotFound)?;
+    app.stores.acp_agents.detach(context, &bot_id).await
+}
+
 /// Disconnects a bot from its external agent executor; the bot falls back to the deployment's
 /// internal provider after this call.
 ///

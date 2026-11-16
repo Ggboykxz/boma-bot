@@ -25,7 +25,8 @@ use crate::{
     error::ErrorCode,
     state::AppState,
     wire::{
-        AccountDeleteReply, AccountDeleteRequest, AdminGrantCreateReply, AdminGrantCreateRequest,
+        AccountDeleteReply, AccountDeleteRequest, AcpAgentConnectedReply,
+        AcpAgentDisconnectedReply, AdminGrantCreateReply, AdminGrantCreateRequest,
         AdminGrantRevokeReply, AdminGrantRevokeRequest, AdminGrantView, AdminGrantsReply,
         AdminInvitationRevokeReply, AdminInvitationRevokeRequest, AdminInvitationView,
         AdminInvitationsReply, AdminMemberView, AdminMembersReply, AdminPluginDecideReply,
@@ -146,6 +147,8 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BOTS, "list"),
         (namespaces::BOTS, "connectExternal"),
         (namespaces::BOTS, "disconnectExternal"),
+        (namespaces::BOTS, "connectAcp"),
+        (namespaces::BOTS, "disconnectAcp"),
         (namespaces::BOTS, "signIns"),
         (namespaces::BOTS, "externalAgentStatus"),
         (namespaces::NOTIFICATIONS, "status"),
@@ -368,6 +371,12 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "disconnectExternal") => bots_disconnect_external(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "connectAcp") => bots_connect_acp(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "disconnectAcp") => bots_disconnect_acp(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "signIns") => bots_sign_ins(state, auth, body)
@@ -3854,6 +3863,59 @@ async fn bots_disconnect_external(
     Ok(ExternalAgentDisconnectedReply {
         bot_id: request.bot_id,
         disconnected: true,
+    })
+}
+
+/// The body of `bots.connectAcp`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotsConnectAcpRequest {
+    /// The bot that gets a local executor.
+    bot_id: String,
+    /// The known executor id (this build only knows `opencode`).
+    executor: String,
+}
+
+/// `bots.connectAcp` — the bot attaches to a local ACP executor (REQ-061).
+async fn bots_connect_acp(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AcpAgentConnectedReply, ApiError> {
+    let request: BotsConnectAcpRequest = parse(&body)?;
+    let outcome = usecases::attach_acp_agent(
+        state.app(),
+        &auth.actor.context,
+        &request.bot_id,
+        &request.executor,
+    )
+    .await?;
+    Ok(AcpAgentConnectedReply {
+        bot_id: outcome.bot_id.as_str().to_owned(),
+        executor: outcome.executor,
+        attached_at: outcome.attached_at,
+    })
+}
+
+/// The body of `bots.disconnectAcp`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotsDisconnectAcpRequest {
+    /// The bot whose executor attachment goes away.
+    bot_id: String,
+}
+
+/// `bots.disconnectAcp` — the bot falls back to the deployment's internal provider.
+async fn bots_disconnect_acp(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<AcpAgentDisconnectedReply, ApiError> {
+    let request: BotsDisconnectAcpRequest = parse(&body)?;
+    usecases::detach_acp_agent(state.app(), &auth.actor.context, &request.bot_id).await?;
+    Ok(AcpAgentDisconnectedReply {
+        bot_id: request.bot_id,
+        detached: true,
     })
 }
 

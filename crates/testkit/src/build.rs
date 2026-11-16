@@ -595,6 +595,7 @@ impl TestAppBuilder {
             Arc::new(crate::memory::MemoryPasswordResetStore::new(&database)),
             Arc::new(crate::memory::MemoryGroupStore::new(&database)),
             Arc::new(crate::memory::MemoryExternalAgentStore::new(&database)),
+            Arc::new(crate::memory::MemoryAcpAgentStore::new(&database)),
             Arc::new(crate::memory::MemorySignInStore::new(&database)),
             Arc::new(crate::memory::MemoryNotificationStore::new(&database)),
             Arc::new(crate::memory::MemoryNotificationDestinationStore::new(
@@ -10522,5 +10523,276 @@ mod destination_tests {
             .expect("the list answers");
         assert_eq!(slack.len(), 1);
         assert_eq!(slack[0].id, "dest-slack-1");
+    }
+}
+
+#[cfg(test)]
+mod acp_agent_tests {
+    use super::TestApp;
+    use boma_app::worker::Worker;
+    use boma_domain::RunStatus;
+    use std::sync::Arc;
+
+    const STUB_SPEC: boma_app::acp_provider::ExecutorSpec = boma_app::acp_provider::ExecutorSpec {
+        id: "stub",
+        command: "python3",
+        args: &[concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/fixtures/stub-acp-agent.py"
+        )],
+    };
+
+    fn stub_provider(root: &std::path::Path) -> Arc<dyn boma_app::ports::ModelProvider> {
+        Arc::new(boma_app::acp_provider::AcpProvider::new(
+            STUB_SPEC,
+            Some(root.to_path_buf()),
+            std::time::Duration::from_secs(30),
+        ))
+    }
+
+    fn missing_provider(root: &std::path::Path) -> Arc<dyn boma_app::ports::ModelProvider> {
+        Arc::new(boma_app::acp_provider::AcpProvider::new(
+            boma_app::acp_provider::ExecutorSpec {
+                id: "missing-xyz",
+                command: "boma-acp-no-such-binary-xyz",
+                args: &[],
+            },
+            Some(root.to_path_buf()),
+            std::time::Duration::from_secs(10),
+        ))
+    }
+
+    #[tokio::test]
+    async fn req_061_an_acp_executor_answers_in_the_room() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("boma-test-acp-{}", std::process::id()));
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("acp-person@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "executor", None, None)
+            .await
+            .expect("the bot is created");
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.bot.id.to_string(),
+                text: "plan my week".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let app = Arc::new(test.app().clone());
+        let worker = Worker::new(
+            app,
+            stub_provider(&workspace_root),
+            "worker-acp-1".to_owned(),
+        );
+        assert!(
+            worker.step().await.expect("the worker answers"),
+            "the worker claimed the queued run"
+        );
+
+        let thread = test
+            .app()
+            .stores
+            .threads
+            .for_bot(&context, &bot.bot.id)
+            .await
+            .expect("the store answers")
+            .expect("the thread exists");
+        let page = test
+            .app()
+            .stores
+            .messages
+            .page(&context, &thread.id, None, 10)
+            .await
+            .expect("the page answers");
+        let reply = page
+            .messages
+            .iter()
+            .find(|message| message.role == boma_domain::MessageRole::Bot)
+            .expect("the ACP executor's answer is attributed to the bot");
+        let reply_text = reply
+            .blocks
+            .iter()
+            .filter_map(boma_domain::Block::as_text)
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            reply_text.contains("stub says: ") && reply_text.contains("PLAN MY WEEK"),
+            "the stub executor answered: {reply_text}"
+        );
+
+        // REQ-061: the executor ran on an isolated per-run workspace the person owns.
+        assert!(workspace_root.exists(), "the workspace root exists");
+        let mut entries =
+            std::fs::read_dir(&workspace_root).expect("the workspace root is readable");
+        assert!(
+            entries.next().is_some(),
+            "at least one per-run workspace was created"
+        );
+
+        let run_page = test
+            .app()
+            .stores
+            .runs
+            .list(&context, Some(&bot.bot.id), None, 10)
+            .await
+            .expect("the activity answers");
+        let run = run_page
+            .runs
+            .into_iter()
+            .next()
+            .expect("the run is listed")
+            .run;
+        assert_ne!(
+            run.status,
+            RunStatus::Failed,
+            "a well-behaved executor completes the run"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_061_a_missing_executor_fails_the_run_legibly() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("boma-test-acp-missing-{}", std::process::id()));
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("acp-missing@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "executor", None, None)
+            .await
+            .expect("the bot is created");
+        boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: bot.bot.id.to_string(),
+                text: "hello".to_owned(),
+                client_nonce: None,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is sent");
+
+        let app = Arc::new(test.app().clone());
+        let worker = Worker::new(
+            app,
+            missing_provider(&workspace_root),
+            "worker-acp-2".to_owned(),
+        );
+        assert!(
+            worker.step().await.expect("the worker answers"),
+            "the worker claimed the queued run"
+        );
+
+        let page = test
+            .app()
+            .stores
+            .runs
+            .list(&context, Some(&bot.bot.id), None, 10)
+            .await
+            .expect("the activity answers");
+        let run = page.runs.into_iter().next().expect("the run is listed").run;
+        assert_eq!(run.status, RunStatus::Failed);
+        let reason = run.error.expect("the failure is recorded on the run");
+        assert!(!reason.is_empty(), "the reason is not empty");
+        assert!(
+            !reason.contains("sqlx") && !reason.contains("panic"),
+            "the reason names the problem, not the internals: {reason}"
+        );
+    }
+
+    #[tokio::test]
+    async fn req_061_attach_and_detach_roundtrip_and_unknown_executors_are_refused() {
+        let test = TestApp::builder().build();
+        let user_id = test
+            .seed_user("acp-attach@example.com", "correct horse battery")
+            .await
+            .expect("the person exists");
+        let space = test
+            .app()
+            .stores
+            .spaces
+            .default_for(&user_id)
+            .await
+            .expect("the store answers")
+            .expect("the person lands in a space");
+        let context = TestApp::member_context(&space.id, &user_id);
+        let bot = boma_app::usecases::create_bot(test.app(), &context, "executor", None, None)
+            .await
+            .expect("the bot is created");
+
+        let attached = boma_app::usecases::attach_acp_agent(
+            test.app(),
+            &context,
+            bot.bot.id.as_ref(),
+            "opencode",
+        )
+        .await
+        .expect("the known executor attaches");
+        assert_eq!(attached.executor, "opencode");
+
+        let found = test
+            .app()
+            .stores
+            .acp_agents
+            .find(&context, &bot.bot.id)
+            .await
+            .expect("the store answers")
+            .expect("the attachment is listed");
+        assert_eq!(found.executor, "opencode");
+
+        let refused = boma_app::usecases::attach_acp_agent(
+            test.app(),
+            &context,
+            bot.bot.id.as_ref(),
+            "definitely-not-an-executor",
+        )
+        .await;
+        assert!(
+            matches!(refused, Err(boma_app::AppError::Rule(_))),
+            "unknown executors are refused"
+        );
+
+        boma_app::usecases::detach_acp_agent(test.app(), &context, bot.bot.id.as_ref())
+            .await
+            .expect("the attachment is removed");
+        let after = test
+            .app()
+            .stores
+            .acp_agents
+            .find(&context, &bot.bot.id)
+            .await
+            .expect("the store answers");
+        assert!(after.is_none(), "detach removed the attachment");
     }
 }

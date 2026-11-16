@@ -7,18 +7,19 @@ use boma_api::{AppState, router};
 use boma_app::{App, Readiness, Services, Stores, Worker};
 use boma_infra::{
     Argon2idHasher, BroadcastPublisher, IdGenerator, Postgres, PostgresAccountExportStore,
-    PostgresAccountStore, PostgresAdminStore, PostgresArtifactStore, PostgresAuditStore,
-    PostgresBillingStore, PostgresBotStore, PostgresCardStore, PostgresComputerStore,
-    PostgresConnectorStore, PostgresEffectStore, PostgresEventStore, PostgresExternalAgentStore,
-    PostgresGroupStore, PostgresInvitationStore, PostgresMailStore, PostgresMcpServerStore,
-    PostgresMemoryStore, PostgresMessageStore, PostgresMessagingStore, PostgresModelStore,
-    PostgresNotificationDestinationStore, PostgresNotificationStore, PostgresPageStore,
-    PostgresPasswordResetStore, PostgresPendingToolCallStore, PostgresPluginInstallStore,
-    PostgresPluginSubmissionStore, PostgresRateLimitStore, PostgresReactionStore,
-    PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore, PostgresRunStore,
-    PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore, PostgresSignInStore,
-    PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore, PostgresTicketStore,
-    PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock, TokenGenerator,
+    PostgresAccountStore, PostgresAcpAgentStore, PostgresAdminStore, PostgresArtifactStore,
+    PostgresAuditStore, PostgresBillingStore, PostgresBotStore, PostgresCardStore,
+    PostgresComputerStore, PostgresConnectorStore, PostgresEffectStore, PostgresEventStore,
+    PostgresExternalAgentStore, PostgresGroupStore, PostgresInvitationStore, PostgresMailStore,
+    PostgresMcpServerStore, PostgresMemoryStore, PostgresMessageStore, PostgresMessagingStore,
+    PostgresModelStore, PostgresNotificationDestinationStore, PostgresNotificationStore,
+    PostgresPageStore, PostgresPasswordResetStore, PostgresPendingToolCallStore,
+    PostgresPluginInstallStore, PostgresPluginSubmissionStore, PostgresRateLimitStore,
+    PostgresReactionStore, PostgresReadStateStore, PostgresRosterStore, PostgresRoutineStore,
+    PostgresRunStore, PostgresScreenCapabilityStore, PostgresSecretStore, PostgresSessionStore,
+    PostgresSignInStore, PostgresSkillStore, PostgresSpaceStore, PostgresThreadStore,
+    PostgresTicketStore, PostgresToolStore, PostgresUserStore, ScriptedProvider, SystemClock,
+    TokenGenerator,
 };
 use tokio::net::TcpListener;
 
@@ -207,6 +208,7 @@ fn build_app(
             Arc::new(PostgresPasswordResetStore::new(pool.clone())),
             Arc::new(PostgresGroupStore::new(pool.clone())),
             Arc::new(PostgresExternalAgentStore::new(pool.clone())),
+            Arc::new(PostgresAcpAgentStore::new(pool.clone())),
             Arc::new(PostgresSignInStore::new(pool.clone())),
             Arc::new(PostgresNotificationStore::new(pool.clone())),
             Arc::new(PostgresNotificationDestinationStore::new(

@@ -8702,8 +8702,72 @@ impl boma_app::ports::AdminStore for MemoryAdminStore {
     }
 }
 
-/// The external-agents store of the improvement program (REQ-059).
+/// The local ACP executors of the improvement program (REQ-061).
 #[derive(Clone)]
+pub struct MemoryAcpAgentStore {
+    agents: Arc<RwLock<std::collections::HashMap<String, boma_domain::acp::AcpAgent>>>,
+}
+
+impl MemoryAcpAgentStore {
+    /// Builds the store on an empty database.
+    #[must_use]
+    pub fn new(_database: &MemoryDatabase) -> Self {
+        Self {
+            agents: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl boma_app::ports::AcpAgentStore for MemoryAcpAgentStore {
+    async fn attach(
+        &self,
+        config: boma_domain::acp::NewAcpAgent,
+    ) -> Result<boma_domain::acp::AcpAgent, AppError> {
+        let mut agents = self.agents.write().map_err(|_| AppError::Unavailable)?;
+        let agent = boma_domain::acp::AcpAgent {
+            bot_id: config.bot_id,
+            space_id: config.space_id,
+            executor: config.executor,
+            created_at: config.saved_at.clone(),
+            updated_at: config.saved_at,
+        };
+        let key = agent.bot_id.as_str().to_owned();
+        agents.insert(key, agent.clone());
+        Ok(agent)
+    }
+
+    async fn detach(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<(), AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let mut agents = self.agents.write().map_err(|_| AppError::Unavailable)?;
+        match agents.get(bot_id.as_str()) {
+            Some(agent) if agent.space_id == space => {
+                agents.remove(bot_id.as_str());
+                Ok(())
+            }
+            _ => Err(AppError::NotFound),
+        }
+    }
+
+    async fn find(
+        &self,
+        context: &boma_domain::TenantContext,
+        bot_id: &boma_domain::BotId,
+    ) -> Result<Option<boma_domain::acp::AcpAgent>, AppError> {
+        let space = context.space_id().cloned().ok_or(AppError::Forbidden)?;
+        let agents = self.agents.read().map_err(|_| AppError::Unavailable)?;
+        Ok(agents
+            .get(bot_id.as_str())
+            .filter(|agent| agent.space_id == space)
+            .cloned())
+    }
+}
+
+/// The external-agents store of the improvement program (REQ-059).
 pub struct MemoryExternalAgentStore {
     agents: Arc<RwLock<std::collections::HashMap<String, boma_domain::external::ExternalAgent>>>,
 }

@@ -58,6 +58,7 @@ pub use provider::ScriptedProvider;
 pub use secret_box::{SecretBox, SecretBoxError};
 pub use stores::account_export::PostgresAccountExportStore;
 pub use stores::accounts::PostgresAccountStore;
+pub use stores::acp_agents::PostgresAcpAgentStore;
 pub use stores::admin::PostgresAdminStore;
 pub use stores::artifacts::PostgresArtifactStore;
 pub use stores::audit::PostgresAuditStore;

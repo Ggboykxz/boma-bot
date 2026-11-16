@@ -552,6 +552,28 @@ impl Worker {
     /// otherwise the provider this worker was built with.
     async fn provider_for(&self, run: &boma_domain::Run) -> Arc<dyn ModelProvider> {
         let scoped = member_context_for(run);
+        // A locally attached ACP executor wins over everything else attached to the bot
+        // (REQ-061): the operator asked for that exact CLI on this machine.
+        match self.app.stores.acp_agents.find(&scoped, &run.bot_id).await {
+            Ok(Some(attachment)) => {
+                let spec = crate::acp_provider::executors()
+                    .iter()
+                    .find(|spec| spec.id == attachment.executor.as_str());
+                if let Some(spec) = spec {
+                    return Arc::new(crate::acp_provider::AcpProvider::new(
+                        *spec,
+                        None,
+                        crate::acp::DEFAULT_PROMPT_TIMEOUT,
+                    ));
+                }
+                tracing::warn!(run = %run.id, executor = %attachment.executor, "the attachment names an unknown executor; the internal model answers this turn");
+                return Arc::clone(&self.provider);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(run = %run.id, %error, "the ACP attachment could not be read; the internal model answers this turn");
+            }
+        }
         let Ok(Some(config)) = self
             .app
             .stores
