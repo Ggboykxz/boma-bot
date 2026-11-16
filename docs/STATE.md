@@ -5,6 +5,32 @@
 **M11 — complete: v0.1.0 released (2026-11-15).** M10 closed with it. This section also carries the M9 slice log. `docs/PLAN.md` marks M10/M11 done.
 Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKit/OpenBot` @ `f1905cd` — full 21-area capability matrix; you confirmed nothing is neglected): M12 external agents → M13 sign-in requests & Recorder → M14 dictation (voice/call gated on your un-defer) → M15 push + release maturity → M16 scoped auto-approvals → M17 standing instructions → M18 automatic learning (limited; will add REQ-061 on your bless) → M19 enterprise packaging → M20 browser extension → M21 skins (optional) → M22 bot-drawn component drafts (optional, your call). Mobile stays deferred per your call.
 
+- **M15.5 — branding + Windows desktop + v0.2.0 (2026-11-16, owner-approved; CI green at release time).**
+  - **Brand**: original Boma Bot mark authored in-repo (enclosure ring of 12 emerald ticks around a
+    solid amber core — the "boma" enclosure; two-tone for app icons, `currentColor` mono variant for
+    inline use; lockups light/dark at `assets/brand/`; tagline "AI teammates on hardware you own").
+    Wired into: NSIS installer sidebar (`build/installerSidebar.bmp`, 164×314) and header
+    (`build/installerHeader.bmp`, 150×57), exe icon + multi-size `icon.ico` (16…512),
+    Linux dir pack icon, Electron `BrowserWindow` icon, web `app/icon.svg` / `favicon.ico` /
+    `apple-icon.png`, README lockup with `prefers-color-scheme` switching. No AI-generated raster
+    was used; the mark is hand-built SVG, so every size is crisp and every asset is ours (MIT).
+  - **Windows desktop**: `npm run dist:win` → NSIS setup (`boma-desktop-${version}-win-x64-setup.exe`,
+    per-user by default, no admin) + portable zip (`boma-desktop-${version}-win-x64-portable.zip`).
+    Built and attested in `.github/workflows/release.yml` (`desktop-windows` job, `windows-latest`,
+    `gh release upload` after the Linux job publishes, keyless Sigstore attestation for the exe, the
+    zip and `SHA256SUMS-windows.txt`; the workflow then runs `gh attestation verify` on them).
+    CI `desktop` job is now a two-OS matrix (ubuntu-24.04 + windows-latest) packing on both on every
+    push — REQ-055's "every push packs" rule now covers Windows. No Wine anywhere.
+  - **v0.2.0 prep**: versions bumped 0.1.0 → 0.2.0 (Cargo workspace + member path deps, `Cargo.lock`
+    regenerated, root/apps packages, lockfiles, `.env.example`, Helm `Chart.yaml`/`values.yaml`,
+    compose default, CI chart tag); CHANGELOG `[0.2.0]` documents M12, M13.1, M15.1–M15.5 and the
+    web-capabilities fix; release notes rewritten for v0.2.0 (61/64 REQ ids; 29 ADRs; the five CI
+    jobs; the Windows artifacts; `SHA256SUMS(-windows).txt` attestation flow); `docs/UPGRADING.md`
+    gained the Windows/SmartScreen section (click-through documented; verify with `gh attestation
+    verify`, never trust unsigned bytes).
+  - Verified: `npm run dist` (Linux) passes with the new config; desktop typecheck/lint/build/smoke
+    pass; web build prerenders `/icon.svg` and `/apple-icon.png`; `.ico` carries 8 PNG frames.
+
 - **M15.4 — local-first bring-up + release verification (2026-11-16, REQ-066, uncommitted worktree; ADR-029).**
   - `BOMA_LOCAL_FIRST=true` (default off): loopback-only at boot (`HttpConfig::with_local_first` refuses
     any non-loopback bind, exit 1, message names `BOMA_LOCAL_FIRST`); a request without a cookie resolves

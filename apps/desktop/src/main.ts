@@ -34,6 +34,7 @@ function makeWindow(): BrowserWindow {
     minWidth: 800,
     minHeight: 560,
     title: "Boma Bot",
+    icon: path.join(__dirname, "..", "build", "icon.png"),
     webPreferences: {
       partition: DESKTOP_PARTITION,
       contextIsolation: true,

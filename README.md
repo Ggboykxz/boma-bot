@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/boma-lockup-dark.svg">
+  <img alt="Boma Bot — AI teammates on hardware you own" src="assets/brand/boma-lockup-light.svg" width="340">
+</picture>
+
 # rebuild-workspace : reconstruire le logiciel analysé, en Rust et en mieux
 
 [![ci](https://github.com/Ggboykxz/boma-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Ggboykxz/boma-bot/actions/workflows/ci.yml)

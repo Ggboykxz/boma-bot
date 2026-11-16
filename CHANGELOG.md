@@ -4,6 +4,61 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.2.0] - 2026-11-16
+
+The first release after the v0.1.0 baseline: the improvement program (M12, M13.1, M15) and the
+first Windows desktop build. 61 of 64 REQ ids are covered by tests carrying their id in the
+name; REQ-049 (voice, COULD) and REQ-056 (mobile, SHOULD) stay deferred by record, and REQ-061
+is authored but not built.
+
+### Added
+
+- **External agents over AG-UI (M12, REQ-059, ADR-026)**: a bot can be driven by an external
+  AG-UI agent (TCP executor in the loopback tests, real connector in deployments); the run's
+  answer appears in the room attributed to the bot, and the approval gate relays post-approval
+  effects exactly once. `bots.connectExternal` / `bots.externalAgentStatus` /
+  `bots.disconnectExternal` plus an inline panel in the thread header.
+- **Sign-in requests (M13.1, REQ-060)**: a bot can ask a person to sign into a site; the ask is
+  a write-class effect that passes the ordinary approval gate; answers land in `signin_requests`
+  (`0055_signin_requests.sql`, PG + RLS); RPC `bots.requestSignIn` / `bots.signIns`; grant is
+  one-shot, a second resolve is refused.
+- **Web Push (M15.1, REQ-064)**: content-free notifications (waiting / completed / failed),
+  per-(space, member, bot) UTC-day cap, `/sw.js`, VAPID (`BOMA_VAPID_PRIVATE_KEY`),
+  member-supplied endpoints screened by an SSRF guard. Migration `0056_notifications.sql`.
+- **Notification destinations (M15.2, REQ-065)**: Slack/Teams incoming webhooks per space,
+  sealed at rest under the space key, delivered as a single title line only, per-(member, bot)
+  opt-in, registration Owner/Admin-only. Migrations `0057_notification_destinations.sql`,
+  `0058_notification_destination_flags.sql`.
+- **k3d single-node chart (M15.3)**: `deploy/helm/boma-bot` — app + worker + migrate Job +
+  in-cluster throwaway Postgres (or an external DSN), optional ingress; CI job lints and
+  templates it.
+- **Local-first bring-up (M15.4, REQ-066, ADR-029)**: `BOMA_LOCAL_FIRST=true` on a loopback
+  bind — no account, no password, no sign-in round trip; the operator (or a code agent over
+  loopback) is the local owner, seeded on first use. Refused at boot on any non-loopback bind.
+- **Windows desktop (REQ-055)**: NSIS installer (`boma-desktop-<version>-win-x64-setup.exe`,
+  per-user by default) and portable zip (`boma-desktop-<version>-win-x64-portable.zip`), built
+  on a real `windows-latest` runner; unsigned by decision (ADR-016); keyless Sigstore
+  attestations for both assets and for `SHA256SUMS-windows.txt`. No auto-update; updates manual.
+- **Brand**: the original Boma Bot mark (enclosure-and-core) is wired into the desktop
+  installer, the app icons, the web favicon/apple-touch-icon and the README lockups
+  (`assets/brand/`).
+
+### Fixed
+
+- **The web sign-in screens read the wrong capability report**: the web client had been written
+  against the OpenBot-shaped `/api/auth/capabilities` document; the binary serves the spec's
+  shape, so the sign-in form never rendered and `sso.map` dereferenced `null`. The web type now
+  matches the spec exactly; fixtures replay the real document.
+- Release notes pointed at CI jobs that did not exist under those names; they now name all five
+  (rust, web, chart, compose, desktop on ubuntu + windows), and the desktop install instructions
+  document the Sigstore verification flow for the release artifacts.
+
+### Security
+
+- No new secrets are introduced anywhere in the release path; the Windows artifacts are attested
+  with the same keyless Sigstore/OIDC chain as the Linux ones, and
+  `SHA256SUMS-windows.txt` is attested itself. Verify, never trust the bytes.
+
 ## [0.1.0] - 2026-11-15
 
 First release — the whole product, rebuilt in Rust from the spec, milestone by milestone.

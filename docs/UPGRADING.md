@@ -147,6 +147,32 @@ the release is forged — the Sigstore attestation is the proof of origin.
 Signing remains unsigned by owner decision (ADR-016); attestations are the chain of custody in
 their place — verify them, don't skip them.
 
+## Desktop on Windows (unsigned: what SmartScreen tells you)
+
+The same release publishes two Windows artifacts (built on a real `windows-latest` runner, no
+Wine involved):
+
+- `boma-desktop-<version>-win-x64-setup.exe` — NSIS installer, per-user by default (no admin
+  required), lets you pick the install directory.
+- `boma-desktop-<version>-win-x64-portable.zip` — unpack anywhere, run `boma-desktop.exe`.
+
+The `.exe` is **not code-signed** (ADR-016, no Apple/Microsoft identity exists for this project).
+Windows SmartScreen will therefore show **"Windows protected your PC"** on first run of the
+installer: click **More info → Run anyway**. That prompt appears because the binary is unsigned,
+not because it is harmful — an attacker's forged pack looks identical to Windows, which is why
+the provenance check matters:
+
+```bat
+gh attestation verify boma-desktop-<version>-win-x64-setup.exe --repo Ggboykxz/boma-bot
+gh attestation verify boma-desktop-<version>-win-x64-portable.zip --repo Ggboykxz/boma-bot
+gh attestation verify SHA256SUMS-windows.txt --repo Ggboykxz/boma-bot
+```
+
+Expected: JSON with a SLSA v1 predicate, workflow path `.github/workflows/release.yml`, ref
+`refs/tags/vX.Y.Z`, and exit code 0. If GitHub is unreachable, compare SHA256 against
+`SHA256SUMS-windows.txt` from the same release page (the attested file). SmartScreen may also
+warn about the unpacked portable build; the same verification covers it.
+
 ## What changed with every release
 
 Each release's notes say exactly what shipped, which REQ ids are covered and what remains

@@ -131,9 +131,15 @@ jobs:
   desktop:
     # REQ-055: the Electron shell must install, typecheck, build and pack on every push; an
     # app that has never packed is a claim, not evidence. No GUI is needed for packing; no
-    # certificate is referenced (the update feed stays inert until the owner signs, ADR-016).
-    name: desktop (install, typecheck, build, pack)
-    runs-on: ubuntu-24.04
+    # certificate is referenced (the app is unsigned by decision, ADR-016; the update feed
+    # stays inert until the owner signs). The Windows leg proves the NSIS installer and the
+    # portable zip build on a real Windows runner — no Wine is involved anywhere.
+    name: desktop (${{ matrix.os }} — install, typecheck, build, pack)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
     defaults:
       run:
         working-directory: apps/desktop
@@ -151,7 +157,21 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm run smoke
-      - run: npm run dist
+      - name: Pack (Linux, unpacked)
+        if: runner.os == 'Linux'
+        run: npm run dist
+      - name: Pack (Windows, NSIS setup + portable zip)
+        if: runner.os == 'Windows'
+        run: npm run dist:win
+      - name: Upload the Windows artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: boma-desktop-windows-${{ github.sha }}
+          path: |
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.zip
+          retention-days: 14
 
   compose:
     # M0's last exit criterion: `docker compose up` migrates and serves. Reviewed-only YAML is not
@@ -221,7 +241,7 @@ jobs:
         run: helm lint deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway
 
       - name: render the in-cluster path
-        run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set image.repository=boma-bot --set image.tag=0.1.0
+        run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set image.repository=boma-bot --set image.tag=0.2.0
 
       - name: render the external-postgres path
         run: helm template deploy/helm/boma-bot --set boma.masterKey=ci-lint-throwaway --set postgresql.enabled=false --set externalPostgres.dsn=postgres://boma:ci@example.com:5432/boma

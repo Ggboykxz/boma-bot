@@ -87,24 +87,88 @@ jobs:
           {
             echo "Boma Bot — persistent AI teammates on hardware you own."
             echo
-            echo "What is in this release: the full product, rebuilt in Rust from the behaviour spec — platform (M1–M3), computers (M4), integrations (M5), artifacts/pages/board (M6), channels (M7), models and money (M8), operations (M9), every screen from the spec (M10) and group chats with bot-to-bot handoffs (M11, REQ-010). 55 of 58 REQ ids are covered by tests carrying their id in the name; REQ-049 (voice, COULD) and REQ-056 (mobile, SHOULD) are deferred by record."
+            echo "What is in this release: the v0.1.0 product (M1–M11) plus the improvement program — external agents over AG-UI (M12, REQ-059), sign-in requests (M13.1, REQ-060), Web Push for opted-in members (M15.1, REQ-064) and Slack/Teams notification destinations (M15.2, REQ-065), the single-node k3d Helm chart (M15.3), local-first bring-up (M15.4, REQ-066: BOMA_LOCAL_FIRST=true on loopback — no account, no password, for the operator's laptop and for code agents driving the binary). 61 of 64 REQ ids are covered by tests carrying their id in the name; REQ-049 (voice, COULD), REQ-056 (mobile, SHOULD) and REQ-061 (authored, not built) are the recorded gaps."
             echo
-            echo "Artifacts (hashes in SHA256SUMS.txt; Sigstore attestations are published for the tarballs and the sums):"
+            echo "Artifacts (hashes: SHA256SUMS.txt covers the Linux artifacts; SHA256SUMS-windows.txt covers the Windows artifacts — both are Sigstore-attested). The desktop-windows job uploads the Windows files to this release after the Linux job finishes:"
             echo
             echo "- boma-${VERSION}-linux-x86_64.tar.gz — the server: the boma binary, the static web build, migrations, README/LICENSE/CHANGELOG and docs/UPGRADING.md. Serve it with boma migrate && boma serve; see docs/UPGRADING.md."
             echo "- boma-desktop-${VERSION}-linux-x64.tar.gz — the Electron shell, unpacked and unsigned; see docs/UPGRADING.md (§Desktop). No auto-update; updates are manual."
+            echo "- boma-desktop-${VERSION}-win-x64-setup.exe — the Windows installer (per-user by default; unsigned — see Verify)."
+            echo "- boma-desktop-${VERSION}-win-x64-portable.zip — portable Windows build: unpack, run boma-desktop.exe."
             echo
-            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI green on every push (rust, web, chart, compose, desktop jobs)."
+            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI green on every push (rust, web, chart, compose, desktop on ubuntu-24.04 and windows-latest)."
             echo
             echo "Verify the downloads (no Apple/MS identity required — these are keyless Sigstore attestations, not code-signing certificates):"
             echo
             echo "  gh attestation verify boma-${VERSION}-linux-x86_64.tar.gz --repo Ggboykxz/boma-bot"
             echo "  gh attestation verify boma-desktop-${VERSION}-linux-x64.tar.gz --repo Ggboykxz/boma-bot"
+            echo "  gh attestation verify boma-desktop-${VERSION}-win-x64-setup.exe --repo Ggboykxz/boma-bot"
+            echo "  gh attestation verify boma-desktop-${VERSION}-win-x64-portable.zip --repo Ggboykxz/boma-bot"
             echo "  gh attestation verify SHA256SUMS.txt --repo Ggboykxz/boma-bot"
+            echo "  gh attestation verify SHA256SUMS-windows.txt --repo Ggboykxz/boma-bot"
             echo
-            echo "Everything else is in the repository: CHANGELOG.md, docs/PLAN.md, docs/TRACEABILITY.md (56/58 REQ ids in test names), docs/adr/ (25 decisions)."
+            echo "Everything else is in the repository: CHANGELOG.md, docs/PLAN.md, docs/TRACEABILITY.md (61/64 REQ ids in test names), docs/adr/ (29 decisions)."
           } > release-notes.md
           gh release create "${GITHUB_REF_NAME}" \
             --title "Boma Bot ${GITHUB_REF_NAME}" \
             --notes-file release-notes.md \
             dist/*
+
+  desktop-windows:
+    name: build and upload the Windows desktop artifacts
+    needs: release
+    runs-on: windows-latest
+    permissions:
+      contents: write # upload the assets to the release
+      id-token: write # keyless provenance attestation
+      attestations: write # persist the attestation on the repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Build the Windows pack (NSIS setup + portable zip)
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
+          npm run dist:win
+
+      - name: Write the Windows checksums
+        working-directory: apps/desktop/dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum *.exe *.zip > SHA256SUMS-windows.txt
+          cat SHA256SUMS-windows.txt
+
+      - name: Attest provenance (Sigstore, keyless via OIDC)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/SHA256SUMS-windows.txt
+
+      - name: Verify the attestations (the exact commands a stranger would run)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh attestation verify apps/desktop/dist/*.exe apps/desktop/dist/*.zip apps/desktop/dist/SHA256SUMS-windows.txt --repo Ggboykxz/boma-bot
+
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.ref_name }}" \
+            apps/desktop/dist/*.exe \
+            apps/desktop/dist/*.zip \
+            apps/desktop/dist/SHA256SUMS-windows.txt \
+            --clobber

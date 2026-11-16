@@ -1,9 +1,10 @@
 {
   "name": "@boma/desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Boma Bot desktop shell (REQ-055): Electron, a session partition it owns, WebAuthn via the loopback origin, signed auto-update wiring.",
   "license": "MIT",
+  "author": "Boma Bot contributors",
   "main": "main/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -11,6 +12,7 @@
     "start": "npm run build && electron .",
     "smoke": "electron --no-sandbox --version",
     "dist": "electron-builder --dir",
+    "dist:win": "electron-builder --win --x64",
     "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
@@ -27,11 +29,31 @@
   "build": {
     "appId": "com.boma.desktop",
     "productName": "Boma Bot",
+    "copyright": "Copyright © 2026 the Boma Bot contributors",
     "linux": {
       "target": [
         "dir"
       ],
-      "category": "Network"
+      "category": "Network",
+      "icon": "build/icon.png"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "boma-desktop-${version}-win-x64-portable.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "boma-desktop-${version}-win-x64-setup.${ext}",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerHeaderIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }

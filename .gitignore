@@ -8,6 +8,7 @@ next-env.d.ts
 __pycache__/
 dist/
 build/
+!apps/desktop/build/
 coverage/
 lcov.info
 *.profraw
