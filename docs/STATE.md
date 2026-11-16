@@ -5,6 +5,36 @@
 **M11 — complete: v0.1.0 released (2026-11-15).** M10 closed with it. This section also carries the M9 slice log. `docs/PLAN.md` marks M10/M11 done.
 Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKit/OpenBot` @ `f1905cd` — full 21-area capability matrix; you confirmed nothing is neglected): M12 external agents → M13 sign-in requests & Recorder → M14 dictation (voice/call gated on your un-defer) → M15 push + release maturity → M16 scoped auto-approvals → M17 standing instructions → M18 automatic learning (limited; will add REQ-061 on your bless) → M19 enterprise packaging → M20 browser extension → M21 skins (optional) → M22 bot-drawn component drafts (optional, your call). Mobile stays deferred per your call.
 
+- **UI/UX/motion audit (2026-11-16, on `3377c69`; report `docs/audits/2026-11-16-ui-motion-ux-audit.md`).**
+  A full Playwright sweep of every route of the static export served by the Rust binary
+  (`BOMA_WEB_ROOT`, the production path; deployments A `:3010` local-first and B `:3011` public):
+  21 routes at 1280×800, three at 390×844, full-page screenshots (`docs/screenshots/ui-audit-2026-11-16/`),
+  axe-core per route, per-route console/pageerror/failed-request capture, entrance-animation sampling
+  via an init-script poller (verified on a synthetic animated page), CLS/LCP via PerformanceObserver,
+  and a keyboard walk on the sign-in screen. Raw data: `docs/audits/2026-11-16/ui-audit-results.json`;
+  the harness is committed as `tools/ui-audit.mjs`.
+  Headline findings: (1) the product is **entirely static** — zero CSS/WAAPI/transition motion on
+  any screen, normal or `prefers-reduced-motion`, while a bespoke, reduced-motion-guarded motion
+  vocabulary sits unused in `styles/globals.css` (`t-stagger-line`, `.animate-number-fade` 220 ms,
+  `.animate-check-draw` 200 ms, `row-grow-in`, `ai-chat-text-shimmer`, soft-circular view-transitions)
+  plus an unused liquid-glass recipe — the design exists but is unwired; (2) `text-text-tertiary`
+  (neutral-400 ≈ 2.4–2.6:1) fails WCAG AA everywhere — serious on sign-in, sign-up, onboarding-3,
+  artifacts, admin-access, admin-plugins, integrations-setup; (3) `text-secondary` measures 4.43:1
+  on the secondary surface (the shell already routes around it; the token itself stands);
+  (4) duplicated/nested `<main>` on artifacts/board + no `h1` on board; (5) dead header nav
+  ("Settings" → `/app/`) and a `.dark` pre-paint bootstrap that nothing in the product can set —
+  dark mode is unreachable from the UI; (6) CLS ≈ 0.0004, LCP ≈ 68–72 ms, zero `pageerror`,
+  keyboard path logical with visible rings, one inert tab stop. Proposed next step: **M34 —
+  motion pass + a11y sweep** (wire the dormant vocabulary: screen/row staggers, blur-in entrances,
+  shimmer on first-token wait, check-draw on approval cards, `number-fade` on counters; token
+  decision for tertiary/secondary — Figma is source of truth; landmark/h1 fixes; dead-nav cleanup;
+  quieter capability probes U-08) — **not started, owner's call**; no product code was changed.
+  Honest side-effects recorded: (a) the audit caught a regression introduced earlier this session
+  (M28 router restructure) that stripped the security layers from the web fallback — fixed,
+  locked by `req_055_the_web_fallback_carries_the_same_security_headers_as_the_api`; API routes
+  were never affected. (b) The local-first server was SIGKILLed mid-first-sweep (cause
+  unestablished; ~28 GB available); every number in the report comes from the healthy-server
+  re-run; the screenshots captured during the outage were overwritten by the re-run.
 - **M28 — local automation API + operator CLI (2026-11-16, REQ-072; this commit).**
   - The token-gated automation surface landed: `/api/v1/automation/*`, off unless both
     `BOMA_AUTOMATION_TOKEN` (≥16 chars) and `BOMA_AUTOMATION_AGENTS` (comma-separated bot ids, or
