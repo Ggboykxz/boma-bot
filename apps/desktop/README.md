@@ -28,3 +28,22 @@ npm run dist         # electron-builder --dir (unsigned pack)
 CI carries a `desktop` job: installs, typechecks, builds, runs the smoke, builds the pack on
 ubuntu-latest (it has the system GTK libraries). On this machine there is no GTK, so runtime
 is verified by CI only.
+
+## The self-contained build (M35)
+
+The desktop is fully self-contained for the default case: the pack carries the web export,
+the matching `boma` binary and an embedded PostgreSQL 17.12.0 (zonkyio, Apache-2.0). First
+launch runs `initdb` into the app's user-data `boma/` folder, starts Postgres on a fresh
+loopback port, applies the migrations (they are compiled into the binary), starts
+`boma serve` and `boma worker` as supervised children, and opens the app — no Docker, no
+system Postgres, no account, no setup.
+
+- The HTTP port persists in `userData/boma/port` across launches.
+- `BOMA_DESKTOP_URL` still pins the shell to an external origin (a self-hosted server); the
+  embedded stack is not started in that case.
+- `userData/boma/` holds the cluster, master key, artifacts and the persisted port; deleting
+  it resets the deployment.
+- Local rehearsals without a GUI: `tools/stage-desktop-vendor.sh linux` (stages the pack
+  ingredients) and `tools/desktop-stack-smoke.sh` (initdb → migrate → serve/worker → RPC).
+- The Windows installer is unsigned by decision (ADR-016); verify with `gh attestation
+  verify`, never by running the unsigned binary.

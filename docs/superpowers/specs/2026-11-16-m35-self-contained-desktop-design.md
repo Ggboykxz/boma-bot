@@ -1,7 +1,7 @@
 # M35 — Self-contained desktop, the OpenBot way (design)
 
 **Intent.** Make the desktop a double-click application that works on a machine with no Docker,
-no system Postgres, no Node, no account and no network — the owner's standing requirement
+no system Postgres, no Node, no account and no setup — the owner's standing requirement
 (2026-11-16: "docker ne doit pas etre obligatoire, l'app doit fonctionner comme
 https://github.com/nightly-labs/openbot"). Today the Windows/Linux desktop is a window onto an
 origin that does not exist until someone runs `docker compose up -d`; on an installed machine
@@ -59,24 +59,39 @@ because the spec mandates it (RLS, migrations, REQ-043).
    - `postgres/` — the zonkyio binaries for the target OS (pinned `17.12.0`, fetched at
      package time by a script with SHA256 verification, never at user install time);
    - `boma/` — the `boma` server binary for the target OS (built by the release workflow);
-   - `web/` — the static export (already the case for the Linux layout; Windows gains it too).
+   - `web/` — the static export (BOTH OSes gain it in M35; neither ships it today).
 2. **First launch (main process):**
    - `BOMA_DESKTOP_URL` set → window onto that origin (unchanged behavior, no embedded stack).
    - Otherwise: ensure `userData/boma/master-key` exists (generate 64 hex once),
-     ensure `pgdata/` exists (else `initdb -U boma --auth=trust --no-locale -E UTF8`),
-     pick a free loopback port, start `postgres` (pg_ctl), wait for readiness (`pg_isready`),
-     run `boma migrate` (migrations are embedded in the binary via `sqlx::migrate!`),
+     `BOMA_WEB_ROOT=resources/web` is set for the children (the export is packed into the
+     bundle — without it every page is the API's JSON 404);
+     ensure `pgdata/` exists (else `initdb -U boma --auth=trust --no-locale -E UTF8`);
+     the **HTTP port is persisted** in `userData/boma/port` (last good port tried first,
+     else a free loopback port is picked and persisted — the origin stays stable so
+     cookies/localStorage/Web Push survive relaunches; a genuinely occupied port triggers
+     one re-pick); the **PostgreSQL port is picked fresh** on every boot (only the HTTP
+     origin needs stability);
+     start `postgres` (pg_ctl), wait for readiness (`pg_isready`);
+     ensure the `boma` database exists (idempotent `CREATE DATABASE boma` — initdb does not
+     create it);
+     run `boma migrate` (migrations are embedded in the binary via `sqlx::migrate!`);
      spawn `boma serve` and `boma worker` as supervised child processes
-     (`BOMA_LOCAL_FIRST=true`, `BOMA_DATABASE_URL=postgres://boma@127.0.0.1:PORT/boma`,
+     (`BOMA_LOCAL_FIRST=true`, `BOMA_DATABASE_URL=postgres://boma@127.0.0.1:PGPORT/boma`,
      `BOMA_BIND_ADDR=127.0.0.1:PORT`, `BOMA_MASTER_KEY=<the key>`, `BOMA_ARTIFACT_DIR`,
-     `SANDBOX_PROVIDER=none`, `BOMA_LOG_FORMAT=pretty`),
+     `SANDBOX_PROVIDER=none`, `BOMA_LOG_FORMAT=pretty`);
      probe `/health` until ready, then `loadURL(http://127.0.0.1:PORT/)`.
    - **Failures are loud and named**: initdb fails / postgres fails / migration fails / the
      server never becomes healthy → a dialog naming the step, the log lines, and the data
      folder to delete for a reset. Never an anonymous spinner.
 3. **Shutdown**: `before-quit` / window close kills worker → serve → `pg_ctl stop`.
    Orphaned children are reaped on the next launch (pid files in `userData/boma/`).
+   **Runtime supervision**: if `serve` dies, the app quits with the failure dialog (nothing
+   to work against); if `worker` dies, it is restarted once with backoff — a second crash
+   inside the boot window quits the app with the dialog (something is systemically broken;
+   hiding it is lying).
 4. **Data**: everything under `userData/boma/` — nothing in the install directory.
+   `userData/boma/port` persists the HTTP port; `userData/boma/pgdata/`, `master-key`,
+   `artifacts/` and `port` are the whole deployment state — deleting the folder resets it.
 
 ## Release pipeline (release.yml)
 
@@ -127,7 +142,7 @@ for `docs/DEPENDENCIES.md`. CI caches the extraction; local runs stay reproducib
 
 ## Slices (each CI-green, each on `dev`)
 
-1. `tools/fetch-embedded-postgres.sh` + vendored binaries + receipt (dependabot: none; pinned).
+1. `tools/fetch-embedded-postgres.sh` + receipt (slice 1, commit `3e127d1`): pinned fetch, SHA-256 verified, the extracted tree is gitignored and re-fetched at package time.
 2. Desktop main-process rewrite: first-launch lifecycle (initdb → serve → worker → load),
    supervision, failure dialogs, BOMA_DESKTOP_URL override preserved; Linux rehearsal harness
    `tools/desktop-stack-smoke.sh` (initdb → migrate → probe → stop) with axe run on the result.

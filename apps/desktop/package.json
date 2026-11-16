@@ -29,7 +29,7 @@
   "build": {
     "appId": "com.boma.desktop",
     "productName": "Boma Bot",
-    "copyright": "Copyright © 2026 the Boma Bot contributors",
+    "copyright": "Copyright \u00a9 2026 the Boma Bot contributors",
     "linux": {
       "target": [
         "dir"
@@ -54,6 +54,29 @@
       "installerHeader": "build/installerHeader.bmp",
       "installerHeaderIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "vendor/postgres",
+        "to": "postgres",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vendor/boma",
+        "to": "boma",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "vendor/web",
+        "to": "web",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

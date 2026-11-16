@@ -146,6 +146,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -157,6 +160,16 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm run smoke
+      - name: Stage the desktop vendor (embedded Postgres, boma, web)
+        if: runner.os == 'Linux'
+        run: bash ../../tools/stage-desktop-vendor.sh linux
+      - name: Stage the desktop vendor (embedded Postgres, boma, web)
+        if: runner.os == 'Windows'
+        run: bash ../../tools/stage-desktop-vendor.sh windows
+        shell: bash
+      - name: Rehearse the embedded stack boot (no GUI)
+        if: runner.os == 'Linux'
+        run: bash ../../tools/desktop-stack-smoke.sh
       - name: Pack (Linux, unpacked)
         if: runner.os == 'Linux'
         run: npm run dist

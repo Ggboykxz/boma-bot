@@ -1,8 +1,10 @@
 //! The Boma Bot desktop shell (REQ-055).
 //!
-//! Thin by design: the product is the web app at the deployment origin, and this shell only
-//! owns what a browser cannot — one isolated session partition per device, native menu
-//! affordances (sign out, local stack), and, when the owner wires signing, the update feed.
+//! Thin by design: the product is the web app at the deployment origin. On this machine,
+//! with no BOMA_DESKTOP_URL set, that origin is the embedded stack this app itself starts:
+//! Postgres + migrations + the server and the worker, all inside the package (M35). With
+//! BOMA_DESKTOP_URL set, the shell is a window onto that origin instead — the "your own
+//! server" path — and the embedded stack is not started.
 //!
 //! What it does NOT do: proxy the API, inject Node into the renderer, write to disk outside
 //! Electron's own profile directories, or talk to any network but the deployment's and the
@@ -10,94 +12,41 @@
 
 import { app, BrowserWindow, Menu, dialog, session, shell } from "electron";
 import { autoUpdater } from "electron-updater";
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
+import {
+  startStack,
+  stopStack,
+  StackError,
+  type StackHandle,
+} from "./stack";
 
-/** Where the app points: loopback by default, any origin the operator chose at package time. */
-const DEPLOYMENT_URL = process.env.BOMA_DESKTOP_URL ?? "http://127.0.0.1:3000";
+/** The release origin, when the operator pinned one. Unset means the embedded stack. */
+const OVERRIDE_URL = process.env.BOMA_DESKTOP_URL;
 
-/** The release page, for the case where no local stack can be started. */
-const RELEASES_URL = "https://github.com/Ggboykxz/boma-bot/releases/latest";
-
-/** Whether the deployment answers a plain health check. */
-async function isDeploymentReachable(url: string): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2_000);
-  try {
-    const response = await fetch(`${url}/health`, { signal: controller.signal });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Whether the docker CLI exists on this PATH. */
-function dockerAvailable(): boolean {
-  try {
-    return spawnSync("docker", ["--version"], { stdio: "ignore" }).status === 0;
-  } catch {
-    return false;
-  }
-}
-
-/** The compose file to drive, in preference order; `undefined` when none is found. */
-function findComposeFile(): string | undefined {
-  const fromEnv = process.env.BOMA_COMPOSE_FILE;
-  if (fromEnv && pathExists(fromEnv)) {
-    return fromEnv;
-  }
-  const fromCwd = path.join(process.cwd(), "compose.yaml");
-  if (pathExists(fromCwd)) {
-    return fromCwd;
-  }
-  const fromHere = path.join(__dirname, "..", "..", "compose.yaml");
-  if (pathExists(fromHere)) {
-    return fromHere;
-  }
-  return undefined;
-}
-
-function pathExists(candidate: string): boolean {
-  return existsSync(candidate);
-}
-
-/** Starts the local stack and waits for readiness; the loopback-only, no-account posture. */
-async function startLocalStack(): Promise<boolean> {
-  const compose = findComposeFile();
-  if (!compose || !dockerAvailable()) {
-    return false;
-  }
-  const child = spawn(
-    "docker",
-    ["compose", "-f", compose, "up", "-d"],
-    {
-      cwd: path.dirname(compose),
-      env: { ...process.env, BOMA_LOCAL_FIRST: "true", BOMA_BIND_ADDR: "127.0.0.1:3000" },
-    },
-  );
-  const code: number | null = await new Promise((resolve) => {
-    child.on("exit", resolve);
-  });
-  if (code !== 0) {
-    return false;
-  }
-  for (let attempt = 0; attempt < 180; attempt += 1) {
-    if (await isDeploymentReachable(DEPLOYMENT_URL)) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  return false;
-}
+/** Whether the signed update feed exists; off until the owner provisions one (ADR-016, DEC). */
+const SIGNED_UPDATE = process.env.BOMA_DESKTOP_SIGNED === "true";
 
 /** The one partition this app owns; nothing else in Electron shares it. */
 const DESKTOP_PARTITION = "persist:boma";
 
-/** Whether the signed update feed exists; off until the owner provisions one (ADR-016, DEC). */
-const SIGNED_UPDATE = process.env.BOMA_DESKTOP_SIGNED === "true";
+/** The stack the window is bound to, when embedded mode is live. */
+let liveStack: StackHandle | null = null;
+
+/** Navigation must stay on the deployment origin; anything else goes to the browser. */
+function guardNavigation(window: BrowserWindow, origin: string): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https://") || url.startsWith("http://")) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith(origin)) {
+      event.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+}
 
 function makeWindow(): BrowserWindow {
   const partition = session.fromPartition(DESKTOP_PARTITION, { cache: true });
@@ -121,22 +70,131 @@ function makeWindow(): BrowserWindow {
 
   // New windows open in the system browser; the shell never hosts two Boma Bot windows over
   // one session.
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("https://") || url.startsWith("http://")) {
-      void shell.openExternal(url);
-    }
-    return { action: "deny" };
-  });
-
-  // Navigation stays on the deployment origin; anything else goes to the browser.
-  window.webContents.on("will-navigate", (event, url) => {
-    if (!url.startsWith(DEPLOYMENT_URL)) {
-      event.preventDefault();
-      void shell.openExternal(url);
-    }
-  });
-
   return window;
+}
+
+/** The data folder the user can delete to reset the deployment. */
+function resetHint(): string {
+  return `Delete \`${path.join(app.getPath("userData"), "boma")}\` and relaunch to reset the deployment.`;
+}
+
+/** A fatal, user-visible failure with a single button: quit. */
+async function fatalAndQuit(window: BrowserWindow, message: string): Promise<void> {
+  await stopStack(app.getPath("userData"));
+  await dialog.showMessageBox(window, {
+    type: "error",
+    buttons: ["Quit"],
+    defaultId: 0,
+    title: "Boma Bot cannot start",
+    message,
+    detail: resetHint(),
+  });
+  app.quit();
+}
+
+/** The first-launch flow, with one retry owned by the user. */
+async function boot(window: BrowserWindow): Promise<void> {
+  if (OVERRIDE_URL) {
+    if (await isReachable(OVERRIDE_URL)) {
+      guardNavigation(window, OVERRIDE_URL);
+      await window.loadURL(OVERRIDE_URL).catch(() => app.quit());
+      return;
+    }
+    await fatalAndQuit(window, `${OVERRIDE_URL} did not answer.`);
+    return;
+  }
+
+  try {
+    const handle = await startEmbedded(window);
+    guardNavigation(window, handle.url);
+    handle.on("fatal", (reason: string) => {
+      void fatalAndQuit(window, reason);
+    });
+    liveStack = handle;
+    await window.loadURL(handle.url).catch(() => app.quit());
+  } catch (error) {
+    if (
+      error instanceof StackError ||
+      (error instanceof Error && "step" in error)
+    ) {
+      const stackError = error as StackError;
+      const { response } = await dialog.showMessageBox(window, {
+        type: "error",
+        buttons: ["Try again", "Quit"],
+        defaultId: 0,
+        title: "Boma Bot cannot start",
+        message: stackError.message,
+        detail: `The failure was in ${stackError.step}.\n\n${stackError.log ?? ""}\n\n${resetHint()}`,
+      });
+      if (response === 0) {
+        // One retry, user-driven.
+        try {
+          const handle = await startStack(app.getPath("userData"));
+          guardNavigation(window, handle.url);
+          handle.on("fatal", (reason: string) => {
+            void fatalAndQuit(window, reason);
+          });
+          liveStack = handle;
+          await window.loadURL(handle.url).catch(() => app.quit());
+          return;
+        } catch (retryError) {
+          const stackError2 = retryError as StackError;
+          await fatalAndQuit(
+            window,
+            `${stackError2.message} (failed again in ${stackError2.step})`,
+          );
+          return;
+        }
+      }
+      app.quit();
+      return;
+    }
+    await fatalAndQuit(window, String(error));
+  }
+}
+
+async function startEmbedded(window: BrowserWindow): Promise<StackHandle> {
+  return startStack(app.getPath("userData"));
+}
+
+async function isReachable(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2_000);
+  try {
+    const response = await fetch(`${url}/health`, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Stop the embedded stack, if any; idempotent. */
+let stackStopped = false;
+async function stopStackOnce(): Promise<void> {
+  if (stackStopped) {
+    return;
+  }
+  stackStopped = true;
+  await stopStack(app.getPath("userData"));
+}
+
+/** Restart the embedded stack and reload the window (the Stack menu). */
+async function restartStack(window: BrowserWindow): Promise<void> {
+  await stopStackOnce();
+  stackStopped = false;
+  try {
+    const handle = await startStack(app.getPath("userData"));
+    guardNavigation(window, handle.url);
+    handle.on("fatal", (reason: string) => {
+      void fatalAndQuit(window, reason);
+    });
+    liveStack = handle;
+    await window.loadURL(handle.url);
+  } catch (error) {
+    await fatalAndQuit(window, error instanceof StackError ? error.message : String(error));
+  }
 }
 
 async function signOut(window: BrowserWindow): Promise<void> {
@@ -148,31 +206,8 @@ async function signOut(window: BrowserWindow): Promise<void> {
   window.reload();
 }
 
-async function runLocalStack(window: BrowserWindow): Promise<void> {
-  const started = await startLocalStack();
-  if (!started) {
-    dialog.showMessageBox(window, {
-      type: "warning",
-      buttons: ["OK"],
-      defaultId: 0,
-      title: "Local stack",
-      message: "docker compose could not start the local stack.",
-      detail:
-        "Is docker running? If so, run `docker compose up -d` in the repository yourself — the stack then answers on http://127.0.0.1:3000.",
-    });
-    return;
-  }
-  dialog.showMessageBox(window, {
-    type: "info",
-    buttons: ["OK"],
-    defaultId: 0,
-    title: "Local stack",
-    message: "The stack is up; the app will reconnect to it.",
-  });
-  window.reload();
-}
-
 function template(window: BrowserWindow): Electron.MenuItemConstructorOptions[] {
+  const canRestartStack = !OVERRIDE_URL;
   return [
     {
       label: "File",
@@ -200,9 +235,10 @@ function template(window: BrowserWindow): Electron.MenuItemConstructorOptions[] 
       label: "Stack",
       submenu: [
         {
-          label: "Run a local stack…",
+          label: "Restart the local stack",
+          enabled: canRestartStack,
           click: () => {
-            void runLocalStack(window);
+            void restartStack(window);
           },
         },
       ],
@@ -242,48 +278,24 @@ app.whenReady().then(() => {
   if (SIGNED_UPDATE) {
     enableSignedUpdateFeed();
   }
-
-  (async () => {
-    if (await isDeploymentReachable(DEPLOYMENT_URL)) {
-      await window.loadURL(DEPLOYMENT_URL).catch(() => app.quit());
-      return;
-    }
-    // First launch on a fresh device: offer the one-click local stack before erroring out.
-    const start = await startLocalStack();
-    if (start) {
-      await window.loadURL(DEPLOYMENT_URL).catch(() => app.quit());
-      return;
-    }
-    // Still nothing: say exactly what to do, in one screen, with the two supported paths.
-    const { response } = await dialog.showMessageBox(window, {
-      type: "warning",
-      buttons: ["Start local stack", "Open downloads", "Quit"],
-      defaultId: 0,
-      title: "Boma Bot is not reachable",
-      message: `${DEPLOYMENT_URL} did not answer.`,
-      detail:
-        "This app is the window onto a deployment, not the deployment itself.\n\n" +
-        "Run a local stack (one click, entirely on this machine), or install the server bundle and set BOMA_DESKTOP_URL to its origin.\n\n" +
-        "Downloads: https://github.com/Ggboykxz/boma-bot/releases/latest",
-    });
-    if (response === 0) {
-      // Retry the one-click path; a docker daemon may have needed the nudge.
-      const ok = await startLocalStack();
-      if (ok) {
-        await window.loadURL(DEPLOYMENT_URL).catch(() => app.quit());
-        return;
-      }
-    } else if (response === 1) {
-      await shell.openExternal(RELEASES_URL);
-    }
-    app.quit();
-  })().catch(() => app.quit());
+  void boot(window);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       Menu.setApplicationMenu(Menu.buildFromTemplate(template(makeWindow())));
     }
   });
+});
+
+// The window never outlives the data: stop the stack on every way out.
+let quitting = false;
+app.on("before-quit", (event) => {
+  if (quitting) {
+    return;
+  }
+  quitting = true;
+  event.preventDefault();
+  void stopStackOnce().finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {

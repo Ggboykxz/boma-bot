@@ -41,6 +41,9 @@ jobs:
       - name: Build the Rust binary
         run: cargo build --release --locked --bin boma
 
+      - name: Stage the desktop vendor (embedded Postgres, boma, web)
+        run: bash tools/stage-desktop-vendor.sh linux
+
       - name: Assemble the server bundle
         run: |
           set -euo pipefail
@@ -126,11 +129,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Stage the desktop vendor (embedded Postgres, boma, web)
+        run: bash tools/stage-desktop-vendor.sh windows
+        shell: bash
 
       - name: Build the Windows pack (NSIS setup + portable zip)
         working-directory: apps/desktop
