@@ -19,6 +19,11 @@
   --color-slate-200:   #ebeff5;
   --color-neutral-100: #f7f7f7;
   --color-neutral-200: #ebebeb;
+  /* AA sub-step between 400 and 500 for dark text-tertiary (4.50:1 on neutral-800) and
+   * between 500 and 600 for light text-secondary (5.74:1 on white). Added 2026-11-16 to fix
+   * the audit's text-contrast findings; keep in step with docs/UI.md. */
+  --color-neutral-450: #8c8c8c;
+  --color-neutral-550: #666666;
   --color-neutral-925: #121212;
   --color-blue-400:    #3392ff;
 
@@ -176,8 +181,8 @@
 
   /* Text */
   --color-text-primary:         var(--color-neutral-950);
-  --color-text-secondary:       var(--color-neutral-500);
-  --color-text-tertiary:        var(--color-neutral-400);
+  --color-text-secondary:       var(--color-neutral-550);
+  --color-text-tertiary:        var(--color-neutral-600);
   --color-text-disabled:        var(--color-neutral-300);
   --color-text-disabled-danger: var(--color-red-300);
   --color-text-placeholder:     var(--color-neutral-400);
@@ -437,7 +442,8 @@
 
   /* Text */
   --color-text-primary:  var(--color-neutral-50);
-  --color-text-tertiary: var(--color-neutral-600);
+  --color-text-secondary: var(--color-neutral-400);
+  --color-text-tertiary: var(--color-neutral-450);
   --color-text-disabled: var(--color-neutral-800);
   --color-text-error-primary: var(--color-red-400);
   --color-text-destructive: color-mix(in srgb, var(--color-red-500) 80%, var(--color-neutral-500));

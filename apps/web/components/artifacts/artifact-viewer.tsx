@@ -106,34 +106,34 @@ export function ArtifactViewer() {
   if (artifactId === null) {
     // The URL names neither a home nor an artifact — the grid it came from owns that route.
     return (
-      <main className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <section className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
         <RiQuestionLine className="text-foreground-icon-secondary h-8 w-8" aria-hidden="true" />
         <p className="text-text-primary text-body-regular">{t("artifacts.detail.pick-one")}</p>
         <Link className="boma-target boma-focus text-text-secondary hover:text-text-primary" href="/app/artifacts/">
           {t("artifacts.detail.back-to-grid")}
         </Link>
-      </main>
+      </section>
     );
   }
 
   if (phase === "loading") {
     return (
-      <main className="flex h-full flex-col gap-4 p-4 sm:p-6" aria-busy="true">
+      <section className="flex h-full flex-col gap-4 p-4 sm:p-6" aria-busy="true">
         <div className="bg-background-secondary-default h-8 w-64 max-w-full rounded-md" />
         <div className="bg-background-secondary-default h-96 w-full rounded-2xl" />
-      </main>
+      </section>
     );
   }
 
   if (phase === "error" || phase === "unavailable" || !data) {
     return (
-      <main className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <section className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
         <RiErrorWarningLine className="text-foreground-icon-primary h-8 w-8" aria-hidden="true" />
         <p className="text-text-primary text-body-regular">{t("artifacts.error.load")}</p>
         <Link className="boma-target boma-focus text-text-secondary hover:text-text-primary" href="/app/artifacts/">
           {t("artifacts.detail.back-to-grid")}
         </Link>
-      </main>
+      </section>
     );
   }
 
@@ -180,7 +180,7 @@ export function ArtifactViewer() {
   };
 
   return (
-    <main className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+    <section className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
       <nav className="text-text-tertiary text-body-2-medium">
         <Link href="/app/artifacts/" className="boma-target boma-focus hover:text-text-secondary inline-flex items-center gap-1 rounded-md">
           <RiArrowLeftLine className="h-4 w-4" aria-hidden="true" />
@@ -261,6 +261,6 @@ export function ArtifactViewer() {
       ) : (
         <p className="text-text-tertiary text-body-regular">{t("artifacts.detail.download-only")}</p>
       )}
-    </main>
+    </section>
   );
 }

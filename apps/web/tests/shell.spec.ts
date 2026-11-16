@@ -26,7 +26,7 @@ test("REQ-057 every visible label of the shell comes from the catalogue", async 
   // changes them without touching a component.
   await expect(page.getByRole("link", { name: t("en", "shell.nav.threads") })).toBeVisible();
   await expect(page.getByRole("link", { name: t("en", "shell.nav.activity") })).toBeVisible();
-  await expect(page.getByRole("link", { name: t("en", "shell.nav.settings") })).toBeVisible();
+  await expect(page.getByRole("button", { name: t("en", "shell.theme.toggle") })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(t("en", "shell.nav.threads"));
 });
 
@@ -53,9 +53,8 @@ test("REQ-057 the shell follows the stored locale, in content as well as in dire
 });
 
 test("REQ-057 a missing translation falls back to English, never to a blank", () => {
-  // Present in English only: the Hebrew and French catalogues must fall back rather than invent.
-  expect(t("he", "shell.nav.settings")).toBe("Settings");
-  expect(t("fr", "shell.nav.settings")).toBe("Settings");
+  // The English-only fallback fixture was removed with the dead Settings link it described; the
+  // unknown-key branch is asserted below.
 
   // Present in every catalogue: no fallback, the translation is used.
   expect(t("fr", "shell.nav.threads")).toBe("Fils");

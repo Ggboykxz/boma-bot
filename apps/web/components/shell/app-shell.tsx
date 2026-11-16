@@ -3,14 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { RiMoonLine, RiSunLine } from "@remixicon/react";
 
 import { BotRail } from "@/components/shell/bot-rail";
 import { useTranslation } from "@/lib/use-translation";
 
-const NAV = [
-  { href: "/app/", key: "shell.nav.threads" },
-  { href: "/app/", key: "shell.nav.settings" },
-] as const;
+const NAV = [{ href: "/app/", key: "shell.nav.threads" }] as const;
 
 export interface AppShellProps {
   /** The screen itself. */
@@ -52,6 +50,7 @@ export function AppShell({ children }: AppShellProps) {
               {t(item.key)}
             </Link>
           ))}
+          <ThemeToggle />
         </nav>
       </header>
       <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-6 lg:flex-row lg:gap-8">
@@ -61,5 +60,39 @@ export function AppShell({ children }: AppShellProps) {
         </main>
       </div>
     </div>
+  );
+}
+
+
+/**
+ * The color-scheme toggle: flips `.dark` on <html> and persists `boma-theme`, which the
+ * pre-paint bootstrap in `app/layout.tsx` reads on the next visit. Transitions are frozen for
+ * the flip (`.theme-transitioning`) so every surface changes state at once.
+ */
+function ThemeToggle() {
+  const t = useTranslation();
+
+  const toggle = () => {
+    const root = document.documentElement;
+    root.classList.add("theme-transitioning");
+    root.classList.toggle("dark");
+    try {
+      localStorage.setItem("boma-theme", root.classList.contains("dark") ? "dark" : "light");
+    } catch {
+      // Storage may be unavailable; the toggle still flips this visit's theme.
+    }
+    window.setTimeout(() => root.classList.remove("theme-transitioning"), 500);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={t("shell.theme.toggle")}
+      className="boma-focus ms-auto inline-flex items-center rounded-md p-1.5 text-foreground-icon-secondary hover:bg-background-secondary-hover hover:text-foreground-icon-primary"
+    >
+      <RiMoonLine size={18} aria-hidden className="block dark:hidden" />
+      <RiSunLine size={18} aria-hidden className="hidden dark:block" />
+    </button>
   );
 }

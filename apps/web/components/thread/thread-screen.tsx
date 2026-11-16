@@ -2,7 +2,7 @@
 
 import { RiArrowLeftLine, RiEmotionAddLine, RiErrorWarningLine, RiReplyLine } from "@remixicon/react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { Button } from "@/components/base/buttons/button";
 import { MessageBlocks } from "@/components/thread/message-blocks";
@@ -58,6 +58,8 @@ export function ThreadScreen({ botId }: { botId: string }) {
 
   const [bot, setBot] = useState<BotReply | null>(null);
   const [messages, setMessages] = useState<MessageView[]>([]);
+  /// Cards this member answered, lifted so the composer can open again (REQ-017).
+  const [answeredCards, setAnsweredCards] = useState<ReadonlySet<string>>(new Set());
   const [phase, setPhase] = useState<Phase>("loading");
   const [live, setLive] = useState<Live>("connecting");
   const [runStatus, setRunStatus] = useState<string | null>(null);
@@ -304,6 +306,18 @@ export function ThreadScreen({ botId }: { botId: string }) {
     dividerIndex === -1 ? 0 : Math.max(unreadCount, messages.length - dividerIndex);
   const runKey = runStatus === null ? null : runStatusKey(runStatus);
   const runLabel = runStatus === null ? null : (runKey === null ? runStatus : t(runKey));
+  const runIsActive =
+    runStatus !== null && ["queued", "leased", "running", "waiting_input", "waiting_takeover"].includes(runStatus);
+  // An approval or purchase card this member has not answered yet blocks the composer (spec §8.3);
+  // questions and takeovers do not.
+  const awaitingApproval = messages.some((message) =>
+    message.blocks.some(
+      (block) =>
+        block.type === "card" &&
+        (block.kind === "approval" || block.kind === "purchase") &&
+        !answeredCards.has(block.cardId),
+    ),
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -376,7 +390,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
                   </li>
                 ) : null;
               const row = (
-              <li key={message.id} className="flex flex-col gap-1">
+              <li key={message.id} className="animate-row-slide-in flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <p className="text-text-secondary text-caption-1-semibold">
                     {t(`thread.role.${message.role}`)}
@@ -433,7 +447,12 @@ export function ThreadScreen({ botId }: { botId: string }) {
                       {message.replyQuote}
                     </blockquote>
                   ) : null}
-                  <MessageBlocks blocks={message.blocks} />
+                  <MessageBlocks
+                    blocks={message.blocks}
+                    onCardAnswered={(cardId) =>
+                      setAnsweredCards((current) => new Set(current).add(cardId))
+                    }
+                  />
                 </div>
                 {message.reactions && message.reactions.length > 0 ? (
                   <ul
@@ -495,11 +514,28 @@ export function ThreadScreen({ botId }: { botId: string }) {
 
       {runLabel !== null ? (
         <p className="text-text-secondary text-caption-1-semibold">
-          {t("thread.run.label")}: {runLabel}
+          {t("thread.run.label")}:{" "}
+          {runIsActive ? (
+            <span
+              className="bui-agent-thinking-label"
+              style={{ "--bui-agent-thinking-tone": "var(--color-text-secondary)" } as CSSProperties}
+            >
+              {runLabel}
+            </span>
+          ) : (
+            runLabel
+          )}
+        </p>
+      ) : null}
+
+      {awaitingApproval ? (
+        <p aria-live="polite" className="text-text-secondary text-caption-1-regular">
+          {t("thread.composer.waiting")}
         </p>
       ) : null}
 
       <ThreadComposer
+        awaitingApproval={awaitingApproval}
         value={draft}
         onChange={setDraft}
         onSend={() => void send()}
@@ -538,11 +574,20 @@ function TranscriptSkeleton() {
 /** The empty thread: the bot's intro and two prompts that fill the composer. */
 function EmptyThread({ onPick }: { onPick: (value: string) => void }) {
   const t = useTranslation();
+  const [shown, setShown] = useState(false);
+
+  // Mount hidden, flip on the next frame: the lines rise 12px while un-blurring (t-stagger).
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
 
   return (
-    <div className="flex flex-col items-start gap-4 py-6">
-      <p className="text-text-primary text-body-medium max-w-prose">{t("thread.empty.intro")}</p>
-      <div className="flex flex-col gap-2">
+    <div className={`t-stagger flex flex-col items-start gap-4 py-6 ${shown ? "is-shown" : ""}`}>
+      <p className="t-stagger-line text-text-primary text-body-medium max-w-prose">
+        {t("thread.empty.intro")}
+      </p>
+      <div className="t-stagger-line t-stagger-line--2 flex flex-col gap-2">
         <p className="text-text-secondary text-caption-1-semibold">{t("thread.empty.suggestions")}</p>
         <div className="flex flex-wrap gap-2">
           {[t("thread.empty.suggestion.1"), t("thread.empty.suggestion.2")].map((prompt) => (

@@ -78,7 +78,7 @@ export function ArtifactsGrid() {
 
   if (phase === "loading") {
     return (
-      <main className="flex h-full flex-col gap-4 p-4 sm:p-6" aria-busy="true">
+      <section className="flex h-full flex-col gap-4 p-4 sm:p-6" aria-busy="true">
         <div className="flex flex-col gap-2">
           <div className="bg-background-secondary-default h-8 w-48 rounded-md" />
           <div className="bg-background-secondary-default h-4 w-96 max-w-full rounded-md" />
@@ -93,20 +93,20 @@ export function ArtifactsGrid() {
             </li>
           ))}
         </ul>
-      </main>
+      </section>
     );
   }
 
   if (phase === "error") {
     return (
-      <main className="flex h-full flex-col gap-3 p-4 sm:p-6">
+      <section className="flex h-full flex-col gap-3 p-4 sm:p-6">
         <p className="text-text-error-primary text-body-medium" role="alert">{t("artifacts.error.load")}</p>
-      </main>
+      </section>
     );
   }
 
   return (
-    <main className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+    <section className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
       <header className="flex flex-col gap-1">
         <h1 className="text-title-3-semibold text-text-primary flex items-center gap-2">
           <RiLayoutGridLine className="text-foreground-icon-primary h-5 w-5" aria-hidden="true" />
@@ -169,7 +169,7 @@ export function ArtifactsGrid() {
                 <RiFileLine className="text-foreground-icon-secondary h-6 w-6" aria-hidden="true" />
               );
             return (
-              <li key={artifact.id}>
+              <li key={artifact.id} className="animate-row-grow-in">
                 <Link
                   href={`/app/artifacts/${artifact.id}/`}
                   className="boma-focus border-border-button-default bg-background-primary-default hover:bg-background-primary-hover focus-visible:outline-border-button-focus group flex h-full flex-col gap-3 rounded-2xl border p-4 transition-colors focus-visible:outline"
@@ -193,6 +193,6 @@ export function ArtifactsGrid() {
           })}
         </ul>
       )}
-    </main>
+    </section>
   );
 }

@@ -104,7 +104,7 @@ export function ActivityScreen() {
             return (
               <li
                 key={run.id}
-                className="border-border-button-default bg-background-primary-default flex flex-col gap-1 rounded-3xl border p-3"
+                className="animate-row-slide-in border-border-button-default bg-background-primary-default flex flex-col gap-1 rounded-3xl border p-3"
               >
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   <p className="text-text-primary text-body-medium">

@@ -30,7 +30,7 @@ function RosterRow({
   const t = useTranslation();
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="animate-row-slide-in flex items-center gap-1">
       <Link
         href={`/app/${bot.id}/`}
         aria-current={current ? "page" : undefined}
@@ -38,7 +38,10 @@ function RosterRow({
       >
         <span className="truncate">{bot.name}</span>
         {bot.unreadCount > 0 ? (
-          <span className="bg-background-tertiary-default text-text-secondary rounded-full px-2 text-caption-1-semibold">
+          <span
+            key={bot.unreadCount}
+            className="animate-number-fade bg-background-tertiary-default text-text-secondary rounded-full px-2 text-caption-1-semibold"
+          >
             {bot.unreadCount}
           </span>
         ) : null}

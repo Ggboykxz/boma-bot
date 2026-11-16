@@ -24,7 +24,7 @@ export type Block =
   | { type: "image"; artifactId: string }
   | { type: "file"; artifactId: string; name: string }
   | { type: "tool"; name: string; running: boolean }
-  | { type: "card"; cardId: string; kind: string };
+  | { type: "card"; cardId: string; kind: string }; // cardId normalised from cardId|card_id below
 
 /** One emoji reaction, as the client sees it (REQ-008). */
 export interface ReactionView {
@@ -321,9 +321,16 @@ function normalizeBlock(raw: unknown): Block | null {
         running: block.running === true,
       };
     case "card":
+      // The server has historically serialised the Rust field (`card_id`); the request body
+      // spelling is pinned camelCase by the thread-answer golden. Read both, keep camelCase.
       return {
         type: "card",
-        cardId: typeof block.cardId === "string" ? block.cardId : "",
+        cardId:
+          typeof block.cardId === "string"
+            ? block.cardId
+            : typeof block.card_id === "string"
+              ? block.card_id
+              : "",
         kind: typeof block.kind === "string" ? block.kind : "",
       };
     default:
@@ -439,6 +446,22 @@ export function threadsReact(
   signal?: AbortSignal,
 ): Promise<ReactReply> {
   return call<ReactReply>("threads", "react", request, signal);
+}
+
+/** The reply of `threads.answer`. */
+export interface AnswerReply {
+  /** Always true on success. */
+  ok: boolean;
+  /** The run the answered card was holding up, when the card was holding one. */
+  runId?: string;
+}
+
+/** `threads.answer` — answer a pending approval or question card (REQ-017). */
+export function threadsAnswer(
+  request: { cardId: string; answer: string },
+  signal?: AbortSignal,
+): Promise<AnswerReply> {
+  return call<AnswerReply>("threads", "answer", request, signal);
 }
 
 /** `threads.messages` — a page of the thread's history, newest first. */

@@ -27,6 +27,8 @@ export interface ThreadComposerProps {
   sending: boolean;
   /** The message a new one answers, when it is a reply. */
   reply?: ReplyContext | null;
+  /** True while an approval or purchase card waits for this member (spec §8.3): sending waits. */
+  awaitingApproval?: boolean;
 }
 
 /**
@@ -36,9 +38,9 @@ export interface ThreadComposerProps {
  * label and the keyboard behaviour a screen reader expects. The send button is disabled only
  * when there is nothing to send: a failed send never takes the keyboard away from the person.
  */
-export function ThreadComposer({ value, onChange, onSend, sending, reply }: ThreadComposerProps) {
+export function ThreadComposer({ value, onChange, onSend, sending, reply, awaitingApproval = false }: ThreadComposerProps) {
   const t = useTranslation();
-  const canSend = value.trim().length > 0 && !sending;
+  const canSend = value.trim().length > 0 && !sending && !awaitingApproval;
 
   return (
     <form
@@ -71,7 +73,7 @@ export function ThreadComposer({ value, onChange, onSend, sending, reply }: Thre
         value={value}
         onChange={onChange}
         className="flex min-w-0 flex-1 flex-col gap-1"
-        isDisabled={false}
+        isDisabled={awaitingApproval}
       >
         <Label className="sr-only">{t("thread.composer.label")}</Label>
         <TextArea

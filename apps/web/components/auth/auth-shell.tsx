@@ -18,14 +18,16 @@ export function AuthShell({ title, subtitle, children }: AuthShellProps) {
 
   return (
     <div className="bg-background-full flex min-h-dvh flex-col items-center justify-center gap-8 px-4 py-10">
-      <Link
-        href="/"
-        className="boma-target boma-focus text-text-primary hover:text-text-secondary text-headline-medium inline-flex items-center gap-3 rounded-md px-2 py-1"
-      >
-        {/* eslint-disable-next-line @next/next/no-img-element -- static export; the SVG carries its own intrinsic size */}
-        <img src="/icon.svg" alt="" width={40} height={40} className="h-10 w-10 rounded-xl" />
-        {t("app.name")}
-      </Link>
+      <header>
+        <Link
+          href="/"
+          className="boma-target boma-focus text-text-primary hover:text-text-secondary text-headline-medium inline-flex items-center gap-3 rounded-md px-2 py-1"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- static export; the SVG carries its own intrinsic size */}
+          <img src="/icon.svg" alt="" width={40} height={40} className="h-10 w-10 rounded-xl" />
+          {t("app.name")}
+        </Link>
+      </header>
       <main className="flex w-full max-w-sm flex-col gap-6">
         <header className="flex flex-col gap-1 text-center">
           <h1 className="text-title-3-semibold text-text-primary">{title}</h1>

@@ -160,29 +160,31 @@ export function BoardScreen() {
 
   if (phase === "loading") {
     return (
-      <main className="flex h-full flex-col gap-4 p-4 sm:p-6" aria-busy="true">
+      <section className="flex h-full flex-col gap-4 p-4 sm:p-6" aria-busy="true">
+        <h1 className="sr-only">{t("board.title")}</h1>
         <div className="bg-background-secondary-default h-8 w-48 rounded-md" />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           {COLUMNS.map((column) => (
             <div key={column} className="bg-background-secondary-default h-64 rounded-2xl" />
           ))}
         </div>
-      </main>
+      </section>
     );
   }
 
   if (phase === "absent") {
     // The route is absent when the deployment does not enable the board — not a locked screen.
     return (
-      <main className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <section className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <h1 className="sr-only">{t("board.title")}</h1>
         <RiKanbanView className="text-foreground-icon-tertiary h-8 w-8" aria-hidden="true" />
         <p className="text-text-primary text-body-regular">{t("board.absent")}</p>
-      </main>
+      </section>
     );
   }
 
   return (
-    <main className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+    <section className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-title-3-semibold text-text-primary">{t("board.title")}</h1>
@@ -259,7 +261,7 @@ export function BoardScreen() {
               </h2>
               <ul className="flex min-h-32 flex-col gap-2">
                 {columnTickets.map((ticket) => (
-                  <li key={ticket.id}>
+                  <li key={ticket.id} className="animate-row-slide-in">
                     <button
                       type="button"
                       onClick={() => setSelected(ticket)}
@@ -386,6 +388,6 @@ export function BoardScreen() {
           </div>
         </div>
       ) : null}
-    </main>
+    </section>
   );
 }
