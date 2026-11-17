@@ -50,32 +50,71 @@ function tail(file, lines = 40) {
 }
 
 function reportLogs() {
-  writeFileSync(path.join(shots, "boma.log.txt"), tail(bomaLog, 400));
-  writeFileSync(path.join(shots, "postgres.log.txt"), tail(pgLog, 400));
-  console.log("--- boma.log tail ---\n" + tail(bomaLog));
-  console.log("--- postgres.log tail ---\n" + tail(pgLog));
+  const dir = dataDir ?? userData;
+  const boma = path.join(dir, "boma.log");
+  const pg = path.join(dir, "postgres.log");
+  writeFileSync(path.join(shots, "boma.log.txt"), tail(boma, 400));
+  writeFileSync(path.join(shots, "postgres.log.txt"), tail(pg, 400));
+  console.log(`--- boma.log tail (${boma}) ---\n` + tail(boma));
+  console.log(`--- postgres.log tail (${pg}) ---\n` + tail(pg));
 }
 
-const child = spawn(exe, [], { stdio: ["ignore", "pipe", "pipe"], detached: false });
+console.log(`spawning ${exe} (exists: ${existsSync(exe)}, APPDATA: ${process.env.APPDATA})`);
+const child = spawn(exe, [], { stdio: ["ignore", "pipe", "pipe"], detached: false,
+  env: { ...process.env, ELECTRON_ENABLE_LOGGING: "1" } });
 let appOutput = "";
 for (const stream of [child.stdout, child.stderr]) {
   stream?.on("data", (chunk) => {
     appOutput += chunk.toString();
   });
 }
-child.on("exit", (code) => {
-  console.log(`the desktop exited early (code ${code}):\n${appOutput}`);
+child.on("error", (error) => {
+  console.error(`spawn failed: ${String(error)}`);
+  appOutput += `\nSPAWN ERROR: ${String(error)}`;
 });
+child.on("spawn", () => console.log(`spawned pid=${child.pid}`));
+child.on("exit", (code) => {
+  console.log(`the desktop exited (code ${code}, signal unknown):\n${appOutput}`);
+});
+
+// Electron writes its own crash log to the userData dir only once it starts. If nothing appears,
+// also check the exe's parent folder for a chromium crash dump.
+function dumpExeDir() {
+  try {
+    const dir = path.dirname(exe);
+    return readdirSync(dir).filter((name) => /log|crash|dump/i.test(name)).join(", ") || "(none)";
+  } catch {
+    return "(unreadable)";
+  }
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function readPort() {
-  try {
-    const port = Number(readFileSync(portFile, "utf8").trim());
-    return Number.isInteger(port) && port > 0 ? port : null;
-  } catch {
+// Electron derives userData from appId/productName; find the real folder instead of guessing.
+function findUserData() {
+  const appdata = process.env.APPDATA;
+  if (!appdata || !existsSync(appdata)) {
     return null;
   }
+  const candidates = readdirSync(appdata).filter((name) =>
+    /boma/i.test(name) && existsSync(path.join(appdata, name, "boma", "port")),
+  );
+  return candidates.length > 0 ? path.join(appdata, candidates[0], "boma") : null;
+}
+
+let dataDir = null;
+async function readPort() {
+  if (dataDir && existsSync(path.join(dataDir, "port"))) {
+    const port = Number(readFileSync(path.join(dataDir, "port"), "utf8").trim());
+    return Number.isInteger(port) && port > 0 ? port : null;
+  }
+  const found = findUserData();
+  if (found) {
+    dataDir = found;
+    console.log(`found the app data dir: ${dataDir}`);
+    return readPort();
+  }
+  return null;
 }
 
 async function waitForPort(timeoutMs = 150_000) {
@@ -92,9 +131,9 @@ async function waitForPort(timeoutMs = 150_000) {
     }
     await sleep(1_000);
   }
-  throw new Error(`no port file after ${timeoutMs} ms; userData entries: ${
+  throw new Error(`no port file after ${timeoutMs} ms; userData (${userData}) entries: ${
     existsSync(userData) ? readdirSync(userData).join(", ") : "(none)"
-  }`);
+  }; exe dir crash/log files: ${dumpExeDir()}; app output: ${appOutput.slice(0, 2000)}`);
 }
 
 let failed = null;
