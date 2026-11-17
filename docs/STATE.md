@@ -91,10 +91,42 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   The release job attests all artifacts (Sigstore, keyless) and the Windows job verifies the
   attestations in-line before upload. CI evidence: the Linux leg packs and rehearses the full
   boot headlessly (initdb → migrate → serve/worker → RPC round-trip); the Windows leg compiles
-  through vcpkg-provided OpenSSL (`x64-windows-static-md`, static — no DLLs to ship).
+  through vcpkg-provided OpenSSL (`x64-windows-static-md`, static CRT) and `boma.exe` discovers
+  its OpenSSL DLLs beside itself (they ship in the pack; see the 2026-11-17 entry).
   66/73 REQ ids covered by tests; the missing seven are recorded (049, 056, 068, 070, 071, 073,
   074). Release notes rewritten for 0.3.0-rc (66/73).
   **Windows smoke is the owner's next step**; v0.3.0 final is cut after his verdict.
+- **Windows desktop boot gate (2026-11-17).** The CI `desktop-boot-windows` job kept failing on
+  the portable pack; three distinct defects, all diagnosed and fixed:
+  1. The portable exe is `Boma Bot.exe` (productName), not `boma-desktop.exe` (fixed in `f52399d`).
+  2. The staged `boma.exe` could not start at all — it links OpenSSL dynamically on Windows
+     (`web-push → ece → openssl-sys`), but the zonky PG bundle keeps `libcrypto-3-x64.dll` /
+     `libssl-3-x64.dll` in `resources/postgres/bin`, one folder away; Windows resolves DLLs next
+     to the exe. `tools/stage-desktop-vendor.sh` now copies both beside `resources/boma/boma.exe`
+     (`eccfbc7`). Likely root cause of the owner's "the migration did not apply" on his machine.
+  3. The app then booted fine but wrote its data to `%APPDATA%\@boma\desktop\boma` — Electron
+     derives userData from the asar's **root** `package.json` (`productName`, else `name`; ours
+     is the scoped `@boma/desktop` with no root productName). The harness looked only at
+     `%APPDATA%\Boma Bot\boma` and reported "no port file" after 150 s while the stack served
+     away (confirmed by extracting the packed asar). Fixed with a root `productName` (`4bcb92b`);
+     userData is now deterministically `%APPDATA%\Boma Bot\boma`, as the docs and dialogs
+     promise. The BrowserWindow `icon:` pointed at `build/icon.png`, which electron-builder never
+     packs — dropped (the exe's embedded icon is used; the exe is the window icon on
+     Windows/Linux anyway).
+  - New in the app: `BOMA_DESKTOP_DISABLE_GPU=1` (software rendering escape hatch, for broken-GPU
+    machines) and a best-effort `boot.log` in the data folder (`whenReady → window created →
+    menu set → boot dispatched → boot start → embedded stack up → fatal: …`) — support-facing
+    diagnostics for "it won't start" reports.
+  - Harness lessons (same session): `findUserData()` now discovers the data folder at depth 1
+    and 2 (covers the old scoped layout); an infinite recursion in `readPort()` crashed the
+    harness with `RangeError: Maximum call stack size exceeded` after falsely reporting
+    "(none)" — fixed, with the data-dir discovery and `boot.log` tail printed on failure.
+  - **The boot gate is still RED as of this entry — the last fix (`4bcb92b`) is being verified
+    by CI right now.** v0.3.0 stays unpublished until it is green.
+  - Note: installs of the 0.3.0-rc keep their data at `%APPDATA%\@boma\desktop\boma`; the
+    v0.3.0 final recreates `%APPDATA%\Boma Bot\boma` (a one-time move; acceptable at rc
+    stage). The owner's `boma.log` for the migration error is at
+    `%APPDATA%\@boma\desktop\boma\boma.log`.
 - **M28 — local automation API + operator CLI (2026-11-16, REQ-072; this commit).**
   - The token-gated automation surface landed: `/api/v1/automation/*`, off unless both
     `BOMA_AUTOMATION_TOKEN` (≥16 chars) and `BOMA_AUTOMATION_AGENTS` (comma-separated bot ids, or

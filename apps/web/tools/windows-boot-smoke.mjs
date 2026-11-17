@@ -125,15 +125,18 @@ function findUserData() {
 
 let dataDir = null;
 async function readPort() {
-  if (dataDir && existsSync(path.join(dataDir, "port"))) {
-    const port = Number(readFileSync(path.join(dataDir, "port"), "utf8").trim());
-    return Number.isInteger(port) && port > 0 ? port : null;
+  if (dataDir) {
+    try {
+      const port = Number(readFileSync(path.join(dataDir, "port"), "utf8").trim());
+      return Number.isInteger(port) && port > 0 ? port : null;
+    } catch {
+      return null;
+    }
   }
   const found = findUserData();
   if (found) {
     dataDir = found;
     console.log(`found the app data dir: ${dataDir}`);
-    return readPort();
   }
   return null;
 }
