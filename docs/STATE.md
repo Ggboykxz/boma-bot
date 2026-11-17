@@ -141,6 +141,8 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
        documents that it owns the suffix. **This is the same bug that would hit the owner on
        Windows once migrations applied.** v0.3.0 remains unpublished until the boot gate is
        green.
+  - The RPC smoke called `bots/list` with GET (405, empty body, SyntaxError) — the RPC surface is
+    POST-only with a JSON body; the harness now shares one `rpc()` helper for list/create/send.
   - The `boot.log` diagnostics made all of this readable from CI (create the folder → checkpoints
     → fatal line with step + detail); `boma.log` now persists the failing step's raw output
     (initdb / postgres / migrate / healthy) instead of showing it only in a dialog (`60b93c2`).

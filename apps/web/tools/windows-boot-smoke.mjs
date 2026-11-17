@@ -177,28 +177,31 @@ try {
     throw new Error(`localFirst is ${caps.localFirst}, expected true`);
   }
 
-  // A real turn through the API — the server half of the same use case the UI calls.
-  const roster = await (await fetch(`${base}/rpc/bots/list`)).json();
-  let bot = roster.bots?.[0];
-  if (!bot) {
-    const created = await fetch(`${base}/rpc/bots/create`, {
+  // The RPC surface is POST-only with a JSON body.
+  const rpc = async (procedure, body) => {
+    const response = await fetch(`${base}/rpc/${procedure}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Smoke Bot", description: "Windows boot smoke" }),
+      body: JSON.stringify(body ?? {}),
     });
-    if (!created.ok) {
-      throw new Error(`bots/create: ${created.status}`);
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${procedure}: ${response.status} — ${text.slice(0, 500)}`);
     }
-    bot = await created.json();
+    return JSON.parse(text);
+  };
+
+  // A real turn through the API — the server half of the same use case the UI calls.
+  const roster = await rpc("bots/list", {});
+  let bot = roster.bots?.[0];
+  if (!bot) {
+    bot = await rpc("bots/create", { name: "Smoke Bot", description: "Windows boot smoke" });
   }
-  const sent = await fetch(`${base}/rpc/threads/send`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ botId: bot.id, text: "Windows boot smoke", clientNonce: `win-${Date.now()}` }),
+  await rpc("threads/send", {
+    botId: bot.id,
+    text: "Windows boot smoke",
+    clientNonce: `win-${Date.now()}`,
   });
-  if (!sent.ok) {
-    throw new Error(`threads/send: ${sent.status}`);
-  }
 
   // The renderer: load the app and capture the real state, not a mocked fixture.
   const browser = await chromium.launch();
