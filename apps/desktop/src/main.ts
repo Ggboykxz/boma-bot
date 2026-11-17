@@ -74,8 +74,17 @@ function makeWindow(): BrowserWindow {
 }
 
 /** The data folder the user can delete to reset the deployment. */
+function dataFolder(): string {
+  return path.join(app.getPath("userData"), "boma");
+}
+
+/** Where to read the failure, for a dialog or a support request. */
+function logHint(): string {
+  return `Logs: ${path.join(dataFolder(), "boma.log")} and ${path.join(dataFolder(), "postgres.log")}`;
+}
+
 function resetHint(): string {
-  return `Delete \`${path.join(app.getPath("userData"), "boma")}\` and relaunch to reset the deployment.`;
+  return `Delete \`${dataFolder()}\` and relaunch to reset the deployment.`;
 }
 
 /** A fatal, user-visible failure with a single button: quit. */
@@ -87,7 +96,7 @@ async function fatalAndQuit(window: BrowserWindow, message: string): Promise<voi
     defaultId: 0,
     title: "Boma Bot cannot start",
     message,
-    detail: resetHint(),
+    detail: `${logHint()}\n\n${resetHint()}`,
   });
   app.quit();
 }
@@ -124,7 +133,7 @@ async function boot(window: BrowserWindow): Promise<void> {
         defaultId: 0,
         title: "Boma Bot cannot start",
         message: stackError.message,
-        detail: `The failure was in ${stackError.step}.\n\n${stackError.log ?? ""}\n\n${resetHint()}`,
+        detail: `The failure was in ${stackError.step}.\n\n${stackError.log ?? ""}\n\n${logHint()}\n\n${resetHint()}`,
       });
       if (response === 0) {
         // One retry, user-driven.

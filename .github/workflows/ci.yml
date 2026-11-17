@@ -198,6 +198,59 @@ jobs:
             apps/desktop/dist/*.zip
           retention-days: 14
 
+  desktop-boot-windows:
+    # M35: pack once in `desktop`, then boot that exact portable build on a clean Windows runner.
+    # This is the only place the installed app's first launch is exercised on Windows — no Wine.
+    name: desktop-boot (windows-latest — packaged app, embedded stack)
+    needs: desktop
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Download the packed Windows desktop
+        uses: actions/download-artifact@v4
+        with:
+          name: boma-desktop-windows-${{ github.sha }}
+          path: ${{ runner.temp }}/boma-desktop
+
+      - name: Unpack the portable build
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path "${{ runner.temp }}/boma-desktop" -Filter *.zip | Select-Object -First 1
+          if (-not $zip) { throw "no portable zip in the artifact" }
+          Expand-Archive -Path $zip.FullName -DestinationPath "${{ runner.temp }}/boma-portable" -Force
+          Get-ChildItem -Path "${{ runner.temp }}/boma-portable" | Select-Object Name
+
+      - name: Install the web test runner
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: Boot the packaged app and drive the stack
+        working-directory: apps/web
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "${{ runner.temp }}/boma-portable" -Filter boma-desktop.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "no boma-desktop.exe in the portable zip" }
+          node tools/windows-boot-smoke.mjs $exe.FullName
+
+      - name: Upload the boot logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boma-windows-boot-${{ github.sha }}
+          path: apps/web/test-results/windows-boot
+          if-no-files-found: warn
+          retention-days: 14
+
   compose:
     # M0's last exit criterion: `docker compose up` migrates and serves. Reviewed-only YAML is not
     # evidence, so the stack is built and probed here on every push.

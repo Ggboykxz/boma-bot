@@ -147,6 +147,10 @@ is ever refreshed.
   ~2.5:1 — failing everywhere).
 - **Dark mapping added**: `text-secondary: neutral-400`, `text-tertiary: neutral-450` — the
   `.dark` block previously inherited the light values, which failed on the inverted surfaces.
+- **`text-error-primary` light: `red-500` → `red-600`** (3.81:1 → 4.83:1 on white), found by the
+  cross-mode smoke on an error row; dark keeps `red-400` (AA on the dark surfaces).
+- **`number-fade` starts at opacity 0.75** (was 0.35) so an unread count stays AA-legible while
+  it animates — axe scans mid-fade, and a 0.35 overlay of a passing token fails contrast.
 - Composite consumers (`text-text-tertiary`, `text-text-secondary`) ride the tokens; no screen
   was edited for the re-tune itself.
 
