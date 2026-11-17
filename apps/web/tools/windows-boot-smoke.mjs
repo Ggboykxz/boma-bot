@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("@playwright/test");
+const AxeBuilder = require("@axe-core/playwright").default;
 
 const exe = process.argv[2];
 if (!exe || !existsSync(exe)) {
@@ -142,17 +143,36 @@ try {
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
-  await page.goto(`${base}/app/`, { waitUntil: "load" });
-  await page.waitForTimeout(1_500);
-  await page.screenshot({ path: path.join(shots, "threads.png"), fullPage: true });
-  await page.goto(`${base}/app/${bot.id}/`, { waitUntil: "load" });
-  await page.waitForTimeout(1_500);
-  await page.screenshot({ path: path.join(shots, "room.png"), fullPage: true });
+
+  for (const [route, shot] of [
+    ["/app/", "threads.png"],
+    [`/app/${bot.id}/`, "room.png"],
+  ]) {
+    await page.goto(`${base}${route}`, { waitUntil: "load" });
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: path.join(shots, shot), fullPage: true });
+    const report = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze();
+    const serious = report.violations
+      .filter((v) => v.impact === "critical" || v.impact === "serious")
+      .map((v) => `${v.id} × ${v.nodes.length}`);
+    if (serious.length > 0) {
+      throw new Error(`${route}: axe ${serious.join(", ")}`);
+    }
+  }
+
+  // A real turn from the UI, not just the API: type in the composer and send.
+  const composer = page.getByRole("textbox", { name: "Message" });
+  await composer.fill("Windows packaged boot: typed from the renderer");
+  await composer.press("Enter");
+  await page.waitForTimeout(2_000);
+  await page.screenshot({ path: path.join(shots, "room-after-send.png"), fullPage: true });
   if (errors.length > 0) {
     throw new Error(`renderer errors:\n${errors.join("\n")}`);
   }
   await browser.close();
-  console.log("Windows packaged boot: OK (health, ready, capabilities, RPC, renderer)");
+  console.log("Windows packaged boot: OK (health, ready, capabilities, RPC, renderer, axe, send)");
 } catch (error) {
   failed = error;
 } finally {

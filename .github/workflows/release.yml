@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: build and publish the release
+  build-linux:
+    name: build the Linux artifacts and the release notes
     runs-on: ubuntu-24.04
     permissions:
       contents: write # create the GitHub release and upload assets
@@ -113,14 +113,20 @@ jobs:
             echo
             echo "Everything else is in the repository: CHANGELOG.md, docs/PLAN.md, docs/TRACEABILITY.md (66/73 REQ ids in test names), docs/adr/ (29 decisions)."
           } > release-notes.md
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "Boma Bot ${GITHUB_REF_NAME}" \
-            --notes-file release-notes.md \
-            dist/*
+          mkdir -p release-assets
+          cp dist/* release-assets/
+          cp release-notes.md release-assets/
+
+      - name: Upload the Linux assets and the notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: boma-release-linux-${{ github.sha }}
+          path: release-assets/*
+          retention-days: 14
 
   desktop-windows:
-    name: build and upload the Windows desktop artifacts
-    needs: release
+    name: build and boot-test the Windows desktop
+    needs: build-linux
     runs-on: windows-latest
     permissions:
       contents: write # upload the assets to the release
@@ -161,6 +167,37 @@ jobs:
           npm run build
           npm run dist:win
 
+      - name: Install the boot-test runner
+        working-directory: apps/web
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: Unpack the portable build for the boot test
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path "apps/desktop/dist" -Filter "*.zip" | Select-Object -First 1
+          if (-not $zip) { throw "no portable zip in apps/desktop/dist" }
+          Expand-Archive -Path $zip.FullName -DestinationPath "${{ runner.temp }}/boma-boot" -Force
+
+      - name: Boot-test the packaged app before publishing
+        id: boot
+        working-directory: apps/web
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path "${{ runner.temp }}/boma-boot" -Filter "Boma Bot.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "no 'Boma Bot.exe' in the portable zip" }
+          node tools/windows-boot-smoke.mjs $exe.FullName
+
+      - name: Upload the boot evidence (always — even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boma-windows-boot-${{ github.sha }}
+          path: apps/web/test-results/windows-boot
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Write the Windows checksums
         working-directory: apps/desktop/dist
         shell: bash
@@ -187,14 +224,75 @@ jobs:
             gh attestation verify "$file" --repo Ggboykxz/boma-bot
           done
 
-      - name: Upload to the release
-        shell: bash
+      - name: Upload the Windows assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: boma-release-windows-${{ github.sha }}
+          path: |
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/SHA256SUMS-windows.txt
+          retention-days: 14
+
+  desktop-boot-linux:
+    name: boot-test the Linux desktop pack
+    needs: build-linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the web export
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: boma-release-linux-${{ github.sha }}
+          path: release-assets
+      - name: Unpack the Linux desktop tarball
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/boma-desktop-linux
+          tar -xzf release-assets/boma-desktop-*-linux-x64.tar.gz -C /tmp/boma-desktop-linux
+          ls /tmp/boma-desktop-linux
+      - name: Rehearse the embedded stack boot with the released binary
+        run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/vendor/boma apps/desktop/vendor/web
+          cp release-assets/boma-*-linux-x86_64.tar.gz /tmp/server.tar.gz
+          mkdir -p /tmp/server && tar -xzf /tmp/server.tar.gz -C /tmp/server
+          BOMA_BIN="$(find /tmp/server -type f -name boma | head -1)"
+          cp "$BOMA_BIN" apps/desktop/vendor/boma/boma
+          bash tools/fetch-embedded-postgres.sh apps/desktop/vendor/postgres linux
+          mv apps/desktop/vendor/postgres/linux/* apps/desktop/vendor/postgres/
+          cp -r apps/web/out/. apps/desktop/vendor/web/
+          bash tools/desktop-stack-smoke.sh apps/desktop/vendor
+
+  publish:
+    name: publish the tested release
+    needs: [build-linux, desktop-windows, desktop-boot-linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: boma-release-linux-${{ github.sha }}
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: boma-release-windows-${{ github.sha }}
+          path: release-assets
+      - name: Create the release from the tested artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "${{ github.ref_name }}" \
-            apps/desktop/dist/*.exe \
-            apps/desktop/dist/*.zip \
-            apps/desktop/dist/SHA256SUMS-windows.txt \
-            --clobber
+          ls -la release-assets
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Boma Bot ${GITHUB_REF_NAME}" \
+            --notes-file release-assets/release-notes.md \
+            release-assets/boma-* release-assets/SHA256SUMS*.txt
