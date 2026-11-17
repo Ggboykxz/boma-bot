@@ -142,7 +142,10 @@ async function boot(window: BrowserWindow): Promise<void> {
     liveStack = handle;
     await window.loadURL(handle.url).catch(() => app.quit());
   } catch (error) {
-    checkpoint(`fatal: ${error instanceof Error ? error.message : String(error)}`);
+    const fatal = error as Partial<StackError> & Error;
+    checkpoint(
+      `fatal${fatal.step ? ` in ${fatal.step}` : ""}: ${fatal.message}${fatal.log ? `\n${fatal.log}` : ""}`,
+    );
     if (
       error instanceof StackError ||
       (error instanceof Error && "step" in error)

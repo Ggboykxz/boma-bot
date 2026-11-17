@@ -21,6 +21,7 @@ import {
   writeFileSync,
   unlinkSync,
   readdirSync,
+  appendFileSync,
 } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -134,6 +135,19 @@ function logTail(file: string, lines = 12): string | undefined {
     return slice.join("\n").trim() || undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * A failure dialog is not a log: persist the bring-up failure where support (and CI) can read
+ * it. Best-effort — logging must never mask the original error.
+ */
+function persistFailure(paths: StackPaths, step: string, detail: string | undefined): void {
+  if (!detail) return;
+  try {
+    appendFileSync(paths.serverLog, `\nfatal: ${step}: ${detail}\n`, "utf8");
+  } catch {
+    // Ignore: the dialog still carries the message.
   }
 }
 
@@ -285,6 +299,7 @@ export async function startStack(userData: string): Promise<StackHandle> {
       "UTF8",
     ]);
     if (initdb.code !== 0) {
+      persistFailure(paths, "initdb", initdb.output.split("\n").slice(-12).join("\n"));
       throw new StackError(
         "initdb",
         "the embedded PostgreSQL could not initialise its data directory",
@@ -312,6 +327,7 @@ export async function startStack(userData: string): Promise<StackHandle> {
     "start",
   ]);
   if (pg.code !== 0) {
+    persistFailure(paths, "postgres", logTail(paths.postgresLog) ?? pg.output.split("\n").slice(-12).join("\n"));
     throw new StackError(
       "postgres",
       "the embedded PostgreSQL did not start",
@@ -340,6 +356,7 @@ export async function startStack(userData: string): Promise<StackHandle> {
     const detail = migrate.output.trim().length > 0
       ? migrate.output.split("\n").slice(-20).join("\n")
       : `boma migrate exited with code ${migrate.code} without writing anything — the binary may not start on this machine (a missing DLL is common on Windows).\nBinary: ${bomaBin(resourcesRoot())}\nDatabase: ${env.BOMA_DATABASE_URL}`;
+    persistFailure(paths, "migrate", detail);
     throw new StackError("migrate", "the migrations did not apply", detail);
   }
 
@@ -385,6 +402,7 @@ export async function startStack(userData: string): Promise<StackHandle> {
 
   const healthy = await waitForHealth(`http://127.0.0.1:${httpPort}/health`, 90, 1_000);
   if (!healthy) {
+    persistFailure(paths, "healthy", logTail(paths.serverLog) ?? `no server log lines available (${paths.serverLog})`);
     await stopStackAt(pgPort, paths, httpPort);
     throw new StackError(
       "healthy",
