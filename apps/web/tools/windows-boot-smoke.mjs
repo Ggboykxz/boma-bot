@@ -96,9 +96,13 @@ function findUserData() {
   if (!appdata || !existsSync(appdata)) {
     return null;
   }
-  const candidates = readdirSync(appdata).filter((name) =>
-    /boma/i.test(name) && existsSync(path.join(appdata, name, "boma", "port")),
-  );
+  // The port file only appears at the very end of bring-up; look for any sign the app has
+  // created its data folder (master-key, pgdata, or just the folder itself).
+  const candidates = readdirSync(appdata).filter((name) => {
+    if (!/boma/i.test(name)) return false;
+    const dir = path.join(appdata, name, "boma");
+    return existsSync(dir);
+  });
   return candidates.length > 0 ? path.join(appdata, candidates[0], "boma") : null;
 }
 
