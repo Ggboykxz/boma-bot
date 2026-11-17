@@ -238,8 +238,8 @@ jobs:
         working-directory: apps/web
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path "${{ runner.temp }}/boma-portable" -Filter boma-desktop.exe -Recurse | Select-Object -First 1
-          if (-not $exe) { throw "no boma-desktop.exe in the portable zip" }
+          $exe = Get-ChildItem -Path "${{ runner.temp }}/boma-portable" -Filter "Boma Bot.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "no 'Boma Bot.exe' in the portable zip" }
           node tools/windows-boot-smoke.mjs $exe.FullName
 
       - name: Upload the boot logs and screenshots
