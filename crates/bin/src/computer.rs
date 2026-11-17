@@ -182,14 +182,18 @@ where
         }
     };
 
+    // Only the docker provider consults the socket; a deployment with no computer backend
+    // (e.g. the local-first desktop) must boot regardless of what DOCKER_HOST says.
     let docker_host =
         optional(&env, "DOCKER_HOST").unwrap_or_else(|| "unix:///var/run/docker.sock".to_owned());
-    let socket = docker_host.trim_start_matches("unix://");
-    if !Path::new(socket).is_absolute() {
-        return Err(ComputerConfigError::Invalid {
-            name: "DOCKER_HOST",
-            value: docker_host,
-        });
+    if provider == ComputerProvider::Docker {
+        let socket = docker_host.trim_start_matches("unix://");
+        if !Path::new(socket).is_absolute() {
+            return Err(ComputerConfigError::Invalid {
+                name: "DOCKER_HOST",
+                value: docker_host,
+            });
+        }
     }
 
     let image = optional(&env, "BOMA_COMPUTER_IMAGE").unwrap_or_else(|| "alpine:3.21".to_owned());
@@ -311,6 +315,19 @@ mod tests {
         ])
         .expect_err("the build does not support it");
         assert!(matches!(error, ComputerConfigError::Unsupported { .. }));
+    }
+
+    #[test]
+    fn req_027_a_no_computer_deployment_ignores_an_unusable_docker_host() {
+        // With SANDBOX_PROVIDER=none the socket is never used, so it is not validated —
+        // a desktop deployment without a Docker daemon must boot regardless of DOCKER_HOST.
+        from_pairs([
+            ("SANDBOX_PROVIDER", "none"),
+            ("DOCKER_HOST", "http://docker.local:2375"),
+        ])
+        .expect("an unused docker host is not refused");
+        from_pairs([("DOCKER_HOST", "not-a-socket-at-all")])
+            .expect("no provider configured means no daemon needed");
     }
 
     #[test]
