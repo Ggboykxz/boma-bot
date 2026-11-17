@@ -53,15 +53,18 @@ function reportLogs() {
   const dir = dataDir ?? userData;
   const boma = path.join(dir, "boma.log");
   const pg = path.join(dir, "postgres.log");
+  const boot = path.join(dir, "boot.log");
   writeFileSync(path.join(shots, "boma.log.txt"), tail(boma, 400));
   writeFileSync(path.join(shots, "postgres.log.txt"), tail(pg, 400));
+  writeFileSync(path.join(shots, "boot.log.txt"), tail(boot, 400));
   console.log(`--- boma.log tail (${boma}) ---\n` + tail(boma));
   console.log(`--- postgres.log tail (${pg}) ---\n` + tail(pg));
+  console.log(`--- boot.log tail (${boot}) ---\n` + tail(boot));
 }
 
 console.log(`spawning ${exe} (exists: ${existsSync(exe)}, APPDATA: ${process.env.APPDATA})`);
-const child = spawn(exe, [], { stdio: ["ignore", "pipe", "pipe"], detached: false,
-  env: { ...process.env, ELECTRON_ENABLE_LOGGING: "1" } });
+const child = spawn(exe, ["--disable-gpu"], { stdio: ["ignore", "pipe", "pipe"], detached: false,
+  env: { ...process.env, ELECTRON_ENABLE_LOGGING: "1", BOMA_DESKTOP_DISABLE_GPU: "1" } });
 let appOutput = "";
 for (const stream of [child.stdout, child.stderr]) {
   stream?.on("data", (chunk) => {

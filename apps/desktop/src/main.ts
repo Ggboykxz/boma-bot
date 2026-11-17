@@ -13,6 +13,7 @@
 import { app, BrowserWindow, Menu, dialog, session, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
+import { appendFileSync, mkdirSync } from "node:fs";
 import {
   startStack,
   stopStack,
@@ -78,6 +79,21 @@ function dataFolder(): string {
   return path.join(app.getPath("userData"), "boma");
 }
 
+/**
+ * Append a boot checkpoint to `boot.log` in the data folder. The bring-up runs before anything
+ * is listening, so when a machine never reaches a healthy stack this file is the only record of
+ * where it stopped. Best-effort by design: diagnostics never take the boot down.
+ */
+function checkpoint(name: string): void {
+  try {
+    const dir = dataFolder();
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(path.join(dir, "boot.log"), `${new Date().toISOString()} ${name}\n`);
+  } catch {
+    // Ignore: a missing boot.log must not fail the launch.
+  }
+}
+
 /** Where to read the failure, for a dialog or a support request. */
 function logHint(): string {
   return `Logs: ${path.join(dataFolder(), "boma.log")} and ${path.join(dataFolder(), "postgres.log")}`;
@@ -103,6 +119,7 @@ async function fatalAndQuit(window: BrowserWindow, message: string): Promise<voi
 
 /** The first-launch flow, with one retry owned by the user. */
 async function boot(window: BrowserWindow): Promise<void> {
+  checkpoint("boot start");
   if (OVERRIDE_URL) {
     if (await isReachable(OVERRIDE_URL)) {
       guardNavigation(window, OVERRIDE_URL);
@@ -115,6 +132,7 @@ async function boot(window: BrowserWindow): Promise<void> {
 
   try {
     const handle = await startEmbedded(window);
+    checkpoint("embedded stack up");
     guardNavigation(window, handle.url);
     handle.on("fatal", (reason: string) => {
       void fatalAndQuit(window, reason);
@@ -122,6 +140,7 @@ async function boot(window: BrowserWindow): Promise<void> {
     liveStack = handle;
     await window.loadURL(handle.url).catch(() => app.quit());
   } catch (error) {
+    checkpoint(`fatal: ${error instanceof Error ? error.message : String(error)}`);
     if (
       error instanceof StackError ||
       (error instanceof Error && "step" in error)
@@ -281,13 +300,24 @@ function enableSignedUpdateFeed(): void {
   });
 }
 
+// Headless or broken-GPU machines (CI runners, some remote-desktop sessions) cannot create a
+// GPU-accelerated window; BOMA_DESKTOP_DISABLE_GPU=1 forces software rendering. Off otherwise:
+// real machines keep hardware acceleration.
+if (process.env.BOMA_DESKTOP_DISABLE_GPU === "1") {
+  app.disableHardwareAcceleration();
+}
+
 app.whenReady().then(() => {
+  checkpoint("whenReady");
   const window = makeWindow();
+  checkpoint("window created");
   Menu.setApplicationMenu(Menu.buildFromTemplate(template(window)));
+  checkpoint("menu set");
   if (SIGNED_UPDATE) {
     enableSignedUpdateFeed();
   }
   void boot(window);
+  checkpoint("boot dispatched");
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
