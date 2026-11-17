@@ -6,7 +6,7 @@
 // The app owns its userData under %APPDATA%/Boma Bot/boma/. On a failure, this script prints the
 // tails of boma.log and postgres.log and exits non-zero — CI keeps both as artifacts.
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -243,14 +243,26 @@ try {
   failed = error;
 } finally {
   reportLogs();
-  try {
-    process.kill(child.pid, "SIGTERM");
-  } catch {
-    // Already gone.
+  // Kill the whole tree, not just the Electron shell: the stack's children (postgres, serve,
+  // worker) would survive the parent's death on Windows and hold the runner hostage.
+  if (process.platform === "win32") {
+    try {
+      execFileSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore" });
+    } catch {
+      // Already gone.
+    }
+  } else {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Already gone.
+    }
   }
 }
 
+// The harness must exit deterministically: pipes and keep-alive fetch agents otherwise hold
+// the event loop open and CI's step never finishes.
 if (failed) {
   console.error(`FAILED: ${String(failed)}`);
-  process.exit(1);
 }
+process.exit(failed ? 1 : 0);
