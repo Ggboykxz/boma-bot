@@ -57,7 +57,9 @@ function makeWindow(): BrowserWindow {
     minWidth: 800,
     minHeight: 560,
     title: "Boma Bot",
-    icon: path.join(__dirname, "..", "build", "icon.png"),
+    // No window icon here: electron-builder embeds it in the executable, and the compiled
+    // `build/` assets are not packed into the asar. BrowserWindow would warn about a missing
+    // file on every launch.
     webPreferences: {
       partition: DESKTOP_PARTITION,
       contextIsolation: true,

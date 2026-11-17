@@ -93,20 +93,34 @@ function dumpExeDir() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Electron derives userData from appId/productName; find the real folder instead of guessing.
+// Electron derives userData from the app's root package.json ("productName", else "name").
+// Scoped names used to produce nested paths like %APPDATA%/@boma/desktop/boma — accept both,
+// or a stale rc build keeps its data out of reach of the harness.
 function findUserData() {
   const appdata = process.env.APPDATA;
   if (!appdata || !existsSync(appdata)) {
     return null;
   }
-  // The port file only appears at the very end of bring-up; look for any sign the app has
-  // created its data folder (master-key, pgdata, or just the folder itself).
-  const candidates = readdirSync(appdata).filter((name) => {
-    if (!/boma/i.test(name)) return false;
-    const dir = path.join(appdata, name, "boma");
-    return existsSync(dir);
-  });
-  return candidates.length > 0 ? path.join(appdata, candidates[0], "boma") : null;
+  const candidates = [];
+  for (const entry of readdirSync(appdata)) {
+    // Depth 1: <appdata>/<Boma Bot>/boma — the expected layout.
+    const depth1 = path.join(appdata, entry, "boma");
+    if (/boma/i.test(entry) && existsSync(depth1)) {
+      candidates.push(depth1);
+    }
+    // Depth 2: <appdata>/<@scope>/<app>/boma — what scoped package names used to produce.
+    try {
+      for (const child of readdirSync(path.join(appdata, entry))) {
+        const depth2 = path.join(appdata, entry, child, "boma");
+        if (existsSync(depth2)) {
+          candidates.push(depth2);
+        }
+      }
+    } catch {
+      // Not a directory; skip.
+    }
+  }
+  return candidates[0] ?? null;
 }
 
 let dataDir = null;

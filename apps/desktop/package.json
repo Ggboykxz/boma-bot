@@ -1,11 +1,12 @@
 {
   "name": "@boma/desktop",
+  "productName": "Boma Bot",
   "version": "0.3.0-rc",
   "private": true,
   "description": "Boma Bot desktop shell (REQ-055): Electron, a session partition it owns, WebAuthn via the loopback origin, signed auto-update wiring.",
-  "license": "MIT",
-  "author": "Boma Bot contributors",
   "main": "main/main.js",
+  "author": "Boma Bot contributors",
+  "license": "MIT",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
