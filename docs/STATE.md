@@ -75,6 +75,13 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   - Not done (recorded): RTL axe green on this machine needs system fontconfig/libs or the CI
     browser; the card-answered state is not on the messages wire (reload shows the card
     pending; second answer → 409 note) — a wire-level fix is a spec question for the owner.
+- **2026-11-17 — cargo-deny unmaintained advisories (gate kept strict).** Two new RUSTSEC
+  advisories landed: `chrono` (RUSTSEC-2026-0543) and `chrono-tz` (RUSTSEC-2026-0555), both
+  *unmaintained* — no vulnerability and "No safe upgrade is available" upstream. `deny.toml`
+  now ignores exactly those two IDs with a dated, justified comment (the existing rsa/jwt-simple
+  exceptions are unchanged). Every other advisory, yank, ban, licence and source check stays at
+  `deny`. **Proposal (not done)**: migrate the RFC3339/cron/timezone code from chrono/chrono-tz
+  to jiff or time; that is a breaking change, not a patch.
 - **v0.3.0-rc released (2026-11-16, tag v0.3.0-rc, release run 43978337567 green).** The desktop
   is now self-contained like OpenBot: the Windows NSIS (`.exe` 181 MiB) and portable zip, and the
   Linux tarball, all carry the web export + the `boma` release binary + embedded PostgreSQL 17.12.0

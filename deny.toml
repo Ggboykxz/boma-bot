@@ -23,6 +23,14 @@ ignore = [
   # key lets an attacker send pushes through the deployment's identity, never to read mail,
   # conversations or secrets. Revisit when web-push/jwt-simple upgrade. (2026-11-15)
   "RUSTSEC-2026-0387",
+  # chrono (RUSTSEC-2026-0543) and chrono-tz (RUSTSEC-2026-0555) were flagged unmaintained on
+  # 2026-11-17: no vulnerability, no fixed release, and the upstream advisory itself says
+  # "No safe upgrade is available". They are used for RFC3339 rendering, cron windows and the
+  # IANA timezone of routines. Migrating to jiff/time is a separate, breaking change; it is
+  # tracked as a proposal in docs/STATE.md. Only these two advisory IDs are ignored; every
+  # other advisory, yank, ban and licence check stays at deny. (2026-11-17)
+  "RUSTSEC-2026-0543",
+  "RUSTSEC-2026-0555",
 ]
 
 [licenses]
