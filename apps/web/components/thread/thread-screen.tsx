@@ -319,6 +319,106 @@ export function ThreadScreen({ botId }: { botId: string }) {
     ),
   );
 
+  // One transcript row; pulled out so the unread separator can sit between two lists without
+  // ever becoming a non-listitem child of a <ul> (WCAG 2.2 / axe rule `list`).
+  const renderMessageRow = (message: MessageView) => (
+            <li key={message.id} className="animate-row-slide-in flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <p className="text-text-secondary text-caption-1-semibold">
+                  {t(`thread.role.${message.role}`)}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setReplyTo(message)}
+                  aria-label={t("thread.reply.button")}
+                  className="boma-focus rounded-md p-1 text-text-tertiary hover:bg-background-secondary-hover hover:text-text-primary"
+                >
+                  <RiReplyLine size={14} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPickerFor(pickerFor === message.id ? null : message.id)}
+                  aria-label={t("thread.reactions.add")}
+                  aria-expanded={pickerFor === message.id}
+                  className="boma-focus rounded-md p-1 text-text-tertiary hover:bg-background-secondary-hover hover:text-text-primary"
+                >
+                  <RiEmotionAddLine size={14} aria-hidden />
+                </button>
+              </div>
+              {pickerFor === message.id ? (
+                <div
+                  role="group"
+                  aria-label={t("thread.reactions.picker")}
+                  className="flex flex-wrap gap-1 ps-1"
+                >
+                  {QUICK_EMOJIS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      aria-label={`${t("thread.reactions.toggle")} ${emoji}`}
+                      onClick={() => {
+                        setPickerFor(null);
+                        void toggleReaction(message.id, emoji, "add");
+                      }}
+                      className="boma-focus hover:bg-background-secondary-hover rounded-full p-1"
+                    >
+                      <span aria-hidden>{emoji}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div
+                className={
+                  message.role === "user"
+                    ? "bg-background-secondary-default flex flex-col gap-1 self-end rounded-3xl px-3 py-2 md:max-w-[80%]"
+                    : "flex flex-col gap-1 self-start md:max-w-[80%]"
+                }
+              >
+                {message.replyQuote ? (
+                  <blockquote className="border-border-button-default border-l-2 ps-2 text-text-secondary text-body-2-regular">
+                    {message.replyQuote}
+                  </blockquote>
+                ) : null}
+                <MessageBlocks
+                  blocks={message.blocks}
+                  onCardAnswered={(cardId) =>
+                    setAnsweredCards((current) => new Set(current).add(cardId))
+                  }
+                />
+              </div>
+              {message.reactions && message.reactions.length > 0 ? (
+                <ul
+                  className={`flex flex-wrap gap-1 ${message.role === "user" ? "self-end" : "self-start"}`}
+                >
+                  {message.reactions.map((reaction) => (
+                    <li key={reaction.emoji}>
+                      <button
+                        type="button"
+                        aria-pressed={reaction.reacted}
+                        aria-label={`${t("thread.reactions.toggle")} ${reaction.emoji}`}
+                        onClick={() =>
+                          void toggleReaction(
+                            message.id,
+                            reaction.emoji,
+                            reaction.reacted ? "remove" : "add",
+                          )
+                        }
+                        className={
+                          reaction.reacted
+                            ? "boma-focus border-border-button-default bg-background-tertiary-default text-text-primary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-body-2-medium"
+                            : "boma-focus border-separator-border text-text-secondary hover:bg-background-secondary-hover hover:text-text-primary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-body-2-medium"
+                        }
+                      >
+                        <span aria-hidden>{reaction.emoji}</span>
+                        <span>{reaction.count}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <ComputerPanel botId={botId} />
@@ -372,123 +472,28 @@ export function ThreadScreen({ botId }: { botId: string }) {
         ) : null}
 
         {messages.length > 0 ? (
-          <ul className="flex flex-col gap-4">
-            {messages.flatMap((message, index) => {
-              const divider =
-                index === dividerIndex ? (
-                  <li
-                    key="unread-divider"
-                    role="separator"
-                    aria-label={`${dividerCount} ${t("thread.unread.label")}`}
-                    className="flex items-center gap-2 py-1"
-                  >
-                    <span aria-hidden="true" className="border-separator-border flex-1 border-t" />
-                    <span className="text-text-secondary text-caption-1-semibold whitespace-nowrap">
-                      {dividerCount} {t("thread.unread.label")}
-                    </span>
-                    <span aria-hidden="true" className="border-separator-border flex-1 border-t" />
-                  </li>
-                ) : null;
-              const row = (
-              <li key={message.id} className="animate-row-slide-in flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <p className="text-text-secondary text-caption-1-semibold">
-                    {t(`thread.role.${message.role}`)}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setReplyTo(message)}
-                    aria-label={t("thread.reply.button")}
-                    className="boma-focus rounded-md p-1 text-text-tertiary hover:bg-background-secondary-hover hover:text-text-primary"
-                  >
-                    <RiReplyLine size={14} aria-hidden />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPickerFor(pickerFor === message.id ? null : message.id)}
-                    aria-label={t("thread.reactions.add")}
-                    aria-expanded={pickerFor === message.id}
-                    className="boma-focus rounded-md p-1 text-text-tertiary hover:bg-background-secondary-hover hover:text-text-primary"
-                  >
-                    <RiEmotionAddLine size={14} aria-hidden />
-                  </button>
-                </div>
-                {pickerFor === message.id ? (
-                  <div
-                    role="group"
-                    aria-label={t("thread.reactions.picker")}
-                    className="flex flex-wrap gap-1 ps-1"
-                  >
-                    {QUICK_EMOJIS.map((emoji) => (
-                      <button
-                        key={emoji}
-                        type="button"
-                        aria-label={`${t("thread.reactions.toggle")} ${emoji}`}
-                        onClick={() => {
-                          setPickerFor(null);
-                          void toggleReaction(message.id, emoji, "add");
-                        }}
-                        className="boma-focus hover:bg-background-secondary-hover rounded-full p-1"
-                      >
-                        <span aria-hidden>{emoji}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                <div
-                  className={
-                    message.role === "user"
-                      ? "bg-background-secondary-default flex flex-col gap-1 self-end rounded-3xl px-3 py-2 md:max-w-[80%]"
-                      : "flex flex-col gap-1 self-start md:max-w-[80%]"
-                  }
-                >
-                  {message.replyQuote ? (
-                    <blockquote className="border-border-button-default border-l-2 ps-2 text-text-secondary text-body-2-regular">
-                      {message.replyQuote}
-                    </blockquote>
-                  ) : null}
-                  <MessageBlocks
-                    blocks={message.blocks}
-                    onCardAnswered={(cardId) =>
-                      setAnsweredCards((current) => new Set(current).add(cardId))
-                    }
-                  />
-                </div>
-                {message.reactions && message.reactions.length > 0 ? (
-                  <ul
-                    className={`flex flex-wrap gap-1 ${message.role === "user" ? "self-end" : "self-start"}`}
-                  >
-                    {message.reactions.map((reaction) => (
-                      <li key={reaction.emoji}>
-                        <button
-                          type="button"
-                          aria-pressed={reaction.reacted}
-                          aria-label={`${t("thread.reactions.toggle")} ${reaction.emoji}`}
-                          onClick={() =>
-                            void toggleReaction(
-                              message.id,
-                              reaction.emoji,
-                              reaction.reacted ? "remove" : "add",
-                            )
-                          }
-                          className={
-                            reaction.reacted
-                              ? "boma-focus border-border-button-default bg-background-tertiary-default text-text-primary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-body-2-medium"
-                              : "boma-focus border-separator-border text-text-secondary hover:bg-background-secondary-hover hover:text-text-primary inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-body-2-medium"
-                          }
-                        >
-                          <span aria-hidden>{reaction.emoji}</span>
-                          <span>{reaction.count}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </li>
-              );
-              return divider ? [divider, row] : [row];
-            })}
-          </ul>
+          <div className="flex flex-col gap-4">
+            <ul className="flex flex-col gap-4">
+              {messages.slice(0, dividerIndex < 0 ? messages.length : dividerIndex).map(renderMessageRow)}
+            </ul>
+            
+            {dividerIndex >= 0 ? (
+              <div
+                role="separator"
+                aria-label={`${dividerCount} ${t("thread.unread.label")}`}
+                className="flex items-center gap-2 py-1"
+              >
+                <span aria-hidden="true" className="border-separator-border flex-1 border-t" />
+                <span className="text-text-secondary text-caption-1-semibold whitespace-nowrap">
+                  {dividerCount} {t("thread.unread.label")}
+                </span>
+                <span aria-hidden="true" className="border-separator-border flex-1 border-t" />
+              </div>
+            ) : null}
+            <ul className="flex flex-col gap-4">
+              {messages.slice(dividerIndex < 0 ? messages.length : dividerIndex).map(renderMessageRow)}
+            </ul>
+          </div>
         ) : null}
 
         {phase === "ready" && messages.length === 0 ? <EmptyThread onPick={setDraft} /> : null}

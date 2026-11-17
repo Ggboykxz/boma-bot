@@ -40,7 +40,7 @@ function RosterRow({
         {bot.unreadCount > 0 ? (
           <span
             key={bot.unreadCount}
-            className="animate-number-fade bg-background-tertiary-default text-text-secondary rounded-full px-2 text-caption-1-semibold"
+            className="animate-number-fade bg-background-tertiary-default text-text-primary rounded-full px-2 text-caption-1-semibold"
           >
             {bot.unreadCount}
           </span>
