@@ -235,11 +235,16 @@ export const postgresBin = (root: string, name: string) =>
   path.join(root, "postgres", "bin", binaryName(name));
 export const bomaBin = (root: string) => path.join(root, "boma", binaryName("boma"));
 
-export async function isDeploymentReachable(url: string): Promise<boolean> {
+/**
+ * Probe a deployment base origin; `/health` is appended here (and only here). Callers pass the
+ * base (`http://127.0.0.1:<port>`), never a path that already ends in `/health` — a double
+ * suffix probes `/health/health` forever, which is how this nearly shipped.
+ */
+export async function isDeploymentReachable(baseUrl: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2_000);
   try {
-    const response = await fetch(`${url}/health`, { signal: controller.signal });
+    const response = await fetch(`${baseUrl}/health`, { signal: controller.signal });
     return response.ok;
   } catch {
     return false;
@@ -400,7 +405,7 @@ export async function startStack(userData: string): Promise<StackHandle> {
   });
   worker.on("exit", onWorkerExit);
 
-  const healthy = await waitForHealth(`http://127.0.0.1:${httpPort}/health`, 90, 1_000);
+  const healthy = await waitForHealth(`http://127.0.0.1:${httpPort}`, 90, 1_000);
   if (!healthy) {
     persistFailure(paths, "healthy", logTail(paths.serverLog) ?? `no server log lines available (${paths.serverLog})`);
     await stopStackAt(pgPort, paths, httpPort);

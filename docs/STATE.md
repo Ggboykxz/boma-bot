@@ -103,7 +103,8 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
      (`web-push → ece → openssl-sys`), but the zonky PG bundle keeps `libcrypto-3-x64.dll` /
      `libssl-3-x64.dll` in `resources/postgres/bin`, one folder away; Windows resolves DLLs next
      to the exe. `tools/stage-desktop-vendor.sh` now copies both beside `resources/boma/boma.exe`
-     (`eccfbc7`). Likely root cause of the owner's "the migration did not apply" on his machine.
+     (`eccfbc7`). (Not the owner's migration failure in the end — that was item 4; the DLL fix is
+     still correct hygiene for a Windows pack.)
   3. The app then booted fine but wrote its data to `%APPDATA%\@boma\desktop\boma` — Electron
      derives userData from the asar's **root** `package.json` (`productName`, else `name`; ours
      is the scoped `@boma/desktop` with no root productName). The harness looked only at
@@ -121,8 +122,28 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
     and 2 (covers the old scoped layout); an infinite recursion in `readPort()` crashed the
     harness with `RangeError: Maximum call stack size exceeded` after falsely reporting
     "(none)" — fixed, with the data-dir discovery and `boot.log` tail printed on failure.
-  - **The boot gate is still RED as of this entry — the last fix (`4bcb92b`) is being verified
-    by CI right now.** v0.3.0 stays unpublished until it is green.
+  - **Two more defects surfaced after those fixes; the chain is fully diagnosed as of 2026-11-17
+    (run 44178689593, `1690b03`):**
+    4. `the migrations did not apply` on Windows (the owner's exact error, reproduced on the
+       runner): startup config validated `DOCKER_HOST` even with `SANDBOX_PROVIDER=none`, and the
+       Linux default socket is never absolute on Windows, so the whole configuration was
+       rejected and every `boma` subcommand refused to boot. The validation now runs only with
+       the docker provider selected (`1690b03`, TDD: `req_027_a_no_computer_deployment_ignores_
+       an_unusable_docker_host`, red then green; REQ-027 suite 8/9 locally, the ninth needs a
+       live daemon and is green on CI). After this fix the embedded stack **comes up**: embedded
+       Postgres listens, migrate applies, serve binds and logs `boma is listening`.
+    5. **The stack is then torn down by the desktop itself: `waitForHealth` passed a URL that
+       already ended in `/health` to `isDeploymentReachable`, which appends `/health` again —
+       the probe hammered `/health/health` → 404 forever, the health wait never passed, and
+       after 90 s the app ran `stopStackAt` (killing PG under the worker, which is why
+       `boma.log` shows `the worker could not sweep the routines` — collateral, not a defect).
+       Fixed in this session: the probe passes the base origin, and `isDeploymentReachable`
+       documents that it owns the suffix. **This is the same bug that would hit the owner on
+       Windows once migrations applied.** v0.3.0 remains unpublished until the boot gate is
+       green.
+  - The `boot.log` diagnostics made all of this readable from CI (create the folder → checkpoints
+    → fatal line with step + detail); `boma.log` now persists the failing step's raw output
+    (initdb / postgres / migrate / healthy) instead of showing it only in a dialog (`60b93c2`).
   - Note: installs of the 0.3.0-rc keep their data at `%APPDATA%\@boma\desktop\boma`; the
     v0.3.0 final recreates `%APPDATA%\Boma Bot\boma` (a one-time move; acceptable at rc
     stage). The owner's `boma.log` for the migration error is at
