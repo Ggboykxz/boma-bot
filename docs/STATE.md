@@ -75,6 +75,19 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   - Not done (recorded): RTL axe green on this machine needs system fontconfig/libs or the CI
     browser; the card-answered state is not on the messages wire (reload shows the card
     pending; second answer → 409 note) — a wire-level fix is a spec question for the owner.
+- **v0.3.0-rc released (2026-11-16, tag v0.3.0-rc, release run 43978337567 green).** The desktop
+  is now self-contained like OpenBot: the Windows NSIS (`.exe` 181 MiB) and portable zip, and the
+  Linux tarball, all carry the web export + the `boma` release binary + embedded PostgreSQL 17.12.0
+  (zonkyio, pinned, SHA-256 verified, Apache-2.0). First launch initialises `userData/boma/`
+  (initdb → fresh loopback PG port → migrate → serve + worker → opens the app; no Docker, no
+  system Postgres, no account). The failure paths quote the failing step and the reset folder.
+  The release job attests all artifacts (Sigstore, keyless) and the Windows job verifies the
+  attestations in-line before upload. CI evidence: the Linux leg packs and rehearses the full
+  boot headlessly (initdb → migrate → serve/worker → RPC round-trip); the Windows leg compiles
+  through vcpkg-provided OpenSSL (`x64-windows-static-md`, static — no DLLs to ship).
+  66/73 REQ ids covered by tests; the missing seven are recorded (049, 056, 068, 070, 071, 073,
+  074). Release notes rewritten for 0.3.0-rc (66/73).
+  **Windows smoke is the owner's next step**; v0.3.0 final is cut after his verdict.
 - **M28 — local automation API + operator CLI (2026-11-16, REQ-072; this commit).**
   - The token-gated automation surface landed: `/api/v1/automation/*`, off unless both
     `BOMA_AUTOMATION_TOKEN` (≥16 chars) and `BOMA_AUTOMATION_AGENTS` (comma-separated bot ids, or
