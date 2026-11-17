@@ -38,6 +38,14 @@ cargo build --release --locked --bin boma --manifest-path "$ROOT/Cargo.toml"
 BOMA_BIN="${BOMA_BINARY:-$ROOT/target/release/boma}"
 if [ "$OS" = "windows" ]; then
   cp "${BOMA_BIN}.exe" "$VENDOR/boma/boma.exe"
+  # The PG bundle carries OpenSSL DLLs in postgres/bin; boma.exe links against OpenSSL on
+  # Windows (web-push -> ece -> openssl-sys). Windows looks for DLLs next to the exe first, not
+  # in a sibling folder, so put them beside boma.exe or migration fails with no output.
+  for dll in libcrypto-3-x64.dll libssl-3-x64.dll; do
+    if [ -f "$VENDOR/postgres/bin/$dll" ]; then
+      cp "$VENDOR/postgres/bin/$dll" "$VENDOR/boma/$dll"
+    fi
+  done
 else
   cp "$BOMA_BIN" "$VENDOR/boma/boma"
 fi
