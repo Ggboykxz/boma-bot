@@ -335,11 +335,12 @@ export async function startStack(userData: string): Promise<StackHandle> {
   const migrate = await run(bomaBin(resourcesRoot()), ["migrate"], { env });
   if (migrate.code !== 0) {
     await stopStackAt(pgPort, paths, httpPort);
-    throw new StackError(
-      "migrate",
-      "the migrations did not apply",
-      migrate.output.split("\n").slice(-12).join("\n"),
-    );
+    // A non-zero exit with an empty output means the binary never started (a missing DLL on
+    // Windows, for example). Say so explicitly instead of showing a blank dialog.
+    const detail = migrate.output.trim().length > 0
+      ? migrate.output.split("\n").slice(-20).join("\n")
+      : `boma migrate exited with code ${migrate.code} without writing anything — the binary may not start on this machine (a missing DLL is common on Windows).\nBinary: ${bomaBin(resourcesRoot())}\nDatabase: ${env.BOMA_DATABASE_URL}`;
+    throw new StackError("migrate", "the migrations did not apply", detail);
   }
 
   const serverLog = openServerLog(paths.serverLog);
