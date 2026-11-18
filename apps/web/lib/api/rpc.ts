@@ -542,6 +542,22 @@ export function runsRetry(
   return call<{ ok: boolean }>("runs", "retry", request, signal);
 }
 
+/** `runs.pause` — park a queued run; no worker claims it until resumed (REQ-067). */
+export function runsPause(
+  request: { runId: string },
+  signal?: AbortSignal,
+): Promise<{ id: string; status: string }> {
+  return call("runs", "pause", request, signal);
+}
+
+/** `runs.resume` — return a paused run to the queue (REQ-067). */
+export function runsResume(
+  request: { runId: string },
+  signal?: AbortSignal,
+): Promise<{ id: string; status: string }> {
+  return call("runs", "resume", request, signal);
+}
+
 /** One frame of a thread's stream, as the browser hands it over. */
 export interface StreamFrame {
   /** The event name the server wrote, when it wrote one. */

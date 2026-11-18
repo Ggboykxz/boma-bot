@@ -8,6 +8,7 @@
 
 export const RUN_STATUSES = [
   "queued",
+  "paused",
   "leased",
   "running",
   "waiting_input",

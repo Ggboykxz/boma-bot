@@ -4,7 +4,7 @@ import { RiErrorWarningLine, RiRefreshLine } from "@remixicon/react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/base/buttons/button";
-import { runsList, runsRetry, type RunView } from "@/lib/api/rpc";
+import { runsList, runsPause, runsResume, runsRetry, type RunView } from "@/lib/api/rpc";
 import { isRetryable, runStatusKey, runTriggerKey } from "@/lib/run-status";
 import { useTranslation } from "@/lib/use-translation";
 
@@ -24,6 +24,7 @@ export function ActivityScreen() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [reloadToken, setReloadToken] = useState(0);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [busyRun, setBusyRun] = useState<string | null>(null);
 
   // The retry button resets the view itself (it is an event handler); the effect only fetches.
   const reload = useCallback(() => {
@@ -48,7 +49,7 @@ export function ActivityScreen() {
         }
       });
 
-    return () => {
+  return () => {
       controller.abort();
     };
   }, [reloadToken]);
@@ -101,7 +102,22 @@ export function ActivityScreen() {
           {runs.map((run) => {
             const statusKey = runStatusKey(run.status);
             const triggerKey = runTriggerKey(run.trigger);
-            return (
+            const control = async (id: string, action: "pause" | "resume") => {
+    setBusyRun(id);
+    try {
+      const reply =
+        action === "pause" ? await runsPause({ runId: id }) : await runsResume({ runId: id });
+      setRuns((current) =>
+        current.map((run) => (run.id === reply.id ? { ...run, status: reply.status } : run)),
+      );
+    } catch {
+      // The row keeps its current status; the operator can retry.
+    } finally {
+      setBusyRun(null);
+    }
+  };
+
+  return (
               <li
                 key={run.id}
                 className="animate-row-slide-in border-border-button-default bg-background-primary-default flex flex-col gap-1 rounded-3xl border p-3"
@@ -115,6 +131,18 @@ export function ActivityScreen() {
                     {statusKey === null ? run.status : t(statusKey)}
                   </p>
                 </div>
+                {run.status === "queued" || run.status === "paused" ? (
+                  <div>
+                    <Button
+                      variant="secondary"
+                      size="small"
+                      disabled={busyRun === run.id}
+                      onClick={() => void control(run.id, run.status === "queued" ? "pause" : "resume")}
+                    >
+                      {run.status === "queued" ? t("common.pause") : t("common.resume")}
+                    </Button>
+                  </div>
+                ) : null}
                 {isRetryable(run.status) ? (
                   <div>
                     <Button

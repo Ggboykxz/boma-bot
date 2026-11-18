@@ -101,6 +101,11 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   the first build with the owner-requested UI fixes (bot-create button, opencode detection,
   BoardUI thinking/composer loader). rc2 remains published but superseded; v0.3.0 final waits for
   the owner's rc3 smoke.
+- **2026-11-18 — REQ-067 pause/resume controls (issue #3, first slice).** The activity screen now
+  offers Pause on queued runs and Resume on paused ones, via `runs.pause`/`runs.resume` and a local
+  status update; the web run vocabulary gained `paused`. Two `REQ-067` Playwright tests pass;
+  goldens and axe unchanged (one known local RTL artefact). Reassign (REQ-068) remains the second
+  slice of issue #3 and needs its own RPC/usecase design before code.
 - **2026-11-18 — UI slices (bot create + ACP detection + free BoardUI components).** Approved
   design `docs/superpowers/specs/2026-11-18-ui-bot-create-and-acp-detection-design.md`, plan
   `docs/superpowers/plans/2026-11-18-ui-bot-create-and-acp-detection.md`. Slice 1 landed:
