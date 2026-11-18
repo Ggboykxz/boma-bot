@@ -142,6 +142,11 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
   pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
   for the owner's rc4 smoke.
+- **2026-11-18 — 100 sector UI proposals.** At the owner's request, 100 read-only subagents each
+  took one industry sector and wrote `docs/ui-proposals/001-…` … `100-…` (no product code touched).
+  `docs/ui-proposals/SYNTHESIS.md` aggregates the signal: approval cards (72 sectors) and
+  board/triage (71) are the two cross-sector wins; REQ-057/i18n is the cross-cutting gate. The
+  owner picks which slice to implement next; nothing was committed to product behaviour.
 - **2026-11-18 — full-parity re-inspection at OpenBot HEAD `386085ff` (0.73.0).** Consulted
   upstream README ("What works"), CHANGELOG 0.72/0.73, `docs/` and `apps/` layout as data only —
   no code, wording, brand or assets copied; upstream stays PolyForm Noncommercial, our
