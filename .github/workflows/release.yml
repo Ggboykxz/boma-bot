@@ -90,7 +90,7 @@ jobs:
           {
             echo "Boma Bot — persistent AI teammates on hardware you own."
             echo
-            echo "What is in this release candidate: the v0.1.0 product, the improvement program through M15, and M35 — a fully self-contained desktop for Windows and Linux, like OpenBot. The pack carries the web export, the boma binary and embedded PostgreSQL 17.12.0; first launch initialises the data folder, applies migrations, starts the server and worker, and opens the app — no Docker, no system Postgres, no account. BOMA_DESKTOP_URL still pins an external origin. This is a release candidate; the owner smokes the Windows installer before v0.3.0 final."
+            echo "What is in this release candidate: the v0.1.0 product, the improvement program through M15, and M35 — a fully self-contained desktop for Windows and Linux, like OpenBot. The pack carries the web export, the boma binary and embedded PostgreSQL 17.12.0; first launch initialises the data folder, applies migrations, starts the server and worker, and opens the app — no Docker, no system Postgres, no account. BOMA_DESKTOP_URL still pins an external origin. Release candidate 2: the Windows first-launch chain was reproduced end to end on a clean runner, and the pack is boot-tested in CI before anything publishes. The owner smokes the Windows installer before v0.3.0 final."
             echo "(66 of 73 REQ ids are covered by tests carrying their id in the name; REQ-049 (voice), REQ-056 (mobile), REQ-068 (reassign), REQ-070 (Discord/WhatsApp fronts), REQ-071 (embedded browser), REQ-073 (themes), REQ-074 (first-party content) stay open by record.)"
             echo
             echo "Artifacts (hashes: SHA256SUMS.txt covers the Linux artifacts; SHA256SUMS-windows.txt covers the Windows artifacts — both are Sigstore-attested). The desktop-windows job uploads the Windows files to this release after the Linux job finishes:"
@@ -98,9 +98,9 @@ jobs:
             echo "- boma-${VERSION}-linux-x86_64.tar.gz — the server: the boma binary, the static web build, migrations, README/LICENSE/CHANGELOG and docs/UPGRADING.md. Serve it with boma migrate && boma serve; see docs/UPGRADING.md."
             echo "- boma-desktop-${VERSION}-linux-x64.tar.gz — the Electron shell, unpacked and unsigned; see docs/UPGRADING.md (§Desktop). No auto-update; updates are manual."
             echo "- boma-desktop-${VERSION}-win-x64-setup.exe — the Windows installer (per-user by default; unsigned — see Verify)."
-            echo "- boma-desktop-${VERSION}-win-x64-portable.zip — portable Windows build: unpack, run boma-desktop.exe."
+            echo "- boma-desktop-${VERSION}-win-x64-portable.zip — portable Windows build: unpack, run Boma Bot.exe."
             echo
-            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI green on every push (rust, web, chart, compose, desktop on ubuntu-24.04 and windows-latest)."
+            echo "Quality evidence: cargo test --workspace green (PG-backed leg included), UI goldens replayed, axe clean incl. RTL, coverage ≥ 80%, CI green on every push (rust, web, chart, compose, desktop on ubuntu-24.04 and windows-latest, desktop-boot on windows-latest — the packaged portable boots the embedded stack, applies the migrations, serves, answers the RPC round-trip, renders both screens and sends a message from the composer before publication is allowed)."
             echo
             echo "Verify the downloads (no Apple/MS identity required — these are keyless Sigstore attestations, not code-signing certificates):"
             echo

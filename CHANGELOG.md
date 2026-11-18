@@ -4,6 +4,45 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.3.0-rc2] - 2026-11-18
+
+Release candidate 2 for v0.3.0 — the first Windows first launch that actually works end to end.
+CI now boots the packaged portable on a clean `windows-latest` runner and blocks publication
+unless both desktop boot gates are green.
+
+### Fixed (the Windows desktop first-launch chain, all reproduced on a clean runner)
+
+- `SANDBOX_PROVIDER=none` no longer validates `DOCKER_HOST` (REQ-027): the Linux default socket
+  is never absolute on Windows, so the whole configuration was rejected and every `boma`
+  subcommand refused to boot — the owner's "the migration did not apply". The socket is
+  validated only when the docker provider is selected.
+  (`req_027_a_no_computer_deployment_ignores_an_unusable_docker_host`; red then green.)
+- The desktop's readiness probe appended `/health` to a URL already ending in `/health`, so every
+  health poll got a 404 and after 90 s the app destroyed the stack itself. The probe now takes
+  the base origin; `isDeploymentReachable` owns the suffix.
+- Electron derived `userData` from the scoped package name (`%APPDATA%\@boma\desktop`); the app
+  now has a root `productName`, so its data lives at `%APPDATA%\Boma Bot\boma`, as documented.
+- The vendor staging copies the OpenSSL DLLs beside `boma.exe` (Windows resolves DLLs next to the
+  executable); the portable pack boots without a missing-library dialog.
+- Bring-up failures persist to `boma.log` and `boot.log` (step + raw output) instead of appearing
+  only in the failure dialog; the Windows boot job relays them as artifacts.
+- The Windows boot harness reaps the app tree (`taskkill /T /F`) and exits explicitly — the boot
+  check had been silently hanging until CI's job timeout, masking a green run as cancelled.
+- The boot harness speaks the RPC surface correctly (`POST /rpc/<ns>/<procedure>`, JSON bodies).
+- The desktop shell drops the BrowserWindow icon that pointed at a file the packer never shipped.
+
+### Changed
+
+- The release pipeline gates publication on both desktop boot jobs; the Windows portable is
+  boot-tested before any attestation, checksums or upload runs.
+- Version metadata everywhere moved to `0.3.0-rc2`.
+
+CI evidence: run `44199971295` — 7/7 jobs green. The Windows portable unpacks, starts, applies the
+migrations, serves, answers the RPC round-trip, renders both screens with zero axe findings, and
+sends a message typed from the composer (screenshots uploaded as CI artifacts).
+
+Release candidate 2: the owner smokes the Windows installer and/or portable before v0.3.0 final.
+
 ## [0.3.0-rc] - 2026-11-16
 
 Release candidate for v0.3.0. The Windows/Linux desktop is now a fully self-contained app, like

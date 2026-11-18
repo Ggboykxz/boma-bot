@@ -150,6 +150,15 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
     v0.3.0 final recreates `%APPDATA%\Boma Bot\boma` (a one-time move; acceptable at rc
     stage). The owner's `boma.log` for the migration error is at
     `%APPDATA%\@boma\desktop\boma\boma.log`.
+  - **Resolved (2026-11-17, later runs).** The full chain is fixed and the boot gate is
+    **GREEN**: run `44199971295` (`7662da9`) — 7/7 jobs green, including `desktop-boot` on
+    windows-latest: the portable unpacks, starts, applies the migrations, serves, answers
+    health/ready/capabilities/RPC 200, renders both pages with zero axe findings, and sends a
+    message typed from the composer (screenshots uploaded as artifacts). The remaining failure
+    was the harness itself (Node never exited; grandchildren outlived the shell) — fixed with
+    `taskkill /T /F` + explicit `process.exit`; the migration config fix (`1690b03`), the health
+    probe fix (`c450ea1`) and the productName fix (`4bcb92b`) are all in. v0.3.0-rc2 was cut from
+    this state (tag `v0.3.0-rc2`).
 - **M28 — local automation API + operator CLI (2026-11-16, REQ-072; this commit).**
   - The token-gated automation surface landed: `/api/v1/automation/*`, off unless both
     `BOMA_AUTOMATION_TOKEN` (≥16 chars) and `BOMA_AUTOMATION_AGENTS` (comma-separated bot ids, or
