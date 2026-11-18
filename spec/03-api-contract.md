@@ -29,7 +29,7 @@ onboarding, integrationSetup, connections, messaging, approvalRules, trustedLink
 spaceSettings, artifacts, pages, usage, export, notifications, search, links, runs, spendingLimit,
 paymentWallet, voice, externalConversations, agentSecrets, vault, botSecrets`
 
-### Core procedure contracts (representative; 284 procedures in total)
+### Core procedure contracts (representative; 285 procedures in total)
 
 **threads**
 - `threads.head` → `{threadId, lastSeq, lastMessageAt}` for the caller's current bot or group.
@@ -60,6 +60,8 @@ paymentWallet, voice, externalConversations, agentSecrets, vault, botSecrets`
   `{}` → `{executors: string[]}`, the compiled-in ACP executors found on the deployment's PATH
   (best-effort, two-second probe; never attaches anything).
 - `bots.secrets.*` (see `botSecrets`).
+- `groups.reassign` — `{groupId, runId, toBotId}` → `{runId, messageId, status}`; moves a working
+  delegation to another member of the same room (REQ-068). `groups.get` also reports `activeRun`.
 
 **groups**
 - `groups.create` — input `{name, botIds[]}` → group with one thread.

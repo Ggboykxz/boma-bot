@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
+
+import { Button } from "@/components/base/buttons/button";
 import { RiArrowLeftLine, RiSendPlane2Fill } from "@remixicon/react";
 import { useEffect, useRef, useState } from "react";
 
 import {
   groupsGet,
   groupsList,
+  groupsReassign,
   groupsMessages,
   threadsSend,
   type MessageView,
@@ -33,10 +36,13 @@ export function GroupThreadScreen({ groupId }: { groupId: string }) {
     name: string;
     threadId: string;
     memberBots: Array<{ id: string; name: string }>;
+    activeRun?: { id: string; botId: string; status: string } | null;
   } | null>(null);
   const [messages, setMessages] = useState<GroupMessageView[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [reassigning, setReassigning] = useState(false);
+  const [reassignFailed, setReassignFailed] = useState(false);
   const [attribution, setAttribution] = useState<Record<string, string>>({});
   const logRef = useRef<HTMLOListElement>(null);
 
@@ -70,6 +76,29 @@ export function GroupThreadScreen({ groupId }: { groupId: string }) {
       });
     return () => controller.abort();
   }, [groupId]);
+
+  const reassign = async (toBotId: string) => {
+    if (!group?.activeRun || reassigning) {
+      return;
+    }
+    setReassigning(true);
+    setReassignFailed(false);
+    try {
+      await groupsReassign({
+        groupId: group.id,
+        runId: group.activeRun.id,
+        toBotId,
+      });
+      const refreshed = await groupsGet({ id: groupId });
+      setGroup(refreshed);
+      const page = await groupsMessages({ threadId: group.threadId });
+      setMessages([...page.messages].reverse());
+    } catch {
+      setReassignFailed(true);
+    } finally {
+      setReassigning(false);
+    }
+  };
 
   const send = async () => {
     const next = text.trim();
@@ -144,6 +173,34 @@ export function GroupThreadScreen({ groupId }: { groupId: string }) {
           </div>
         </div>
       </header>
+
+      {group.activeRun ? (
+        <div className="border-border-button-default flex flex-wrap items-center gap-2 rounded-3xl border p-3">
+          <span className="text-text-secondary text-caption-1-semibold">
+            {t("groups.reassign.active")}:{" "}
+            {attribution[group.activeRun.botId] ?? group.activeRun.botId}
+          </span>
+          {group.memberBots
+            .filter((bot) => bot.id !== group.activeRun?.botId)
+            .map((bot) => (
+              <Button
+                key={bot.id}
+                type="button"
+                variant="secondary"
+                size="small"
+                disabled={reassigning}
+                onClick={() => void reassign(bot.id)}
+              >
+                {t("groups.reassign.to")} {bot.name}
+              </Button>
+            ))}
+          {reassignFailed ? (
+            <p role="alert" className="text-text-error-primary text-body-2-medium">
+              {t("groups.reassign.error")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <ol
         ref={logRef}

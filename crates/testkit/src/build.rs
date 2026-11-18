@@ -11272,3 +11272,145 @@ mod pause_resume_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod reassign_tests {
+    use super::TestApp;
+    use boma_domain::RunStatus;
+
+    #[tokio::test]
+    async fn req_068_reassign_moves_the_task_to_another_member_and_records_the_handoff() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("reassign@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space, &owner, "analyst")
+            .await
+            .expect("analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space, &owner, "writer")
+            .await
+            .expect("writer exists");
+        let context = TestApp::member_context(&space, &owner);
+        let group = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+        let sent = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "@writer please polish this commit summary.".to_owned(),
+                client_nonce: Some("req-068-send-1".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+        let old_id = sent.runs[0].id.to_string();
+
+        let outcome = boma_app::usecases::reassign_delegation(
+            test.app(),
+            &context,
+            group.id.as_str(),
+            &old_id,
+            analyst.as_str(),
+        )
+        .await
+        .expect("the task is reassigned");
+        assert_eq!(outcome.run.bot_id, analyst);
+        assert_eq!(
+            outcome.run.parent_run_id.map(|id| id.to_string()),
+            Some(old_id.clone())
+        );
+        assert_eq!(outcome.run.thread_id, group.thread_id);
+        assert_eq!(outcome.message.role, boma_domain::MessageRole::System);
+        let old = test
+            .app()
+            .stores
+            .runs
+            .find(
+                &context,
+                &boma_domain::RunId::new(old_id).expect("valid id"),
+            )
+            .await
+            .expect("the store answers")
+            .expect("the old run exists");
+        assert_eq!(old.status, RunStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn req_068_reassign_refuses_an_outsider_and_a_run_from_another_room() {
+        let test = TestApp::builder().build();
+        let owner = test
+            .seed_user("reassign2@example.com", "correct horse battery")
+            .await
+            .expect("the owner exists");
+        let space = test
+            .seed_space(&owner, "Golden space")
+            .await
+            .expect("the space exists");
+        let (analyst, _) = test
+            .seed_bot(&space, &owner, "analyst")
+            .await
+            .expect("analyst exists");
+        let (writer, _) = test
+            .seed_bot(&space, &owner, "writer")
+            .await
+            .expect("writer exists");
+        let (outsider, _) = test
+            .seed_bot(&space, &owner, "outsider")
+            .await
+            .expect("outsider exists");
+        let context = TestApp::member_context(&space, &owner);
+        let group = boma_app::usecases::create_group(
+            test.app(),
+            &context,
+            &boma_app::usecases::GroupsCreate {
+                name: "Triage".to_owned(),
+                bot_ids: vec![analyst.as_str().to_owned(), writer.as_str().to_owned()],
+            },
+        )
+        .await
+        .expect("the group is created");
+        let sent = boma_app::usecases::send_message(
+            test.app(),
+            &context,
+            &boma_app::usecases::SendMessage {
+                bot_id: analyst.as_str().to_owned(),
+                text: "@writer polish this".to_owned(),
+                client_nonce: Some("req-068-send-2".to_owned()),
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await
+        .expect("the message is routed");
+        let refused = boma_app::usecases::reassign_delegation(
+            test.app(),
+            &context,
+            group.id.as_str(),
+            sent.runs[0].id.as_ref(),
+            outsider.as_str(),
+        )
+        .await;
+        assert!(
+            matches!(refused, Err(boma_app::AppError::Rule(_))),
+            "a bot outside the room cannot receive the task"
+        );
+    }
+}

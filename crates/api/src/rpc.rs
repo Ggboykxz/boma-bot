@@ -41,26 +41,26 @@ use crate::{
         ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
         ConversationsReply, DetectedExecutorsReply, ExportCountsView, ExportDownloadReply,
         ExportIdRequest, ExportStartReply, ExportStatusReply, ExternalAgentConnectedReply,
-        ExternalAgentDisconnectedReply, ExternalAgentStatusReply, GroupBotView, GroupGetReply,
-        GroupListView, GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply,
-        HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply,
-        InstallTelegramReply, InstallUrlReply, InstallationsReply, InvitationAcceptReply,
-        InvitationAcceptRequest, InvitationReply, LocalDiscoveredModelView, MailPolicyReply,
-        MailPolicyView, MarketplaceInstallReply, MarketplaceListReply, MarketplaceSubmitReply,
-        McpOAuthStartReply, McpServerReply, McpServerView, McpServersListReply,
-        McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply, MemoryProviderReply,
-        MemoryRemoveReply, MemoryWriteReply, MessagesReply, MessagingInstallationView,
-        MessagingRemoveReply, ModelConnectReply, ModelCredentialView, ModelCredentialsReply,
-        ModelPreferenceReply, ModelsCatalogReply, ModelsDiscoveredReply,
+        ExternalAgentDisconnectedReply, ExternalAgentStatusReply, GroupActiveRunView, GroupBotView,
+        GroupGetReply, GroupListView, GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest,
+        GroupsListReply, HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply,
+        InstallGenericReply, InstallTelegramReply, InstallUrlReply, InstallationsReply,
+        InvitationAcceptReply, InvitationAcceptRequest, InvitationReply, LocalDiscoveredModelView,
+        MailPolicyReply, MailPolicyView, MarketplaceInstallReply, MarketplaceListReply,
+        MarketplaceSubmitReply, McpOAuthStartReply, McpServerReply, McpServerView,
+        McpServersListReply, McpServersRemoveReply, MemoryDocumentReply, MemoryDocumentsReply,
+        MemoryProviderReply, MemoryRemoveReply, MemoryWriteReply, MessagesReply,
+        MessagingInstallationView, MessagingRemoveReply, ModelConnectReply, ModelCredentialView,
+        ModelCredentialsReply, ModelPreferenceReply, ModelsCatalogReply, ModelsDiscoveredReply,
         NotificationDestinationView, NotificationsDestinationsCreateReply,
         NotificationsDestinationsDeleteReply, NotificationsDestinationsListReply,
         NotificationsPolicyGetRequest, NotificationsPolicySetRequest, NotificationsPolicyView,
         NotificationsStatusReply, NotificationsSubscribeReply, NotificationsUnsubscribeReply,
         PagesGetReply, PagesRevokeShareReply, PagesSaveReply, PagesShareReply, PluginInstallView,
-        ReactReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply, RoutineView,
-        RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply, SecretForgetReply,
-        SecretSetReply, SecretView, SecretsReply, SecurityEventsReply, SendReply,
-        SignInRequestView, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
+        ReactReply, ReassignReply, RosterBotView, RoutineRemoveReply, RoutineRunNowReply,
+        RoutineView, RoutineWriteReply, RoutinesReply, RunRetryReply, RunView, RunsReply,
+        SecretForgetReply, SecretSetReply, SecretView, SecretsReply, SecurityEventsReply,
+        SendReply, SignInRequestView, SkillReply, SkillView, SkillsReply, SnoozeReply, SpaceReply,
         SpendingLimitReply, TeachSkillReply, ThreadHeadReply, TicketCommentReply,
         TicketCommentView, TicketReply, TicketView,
     },
@@ -257,6 +257,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::INVITATIONS, "accept"),
         (namespaces::GROUPS, "create"),
         (namespaces::GROUPS, "get"),
+        (namespaces::GROUPS, "reassign"),
         (namespaces::GROUPS, "list"),
         (namespaces::GROUPS, "messages"),
     ]
@@ -708,6 +709,9 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::GROUPS, "get") => groups_get(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::GROUPS, "reassign") => groups_reassign(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::GROUPS, "list") => groups_list(state, auth, body)
@@ -3819,6 +3823,38 @@ struct GroupsGetRequest {
     id: String,
 }
 
+/// The body of `groups.reassign` (REQ-068).
+#[allow(clippy::struct_field_names)] // the wire names are part of the RPC contract
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupsReassignRequest {
+    group_id: String,
+    run_id: String,
+    to_bot_id: String,
+}
+
+/// `groups.reassign` — move a delegation to another member of the same room (REQ-068).
+async fn groups_reassign(
+    state: AppState,
+    auth: AuthContext,
+    body: Bytes,
+) -> Result<ReassignReply, ApiError> {
+    let request: GroupsReassignRequest = parse(&body)?;
+    let outcome = usecases::reassign_delegation(
+        state.app(),
+        &auth.actor.context,
+        &request.group_id,
+        &request.run_id,
+        &request.to_bot_id,
+    )
+    .await?;
+    Ok(ReassignReply {
+        run_id: outcome.run.id.as_str().to_owned(),
+        message_id: outcome.message.id.as_str().to_owned(),
+        status: outcome.run.status.as_str().to_owned(),
+    })
+}
+
 /// `groups.get` — one group as its members see it.
 ///
 /// The wire returns the shared thread id and the member bots with their names — enough for the
@@ -3850,6 +3886,17 @@ async fn groups_get(
             })
             .collect(),
         created_at: group.created_at,
+        active_run: state
+            .app()
+            .stores
+            .runs
+            .find_active_for_thread(&auth.actor.context, &group.thread_id)
+            .await?
+            .map(|run| GroupActiveRunView {
+                id: run.id.as_str().to_owned(),
+                bot_id: run.bot_id.as_str().to_owned(),
+                status: run.status.as_str().to_owned(),
+            }),
     })
 }
 

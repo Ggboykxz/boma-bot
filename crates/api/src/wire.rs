@@ -1960,6 +1960,32 @@ pub struct GroupGetReply {
     pub member_bots: Vec<GroupBotView>,
     /// When the group was created.
     pub created_at: String,
+    /// The run working in this room right now, when there is one (REQ-068).
+    pub active_run: Option<GroupActiveRunView>,
+}
+
+/// The run currently working in a group room, so the room can offer reassign (REQ-068).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupActiveRunView {
+    /// The run's id.
+    pub id: String,
+    /// The bot currently working.
+    pub bot_id: String,
+    /// The run status.
+    pub status: String,
+}
+
+/// The answer to `groups.reassign` (REQ-068).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReassignReply {
+    /// The new run.
+    pub run_id: String,
+    /// The hand-off message in the room.
+    pub message_id: String,
+    /// The new run's status.
+    pub status: String,
 }
 
 /// One message as the group room renders it, including the bot that authored it.

@@ -106,6 +106,13 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   status update; the web run vocabulary gained `paused`. Two `REQ-067` Playwright tests pass;
   goldens and axe unchanged (one known local RTL artefact). Reassign (REQ-068) remains the second
   slice of issue #3 and needs its own RPC/usecase design before code.
+- **2026-11-18 — REQ-068 reassign landed (issue #3 second slice; ADR-031).** `reassign_delegation`
+  validates group membership and room scope, cancels the old run through the boundary-aware path,
+  creates a new run with the same context and `parent_run_id`, and appends a `System` hand-off
+  message plus its event. New `groups.reassign` RPC and `groups.get.activeRun`; BoardUI buttons in
+  the group room call it for the currently working run. Tests: two `req_068_*` in testkit and a
+  `REQ-068` Playwright test pass; clippy `-D warnings` clean; spec/03 (284 → 285 procedures) and
+  its export hash refreshed. Issue #3 is complete.
 - **2026-11-18 — UI slices (bot create + ACP detection + free BoardUI components).** Approved
   design `docs/superpowers/specs/2026-11-18-ui-bot-create-and-acp-detection-design.md`, plan
   `docs/superpowers/plans/2026-11-18-ui-bot-create-and-acp-detection.md`. Slice 1 landed:

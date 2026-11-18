@@ -1392,6 +1392,7 @@ export interface GroupGetReply {
   memberBotIds: string[];
   memberBots: GroupBotView[];
   createdAt: string;
+  activeRun?: { id: string; botId: string; status: string } | null;
 }
 
 /** The reply of `groups.list`. */
@@ -1446,6 +1447,14 @@ export async function groupsGet(
   signal?: AbortSignal,
 ): Promise<GroupGetReply> {
   return call<GroupGetReply>("groups", "get", request, signal);
+}
+
+/** `groups.reassign` — hand a delegation to another member of the room (REQ-068). */
+export function groupsReassign(
+  request: { groupId: string; runId: string; toBotId: string },
+  signal?: AbortSignal,
+): Promise<{ runId: string; messageId: string; status: string }> {
+  return call("groups", "reassign", request, signal);
 }
 
 export async function groupsMessages(

@@ -72,3 +72,47 @@ test("REQ-010 the rail creates a group with the chosen bots and navigates to it"
   expect(last.name).toBe("Triage 2");
   expect(last.botIds).toEqual(["bot_analyst"]);
 });
+
+test("REQ-068 a delegation is reassigned to another member of the room", async ({ page }) => {
+  await applySeed(page, "group-golden-room");
+  await page.route("**/rpc/groups/get", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "group_golden",
+        name: "Triage",
+        threadId: "thr_group_golden",
+        memberBotIds: ["bot_analyst", "bot_writer"],
+        memberBots: [
+          { id: "bot_analyst", name: "analyst" },
+          { id: "bot_writer", name: "writer" },
+        ],
+        createdAt: "2026-01-01T00:00:00Z",
+        activeRun: { id: "run_active", botId: "bot_writer", status: "running" },
+      }),
+    });
+  });
+  let assigned: Record<string, unknown> | null = null;
+  await page.route("**/rpc/groups/reassign", async (route) => {
+    assigned = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        runId: "run_new",
+        messageId: "msg_handoff",
+        status: "queued",
+      }),
+    });
+  });
+
+  await page.goto("/app/g/group_golden");
+  await expect(page.getByText("Reassign to analyst")).toBeVisible();
+  await page.getByRole("button", { name: "Reassign to analyst" }).click();
+  expect(assigned).toEqual({
+    groupId: "group_golden",
+    runId: "run_active",
+    toBotId: "bot_analyst",
+  });
+});

@@ -9918,3 +9918,163 @@ pub async fn destinations_delete(
     require_space_role(app, context, &space_id, DESTINATIONS_MANAGERS).await?;
     app.stores.destinations.delete(context, id).await
 }
+
+// ---------------------------------------------------------------------------
+// REQ-068 — reassign a delegation inside the same group room
+// ---------------------------------------------------------------------------
+
+/// The result of moving a working delegation to another member of the room (REQ-068).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReassignOutcome {
+    /// The new run, owned by the new delegate.
+    pub run: Run,
+    /// The system message the room shows as the hand-off.
+    pub message: Message,
+}
+
+/// Move a delegation to another member of the same room (REQ-068).
+///
+/// The old delegate's run is stopped through the existing boundary-aware cancel, a new run is
+/// created with the same context and the old run as its parent, and the room records the move as
+/// a `System` message. Both bots must belong to the group and the run must belong to its room.
+///
+/// # Errors
+///
+/// Returns `NotFound` for an unknown group or run, and `Rule` when the target bot is not another
+/// member of the room or is already the delegate; store failures are `Unavailable`.
+#[allow(clippy::too_many_lines)] // the hand-off is one ordered flow: validate, stop, create, record
+pub async fn reassign_delegation(
+    app: &App,
+    context: &TenantContext,
+    group_id: &str,
+    run_id: &str,
+    to_bot_id: &str,
+) -> Result<ReassignOutcome, AppError> {
+    let group = app
+        .stores
+        .groups
+        .find(context, &boma_domain::GroupId::new(group_id.to_owned())?)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let target = boma_domain::BotId::new(to_bot_id.to_owned())?;
+    if !group.bot_ids.contains(&target) {
+        return Err(AppError::Rule(boma_domain::DomainError::DelegationRefused(
+            "the new delegate is not a member of this room".to_owned(),
+        )));
+    }
+
+    let old_id = boma_domain::RunId::new(run_id.to_owned())?;
+    let old = app
+        .stores
+        .runs
+        .find(context, &old_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if old.thread_id != group.thread_id {
+        return Err(AppError::NotFound);
+    }
+    if old.bot_id == target {
+        return Err(AppError::Rule(boma_domain::DomainError::DelegationRefused(
+            "that bot already has the task".to_owned(),
+        )));
+    }
+
+    let old_bot = app
+        .stores
+        .bots
+        .find(context, &old.bot_id)
+        .await?
+        .ok_or(AppError::Unavailable)?;
+    let new_bot = app
+        .stores
+        .bots
+        .find(context, &target)
+        .await?
+        .ok_or(AppError::Unavailable)?;
+
+    cancel_run(app, context, run_id).await?;
+
+    let preferences = boma_domain::model::ModelPreferences {
+        bot: old.model_id.clone().map(|model| {
+            (
+                format!(
+                    "{}/{}",
+                    old.model_provider
+                        .clone()
+                        .unwrap_or_else(|| "custom".to_owned()),
+                    model
+                ),
+                old.model_pinned,
+            )
+        }),
+        space: None,
+        person: None,
+    };
+    let choice = boma_domain::model::resolve(&preferences, &app.services.models)?;
+    let now = app.services.clock.now();
+    let run = app
+        .stores
+        .runs
+        .create(NewRun {
+            id: boma_domain::RunId::new(app.services.ids.new_id("drun"))?,
+            space_id: old.space_id.clone(),
+            bot_id: target.clone(),
+            thread_id: group.thread_id.clone(),
+            user_id: old.user_id.clone(),
+            trigger: RunTrigger::BotMessage,
+            client_nonce: None,
+            source_message_id: old.source_message_id.clone(),
+            created_at: now.clone(),
+            model_provider: Some(choice.provider),
+            model_id: Some(choice.model),
+            model_pinned: choice.pinned,
+            parent_run_id: Some(old.id.clone()),
+            routine_id: None,
+        })
+        .await?;
+
+    let text = format!("Reassigned from {} to {}.", old_bot.name, new_bot.name);
+    let message = app
+        .stores
+        .messages
+        .insert(
+            context,
+            NewMessage {
+                id: boma_domain::MessageId::new(app.services.ids.new_id("msg"))?,
+                space_id: old.space_id.clone(),
+                thread_id: group.thread_id.clone(),
+                role: boma_domain::MessageRole::System,
+                blocks: vec![boma_domain::Block::Text { text }],
+                bot_id: Some(target),
+                author_user_id: None,
+                run_id: Some(run.id.clone()),
+                client_nonce: None,
+                created_at: now,
+                reply_to_message_id: None,
+                reply_quote: None,
+            },
+        )
+        .await?;
+
+    app.stores
+        .events
+        .append(
+            context,
+            crate::ports::NewEvent {
+                space_id: old.space_id.clone(),
+                thread_id: group.thread_id.clone(),
+                kind: EventType::Message,
+                payload: serde_json::json!({
+                    "messageId": message.message.id.as_str(),
+                    "seq": message.message.seq,
+                }),
+                created_at: app.services.clock.now(),
+            },
+        )
+        .await?;
+
+    Ok(ReassignOutcome {
+        run,
+        message: message.message,
+    })
+}
