@@ -142,6 +142,12 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
   pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
   for the owner's rc4 smoke.
+- **2026-11-18 — swarm orchestrator design proposed (NOT approved yet).** Following the owner's
+  request for GrokBot-class, provider-agnostic multi-agent orchestration,
+  `docs/superpowers/specs/2026-11-18-swarm-orchestrator-design.md` and ADR-032 propose a Queen +
+  variable workers with deterministic consensus (majority / weighted / arbitration), additive
+  tables, new REQ-076/077 and a BoardUI panel. No product code, spec entries or migration written
+  until the owner approves the design.
 - **2026-11-18 — 100 sector UI proposals.** At the owner's request, 100 read-only subagents each
   took one industry sector and wrote `docs/ui-proposals/001-…` … `100-…` (no product code touched).
   `docs/ui-proposals/SYNTHESIS.md` aggregates the signal: approval cards (72 sectors) and
