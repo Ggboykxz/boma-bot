@@ -103,12 +103,17 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   (`fe54864`) and the REQ ids in `spec/01-requirements.md`. New in-scope capabilities since the
   matrix: visual workflow canvas (image/video steps, collaborative editing), sidebar filters,
   side-thread disclosure, appearance/motion switches, Umbrel store package. Opened 15 GitHub
-  issues: #1–#13 are the spec-backed M23–M33 program rows (REQ-061, 056, 067, 068, 069, 070,
-  071, 073, 074, 075, plus the four M30 distributions); #14 (workflow canvas) and #15 (sidebar
-  filters/side threads) are marked **PROPOSAL** — a new REQ id, ADR and/or golden refresh need
-  the owner's approval before code. REQ-049 (voice) stays deferred by owner decision; the hosted
-  account service, credit billing and permissive defaults stay out; no upstream app catalog is
-  imported.
+  issues: #3–#12 are the still-open spec-backed gaps (REQ-068, 070, 071, 073, 074, 056 and the
+  M30 distributions); #14 (workflow canvas) and #15 (sidebar filters/side threads) are marked
+  **PROPOSAL** — a new REQ id, ADR and/or golden refresh need the owner's approval before code.
+  Correction made during a second pass: issues #1 (REQ-061), #2 (REQ-069) and #13 (REQ-075) were
+  opened against the stale matrix and closed immediately — all three are already shipped
+  (`acp_provider.rs` in two slices, `compaction.rs` wired in `worker.rs`, `local_models.rs` wired
+  into the picker), proven by their REQ-named tests; #3 was narrowed to REQ-068 + the missing room
+  control surface (the pause/resume backend exists). Lesson: the matrix in IMPROVEMENTS.md is a
+  snapshot of 2026-11-15; STATE.md/PLAN.md and the code are the current truth. REQ-049 (voice) stays
+  deferred by owner decision; the hosted account service, credit billing and permissive defaults
+  stay out; no upstream app catalog is imported.
 - **Windows desktop boot gate (2026-11-17).** The CI `desktop-boot-windows` job kept failing on
   the portable pack; three distinct defects, all diagnosed and fixed:
   1. The portable exe is `Boma Bot.exe` (productName), not `boma-desktop.exe` (fixed in `f52399d`).

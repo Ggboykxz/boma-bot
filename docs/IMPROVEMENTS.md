@@ -171,9 +171,9 @@ The owner's instruction: **Boma Bot must do everything nightly-labs/openbot does
 
 | # | Milestone | REQ ids | Size | Notes |
 |---|---|---|---|---|
-| M23 | Local CLI agents via ACP (phase 2 of agent interop) | REQ-061 (MUST) | L | agent-spawn, isolated workspace per run, ACP flavor; M12 ordering done |
-| M24 | Context-window compaction | REQ-069 (SHOULD) | M | automatic compaction; lossless elision policy; person-legible |
-| M25 | Pause/resume + Reassign control surface in rooms | REQ-067 (SHOULD), REQ-068 (SHOULD) | M | pause FIFO flip; reassign with stop-at-boundary |
+| M23 | Local CLI agents via ACP (phase 2 of agent interop) | REQ-061 (MUST) | L | **landed 2026-11-16, two slices** (`acp_provider.rs`; see STATE.md); leftover executor rows/workspace GC recorded there |
+| M24 | Context-window compaction | REQ-069 (SHOULD) | M | **landed** (`compaction.rs`, wired in `worker.rs`, `req_069_*` tests) |
+| M25 | Pause/resume + Reassign control surface in rooms | REQ-067 (SHOULD), REQ-068 (SHOULD) | M | pause/resume RPC + tests landed; **open**: REQ-068 and the room controls (issue #3) |
 | M26 | Discord + WhatsApp fronts | REQ-070 (SHOULD) | M | front registry extension, same auth/audit seam |
 | M27 | Embedded desktop browser (optional) | REQ-071 (SHOULD) | L | Electron CDP pane; computer-takeover machinery reused |
 | M28 | Local automation API + CLI | REQ-072 (MUST) | M | **landed 2026-11-16**: token-gated `/api/v1/automation/*` + `boma automation` CLI (agents, send with `wait`, routine run, approvals list/answer); same gates. «Fresh chat» clause outstanding — see STATE.md |
@@ -181,7 +181,7 @@ The owner's instruction: **Boma Bot must do everything nightly-labs/openbot does
 | M30 | Distribution parity | — | M | AppImage, Nix flake, Umbrel, ECS (packaging + docs; ADRs per item) |
 | M31 | Curated first-party agents and skills | REQ-074 (SHOULD) | M | our own content, one-click install, REQ-034-adjacent |
 | M32 | Mobile iOS + Android | REQ-056 (SHOULD) | XL | Expo/RN; REQ-056 un-deferred by owner 2026-11-16; after M23–M31 |
-| M33 | Local model server discovery | REQ-075 (SHOULD) | S | Ollama/LM Studio loopback discovery in the provider picker |
+| M33 | Local model server discovery | REQ-075 (SHOULD) | S | **landed** (`local_models.rs`, wired in `models.catalog`, `req_075_*` tests) |
 
 Mobile (M32) is the only milestone that may wait for bandwidth; every other row ships.
 
