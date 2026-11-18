@@ -4,6 +4,7 @@ import { RiCloseLine, RiReplyLine, RiSendPlaneLine } from "@remixicon/react";
 import { Label, TextArea, TextField } from "react-aria-components";
 
 import { Button } from "@/components/base/buttons/button";
+import { cx } from "@/utils/cx";
 import { useTranslation } from "@/lib/use-translation";
 
 /** The message a new one answers, as the composer shows it. */
@@ -29,6 +30,8 @@ export interface ThreadComposerProps {
   reply?: ReplyContext | null;
   /** True while an approval or purchase card waits for this member (spec §8.3): sending waits. */
   awaitingApproval?: boolean;
+  /** Let a BoardUI ComposerLoader paint the pill surface (no double background). */
+  transparent?: boolean;
 }
 
 /**
@@ -38,13 +41,16 @@ export interface ThreadComposerProps {
  * label and the keyboard behaviour a screen reader expects. The send button is disabled only
  * when there is nothing to send: a failed send never takes the keyboard away from the person.
  */
-export function ThreadComposer({ value, onChange, onSend, sending, reply, awaitingApproval = false }: ThreadComposerProps) {
+export function ThreadComposer({ value, onChange, onSend, sending, reply, awaitingApproval = false, transparent = false }: ThreadComposerProps) {
   const t = useTranslation();
   const canSend = value.trim().length > 0 && !sending && !awaitingApproval;
 
   return (
     <form
-      className="border-border-button-default bg-background-primary-default flex flex-col gap-2 rounded-3xl border p-2"
+      className={cx(
+        "flex flex-col gap-2 rounded-3xl p-2",
+        !transparent && "border-border-button-default bg-background-primary-default border",
+      )}
       onSubmit={(event) => {
         event.preventDefault();
         if (canSend) {

@@ -103,7 +103,13 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   three `REQ-004` Playwright tests green. Backend slice landed: `bots.detectedExecutors` with a
   two-second PATH probe of the compiled registry and a pure `detected_executor_ids` helper;
   `req_061_detected_executors_reports_only_known_ids` green. `spec/03-api-contract.md` gained the
-  procedure (283 → 284) and `spec/EXPORT.md` its refreshed hash.
+  procedure (283 → 284) and `spec/EXPORT.md` its refreshed hash. The UI landed too: the rail
+  offers detected executors with an explicit Attach action (`AcpDetectedRow`), and the free BoardUI
+  `agent-thinking` / `composer-loader` replaced the bespoke run shimmer in the thread. `REQ-004` ×3
+  + `REQ-061` ×1 + `REQ-012` ×1 Playwright tests pass locally; full web suite 85 passed, the same
+  four pre-existing machine artefacts fail locally (RTL/he, integrations, reactions) and are green
+  on CI. `file-upload`, `sidebar` and `date-calendar` remain installed-but-unwired for the reasons
+  recorded above (issues #20, #14).
   request, the free components from his list were installed via the BoardUI MCP into `apps/web`:
   `composer-loader`, `agent-thinking`, `file-upload`, `date-calendar`, `sidebar` plus 28 transitive
   components; two npm deps (`@internationalized/date` 3.12.4 Apache-2.0, `motion` 12.43.0 MIT).

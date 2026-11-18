@@ -2,11 +2,13 @@
 
 import { RiArrowLeftLine, RiEmotionAddLine, RiErrorWarningLine, RiReplyLine } from "@remixicon/react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/base/buttons/button";
 import { MessageBlocks } from "@/components/thread/message-blocks";
 import { ThreadComposer } from "@/components/thread/thread-composer";
+import { AgentThinking } from "@/components/application/agent-thinking/agent-thinking";
+import { ComposerLoader } from "@/components/application/composer-loader/composer-loader";
 import { ComputerPanel } from "@/components/thread/computer-panel";
 import { ExternalAgentPanel } from "@/components/thread/external-agent-panel";
 import { NotificationsPanel } from "@/components/thread/notifications-panel";
@@ -518,19 +520,14 @@ export function ThreadScreen({ botId }: { botId: string }) {
       ) : null}
 
       {runLabel !== null ? (
-        <p className="text-text-secondary text-caption-1-semibold">
+        <div className="text-text-secondary text-caption-1-semibold">
           {t("thread.run.label")}:{" "}
           {runIsActive ? (
-            <span
-              className="bui-agent-thinking-label"
-              style={{ "--bui-agent-thinking-tone": "var(--color-text-secondary)" } as CSSProperties}
-            >
-              {runLabel}
-            </span>
+            <AgentThinking variant="wave" label={runLabel} showTimer={false} />
           ) : (
             runLabel
           )}
-        </p>
+        </div>
       ) : null}
 
       {awaitingApproval ? (
@@ -539,7 +536,9 @@ export function ThreadScreen({ botId }: { botId: string }) {
         </p>
       ) : null}
 
+      <ComposerLoader active={runIsActive || sending}>
       <ThreadComposer
+        transparent
         awaitingApproval={awaitingApproval}
         value={draft}
         onChange={setDraft}
@@ -556,6 +555,7 @@ export function ThreadScreen({ botId }: { botId: string }) {
             : null
         }
       />
+      </ComposerLoader>
     </div>
   );
 }
