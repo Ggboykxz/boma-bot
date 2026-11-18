@@ -96,6 +96,19 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   66/73 REQ ids covered by tests; the missing seven are recorded (049, 056, 068, 070, 071, 073,
   074). Release notes rewritten for 0.3.0-rc (66/73).
   **Windows smoke is the owner's next step**; v0.3.0 final is cut after his verdict.
+- **2026-11-18 — full-parity re-inspection at OpenBot HEAD `386085ff` (0.73.0).** Consulted
+  upstream README ("What works"), CHANGELOG 0.72/0.73, `docs/` and `apps/` layout as data only —
+  no code, wording, brand or assets copied; upstream stays PolyForm Noncommercial, our
+  reimplementation stays ours. Compared with the Target B matrix in `docs/IMPROVEMENTS.md`
+  (`fe54864`) and the REQ ids in `spec/01-requirements.md`. New in-scope capabilities since the
+  matrix: visual workflow canvas (image/video steps, collaborative editing), sidebar filters,
+  side-thread disclosure, appearance/motion switches, Umbrel store package. Opened 15 GitHub
+  issues: #1–#13 are the spec-backed M23–M33 program rows (REQ-061, 056, 067, 068, 069, 070,
+  071, 073, 074, 075, plus the four M30 distributions); #14 (workflow canvas) and #15 (sidebar
+  filters/side threads) are marked **PROPOSAL** — a new REQ id, ADR and/or golden refresh need
+  the owner's approval before code. REQ-049 (voice) stays deferred by owner decision; the hosted
+  account service, credit billing and permissive defaults stay out; no upstream app catalog is
+  imported.
 - **Windows desktop boot gate (2026-11-17).** The CI `desktop-boot-windows` job kept failing on
   the portable pack; three distinct defects, all diagnosed and fixed:
   1. The portable exe is `Boma Bot.exe` (productName), not `boma-desktop.exe` (fixed in `f52399d`).
