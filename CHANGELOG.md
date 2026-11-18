@@ -4,6 +4,22 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.3.0-rc4] - 2026-11-18
+
+Release candidate 4: adds the group-room execution controls the owner asked for after rc3.
+
+### Added
+
+- **Pause/Resume (REQ-067)** — the activity list offers Pause on queued runs and Resume on paused
+  ones through `runs.pause`/`runs.resume`; the web run vocabulary gained the `paused` status.
+- **Reassign a delegation (REQ-068, ADR-031)** — `reassign_delegation` validates group membership
+  and room scope, stops the old run at its tool boundary, creates the new run with the same context
+  and `parent_run_id`, and records the hand-off as a `System` message plus its event. New
+  `groups.reassign` RPC, `groups.get.activeRun`, and BoardUI "Reassign to …" buttons in the room.
+
+CI evidence: dev run `44407160912` — 7/7 jobs green including the packaged Windows boot; rc4 cut
+from the same tree after the version bump.
+
 ## [0.3.0-rc3] - 2026-11-18
 
 Release candidate 3: the owner's rc2 smoke found two first-session defects — no way to create a

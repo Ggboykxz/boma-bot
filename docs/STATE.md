@@ -137,6 +137,11 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   `npx shadcn@latest init -t <framework>`**. This is a future, owner-authorized change: today's
   `AGENTS.md` says "one design system, one theme", so the switch must be an explicit ADR at that
   time, not a silent drift. Not done now.
+- **v0.3.0-rc4 cut (2026-11-18, full dev run `44407160912` 7/7 green including packaged Windows
+  boot).** Version bumped everywhere; CHANGELOG and release notes updated. rc4 is the first build
+  with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
+  pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
+  for the owner's rc4 smoke.
 - **2026-11-18 — full-parity re-inspection at OpenBot HEAD `386085ff` (0.73.0).** Consulted
   upstream README ("What works"), CHANGELOG 0.72/0.73, `docs/` and `apps/` layout as data only —
   no code, wording, brand or assets copied; upstream stays PolyForm Noncommercial, our
