@@ -18,6 +18,7 @@ use base64::Engine as _;
 use boma_app::{AppError, usecases};
 use boma_domain::SpaceRole;
 use serde::Deserialize;
+use std::{process::Stdio, time::Duration};
 
 use crate::{
     auth::AuthContext,
@@ -38,8 +39,8 @@ use crate::{
         CatalogProviderView, ComputerOpenScreenReply, ComputerProviderInfo, ComputerProviderReply,
         ComputerSettingsReply, ComputerStatusReply, ComputerTakeoverReply, ConnectionsInstallReply,
         ConnectionsListReply, ConnectionsRemoveReply, ConnectorView, ConversationView,
-        ConversationsReply, ExportCountsView, ExportDownloadReply, ExportIdRequest,
-        ExportStartReply, ExportStatusReply, ExternalAgentConnectedReply,
+        ConversationsReply, DetectedExecutorsReply, ExportCountsView, ExportDownloadReply,
+        ExportIdRequest, ExportStartReply, ExportStatusReply, ExternalAgentConnectedReply,
         ExternalAgentDisconnectedReply, ExternalAgentStatusReply, GroupBotView, GroupGetReply,
         GroupListView, GroupMessagesReply, GroupsCreateReply, GroupsCreateRequest, GroupsListReply,
         HeldDropReply, HeldListReply, HeldMailView, HeldReleaseReply, InstallGenericReply,
@@ -149,6 +150,7 @@ pub fn procedures() -> Vec<(&'static str, &'static str)> {
         (namespaces::BOTS, "connectExternal"),
         (namespaces::BOTS, "disconnectExternal"),
         (namespaces::BOTS, "connectAcp"),
+        (namespaces::BOTS, "detectedExecutors"),
         (namespaces::BOTS, "disconnectAcp"),
         (namespaces::BOTS, "signIns"),
         (namespaces::BOTS, "externalAgentStatus"),
@@ -378,6 +380,9 @@ async fn rpc_inner(
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "connectAcp") => bots_connect_acp(state, auth, body)
+            .await
+            .map(|reply| Json(reply).into_response()),
+        (namespaces::BOTS, "detectedExecutors") => bots_detected_executors(state, auth, body)
             .await
             .map(|reply| Json(reply).into_response()),
         (namespaces::BOTS, "disconnectAcp") => bots_disconnect_acp(state, auth, body)
@@ -3945,6 +3950,53 @@ async fn bots_disconnect_external(
     })
 }
 
+/// Ids of the known ACP executors whose command passed an injected probe (REQ-061).
+///
+/// A pure helper so a test can prove that only compiled-in ids can ever be reported.
+fn detected_executor_ids(mut probe: impl FnMut(&str) -> bool) -> Vec<String> {
+    boma_app::acp_provider::executors()
+        .iter()
+        .filter(|spec| probe(spec.command))
+        .map(|spec| spec.id.to_owned())
+        .collect()
+}
+
+/// Best-effort PATH probe: a version check, never an ACP session, capped at two seconds.
+async fn executor_on_path(command: &str) -> bool {
+    let status = tokio::process::Command::new(command)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), status).await,
+        Ok(Ok(status)) if status.success()
+    )
+}
+
+/// The body of `bots.detectedExecutors` — deliberately empty (strictly parsed).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BotsDetectedExecutorsRequest {}
+
+/// `bots.detectedExecutors` — ids of locally installed executors we know how to speak (REQ-061).
+async fn bots_detected_executors(
+    _state: AppState,
+    _auth: AuthContext,
+    body: Bytes,
+) -> Result<DetectedExecutorsReply, ApiError> {
+    let _: BotsDetectedExecutorsRequest = parse(&body)?;
+    let mut answers = Vec::new();
+    for spec in boma_app::acp_provider::executors() {
+        answers.push(executor_on_path(spec.command).await);
+    }
+    let mut answers = answers.into_iter();
+    Ok(DetectedExecutorsReply {
+        executors: detected_executor_ids(|_| answers.next().unwrap_or(false)),
+    })
+}
+
 /// The body of `bots.connectAcp`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4417,5 +4469,20 @@ fn destination_view(
         kind: destination.kind.as_str().to_owned(),
         label: destination.label,
         created_at: destination.created_at,
+    }
+}
+
+#[cfg(test)]
+mod detection_tests {
+    use super::detected_executor_ids;
+
+    #[test]
+    fn req_061_detected_executors_reports_only_known_ids() {
+        let known: Vec<String> = boma_app::acp_provider::executors()
+            .iter()
+            .map(|spec| spec.id.to_owned())
+            .collect();
+        assert_eq!(detected_executor_ids(|_| true), known);
+        assert_eq!(detected_executor_ids(|_| false), [] as [String; 0]);
     }
 }

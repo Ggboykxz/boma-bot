@@ -29,7 +29,7 @@ onboarding, integrationSetup, connections, messaging, approvalRules, trustedLink
 spaceSettings, artifacts, pages, usage, export, notifications, search, links, runs, spendingLimit,
 paymentWallet, voice, externalConversations, agentSecrets, vault, botSecrets`
 
-### Core procedure contracts (representative; 283 procedures in total)
+### Core procedure contracts (representative; 284 procedures in total)
 
 **threads**
 - `threads.head` → `{threadId, lastSeq, lastMessageAt}` for the caller's current bot or group.
@@ -56,6 +56,9 @@ paymentWallet, voice, externalConversations, agentSecrets, vault, botSecrets`
 - `bots.create` — input `{name, description?, instructions?, avatarSet?, color?, sectionId?}` →
   `Bot`. Creating a bot also creates its thread and, when configured, its intro run.
 - `bots.update`, `bots.archive`, `bots.remove`, `bots.import` (agent import), `bots.duplicate`.
+- `bots.connectAcp` — `{botId, executor}` → `AcpAgentConnectedReply`; `bots.detectedExecutors` —
+  `{}` → `{executors: string[]}`, the compiled-in ACP executors found on the deployment's PATH
+  (best-effort, two-second probe; never attaches anything).
 - `bots.secrets.*` (see `botSecrets`).
 
 **groups**

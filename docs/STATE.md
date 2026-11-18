@@ -96,7 +96,14 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   66/73 REQ ids covered by tests; the missing seven are recorded (049, 056, 068, 070, 071, 073,
   074). Release notes rewritten for 0.3.0-rc (66/73).
   **Windows smoke is the owner's next step**; v0.3.0 final is cut after his verdict.
-- **2026-11-18 — free BoardUI components installed + future shadcn directive.** At the owner's
+- **2026-11-18 — UI slices (bot create + ACP detection + free BoardUI components).** Approved
+  design `docs/superpowers/specs/2026-11-18-ui-bot-create-and-acp-detection-design.md`, plan
+  `docs/superpowers/plans/2026-11-18-ui-bot-create-and-acp-detection.md`. Slice 1 landed:
+  `BotCreateForm` (BoardUI IconButton/Input/Button) in the rail, `bots.create` + roster refresh,
+  three `REQ-004` Playwright tests green. Backend slice landed: `bots.detectedExecutors` with a
+  two-second PATH probe of the compiled registry and a pure `detected_executor_ids` helper;
+  `req_061_detected_executors_reports_only_known_ids` green. `spec/03-api-contract.md` gained the
+  procedure (283 → 284) and `spec/EXPORT.md` its refreshed hash.
   request, the free components from his list were installed via the BoardUI MCP into `apps/web`:
   `composer-loader`, `agent-thinking`, `file-upload`, `date-calendar`, `sidebar` plus 28 transitive
   components; two npm deps (`@internationalized/date` 3.12.4 Apache-2.0, `motion` 12.43.0 MIT).

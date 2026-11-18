@@ -2064,6 +2064,14 @@ pub struct AcpAgentConnectedReply {
     pub attached_at: String,
 }
 
+/// The ACP executors detected on this deployment's machine (REQ-061).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedExecutorsReply {
+    /// The compiled-in executor ids found on this machine's PATH.
+    pub executors: Vec<String>,
+}
+
 /// The reply of `bots.disconnectAcp`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
