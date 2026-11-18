@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "boma-api"
-version = "0.3.0-rc2"
+version = "0.3.0-rc3"
 dependencies = [
  "async-trait",
  "axum",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "boma-app"
-version = "0.3.0-rc2"
+version = "0.3.0-rc3"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "boma-bin"
-version = "0.3.0-rc2"
+version = "0.3.0-rc3"
 dependencies = [
  "anyhow",
  "axum",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "boma-conformance"
-version = "0.3.0-rc2"
+version = "0.3.0-rc3"
 dependencies = [
  "async-trait",
  "axum",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "boma-domain"
-version = "0.3.0-rc2"
+version = "0.3.0-rc3"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "boma-infra"
-version = "0.3.0-rc2"
+version = "0.3.0-rc3"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "boma-testkit"
-version = "0.3.0-rc2"
+version = "0.3.0-rc3"
 dependencies = [
  "async-trait",
  "base64 0.23.1",

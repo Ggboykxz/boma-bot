@@ -96,6 +96,11 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   66/73 REQ ids covered by tests; the missing seven are recorded (049, 056, 068, 070, 071, 073,
   074). Release notes rewritten for 0.3.0-rc (66/73).
   **Windows smoke is the owner's next step**; v0.3.0 final is cut after his verdict.
+- **v0.3.0-rc3 cut (2026-11-18, full dev run `44372621714` 7/7 green including packaged Windows
+  boot).** Version bumped everywhere to `0.3.0-rc3`; CHANGELOG and release notes updated. rc3 is
+  the first build with the owner-requested UI fixes (bot-create button, opencode detection,
+  BoardUI thinking/composer loader). rc2 remains published but superseded; v0.3.0 final waits for
+  the owner's rc3 smoke.
 - **2026-11-18 — UI slices (bot create + ACP detection + free BoardUI components).** Approved
   design `docs/superpowers/specs/2026-11-18-ui-bot-create-and-acp-detection-design.md`, plan
   `docs/superpowers/plans/2026-11-18-ui-bot-create-and-acp-detection.md`. Slice 1 landed:

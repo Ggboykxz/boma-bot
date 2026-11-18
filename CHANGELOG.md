@@ -4,6 +4,34 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.3.0-rc3] - 2026-11-18
+
+Release candidate 3: the owner's rc2 smoke found two first-session defects — no way to create a
+second bot after onboarding, and no sign that `opencode` was installed. Both are fixed, using the
+free BoardUI components installed at the owner's request.
+
+### Fixed
+
+- The Bots rail now has a BoardUI `+` action with an inline create form (`IconButton`, `Input`,
+  `Button`) calling `bots.create` and opening the new room; blank names are rejected before the
+  call and failures keep the form usable. Three `REQ-004` Playwright tests.
+- New `bots.detectedExecutors` RPC (two-second PATH probe of the compiled registry, strictly
+  parsed empty body) and a rail row offering **Attach** via `bots.connectAcp` — never automatic.
+  `req_061_detected_executors_reports_only_known_ids` and a `REQ-061` Playwright test.
+- The thread uses BoardUI `agent-thinking` and `composer-loader` instead of the bespoke run
+  shimmer, with a `REQ-012` Playwright test; UI goldens and axe stay green.
+- The desktop pack legs retry transient Maven 404s while keeping the pinned PostgreSQL SHA-256
+  checksum; a CDN hiccup had failed an otherwise healthy Linux leg.
+
+### Known limitations
+
+- `file-upload` is installed but not wired: `threads.send` has no attachment ids yet (issue #20).
+  `sidebar` and `date-calendar` are installed but unused (shell/goldens and proposal #14).
+- No Pro BoardUI component ships (no licence on this machine).
+
+CI evidence: full dev run `44372621714` — 7/7 jobs green including the packaged Windows boot;
+rc3 cut from the same tree after the version bump.
+
 ## [0.3.0-rc2] - 2026-11-18
 
 Release candidate 2 for v0.3.0 — the first Windows first launch that actually works end to end.
