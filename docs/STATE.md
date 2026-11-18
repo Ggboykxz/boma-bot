@@ -96,6 +96,17 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   66/73 REQ ids covered by tests; the missing seven are recorded (049, 056, 068, 070, 071, 073,
   074). Release notes rewritten for 0.3.0-rc (66/73).
   **Windows smoke is the owner's next step**; v0.3.0 final is cut after his verdict.
+- **2026-11-18 — free BoardUI components installed + future shadcn directive.** At the owner's
+  request, the free components from his list were installed via the BoardUI MCP into `apps/web`:
+  `composer-loader`, `agent-thinking`, `file-upload`, `date-calendar`, `sidebar` plus 28 transitive
+  components; two npm deps (`@internationalized/date` 3.12.4 Apache-2.0, `motion` 12.43.0 MIT).
+  Five minimal `eslint-disable` comments were added to vendored BoardUI source (lint rule
+  `react-hooks/set-state-in-effect`) — recorded in `docs/UI.md`; licences in
+  `docs/DEPENDENCIES.md`. No Pro licence on this machine, so Pro items were not installed.
+  The owner's directive: **once all free BoardUI components are used, run
+  `npx shadcn@latest init -t <framework>`**. This is a future, owner-authorized change: today's
+  `AGENTS.md` says "one design system, one theme", so the switch must be an explicit ADR at that
+  time, not a silent drift. Not done now.
 - **2026-11-18 — full-parity re-inspection at OpenBot HEAD `386085ff` (0.73.0).** Consulted
   upstream README ("What works"), CHANGELOG 0.72/0.73, `docs/` and `apps/` layout as data only —
   no code, wording, brand or assets copied; upstream stays PolyForm Noncommercial, our

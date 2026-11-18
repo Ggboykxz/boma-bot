@@ -11,6 +11,9 @@ detected or offered as a teammate. UI and experience take priority over the 16 o
 1. A member can create a second (or third…) bot from the app shell without redoing onboarding.
 2. A deployment whose machine has a known ACP executor installed detects it and offers a one-click
    attach; the operator still makes the choice.
+3. Use the free BoardUI components the owner named to improve the chat experience:
+   `composer-loader`, `agent-thinking`, `file-upload`, `sidebar`, `date-calendar` — all installed
+   via the MCP server. Pro components are excluded (no licence on this machine).
 
 ## Non-goals
 
@@ -60,6 +63,19 @@ an **Attach** BoardUI button (label makes clear it is detected on the deployment
 calls the existing `bots.connectAcp`, refreshes the roster and navigates to the bot. No executor is
 attached without the click. Playwright/wire test named `REQ-061 …` pins the detection list and the
 attach path with a stubbed probe.
+
+**Slice 3 — free BoardUI chat components.** Installed via MCP with their transitive components
+(`composer-loader`, `agent-thinking`, `file-upload`, `sidebar`, `date-calendar`); licences and local
+edits recorded in `docs/DEPENDENCIES.md` and `docs/UI.md`. Integration calls, decided here:
+- `agent-thinking` replaces the bespoke shimmer label in the thread while a run is active, using a
+  catalogue label and `prefers-reduced-motion` still honoured by the component.
+- `composer-loader` wraps `ThreadComposer` while a reply is pending; `ThreadComposer` gains a
+  `transparent` prop so the loader can paint the pill surface without a double background.
+- `file-upload` is **not** wired into the composer yet: `threads.send` has no attachment ids, so
+  the dropzone would be a dead end (forbidden). Tracked as issue #20 (REQ-001 attachments).
+- `sidebar` is **not** swapped in: it carries its own navigation and would overwrite our rail,
+  the new bot-create action and the REQ-009 goldens. Availability recorded for the next shell pass.
+- `date-calendar` waits for the schedule/routine UI proposal (#14); no dead route.
 
 The RPC addition is recorded in `spec/03-api-contract.md`; `docs/STATE.md` records both slices and
 the evidence. No new REQ id and no ADR are needed: both slices implement existing REQs.

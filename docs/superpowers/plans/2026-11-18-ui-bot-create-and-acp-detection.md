@@ -6,7 +6,7 @@
 
 **Architecture:** two independent slices. Slice 1 is web-only: a small BoardUI form component toggled from the Bots rail heading, calling the existing `bots.create` RPC. Slice 2 adds a server-side `bots.detectedExecutors` RPC that probes the compiled ACP executor registry on PATH, plus an Attach button calling the existing `bots.connectAcp`. The web UI stays shared between desktop and browser; no Node injection, no new service.
 
-**Tech Stack:** Next.js App Router + BoardUI (React Aria) + `@remixicon/react`, `cx()` from `@/utils/cx`; Rust/Axum RPC with `boma_app::acp_provider::executors()`; Playwright + `@axe-core/playwright`.
+**Tech Stack:** Next.js App Router + BoardUI (free tier only) + `@remixicon/react`, `cx()` from `@/utils/cx`; Rust/Axum RPC with `boma_app::acp_provider::executors()`; Playwright + `@axe-core/playwright`.
 
 **Spec:** `docs/superpowers/specs/2026-11-18-ui-bot-create-and-acp-detection-design.md`, spec/01-requirements.md REQ-004/REQ-061, spec/08-ui-ux.md §8.3.
 
@@ -191,3 +191,37 @@ Expected: PASS (the 12 Docker-dependent computer tests may fail locally without 
 - [ ] **Step 3: record the work and commit**
 
 Append both slices to `docs/STATE.md` with the test names and CI evidence. Commit: `git add docs && git commit -m "docs: record the bot-create and ACP-detection UI slices"`. Push to `dev`; wait for all seven CI jobs including `desktop-boot-windows` before any release.
+
+---
+
+### Task 7: Free BoardUI chat components (owner's UI list)
+
+**Files:**
+- Installed already (Task 1 scope, expanded): `composer-loader`, `agent-thinking`, `file-upload`, `date-calendar`, `sidebar` + transitive components via MCP; licences/local edits in `docs/DEPENDENCIES.md` and `docs/UI.md`.
+- Modify: `apps/web/components/thread/thread-screen.tsx:512-557`, `apps/web/components/thread/thread-composer.tsx:41-54`, `apps/web/tests/bot-create.spec.ts` (or a new `thread-ui.spec.ts`)
+
+**Interfaces:**
+- Consumes: `AgentThinking` from `@/components/application/agent-thinking/agent-thinking` (props `variant`, `label`, `showTimer`); `ComposerLoader` from `@/components/application/composer-loader/composer-loader` (props `active`, `children`); `runIsActive` and `sending` from `ThreadScreen`; `cx()` from `@/utils/cx`.
+- Produces: `ThreadComposer` gains `transparent?: boolean` (default false) removing only its surface classes; `ThreadScreen` wraps the composer in `ComposerLoader active={runIsActive || sending}` and renders `AgentThinking` instead of the bespoke shimmer span.
+
+- [ ] **Step 1: write the failing test**
+
+Add `REQ-012 the run status uses the BoardUI thinking indicator and the composer lights up` to a new `apps/web/tests/thread-ui.spec.ts`: stub a running run via the existing fixtures, assert the BoardUI thinking component is visible with the translated run label, and assert the composer wrapper carries the loader's active treatment. Keep the existing REQ-012 statuses test untouched.
+
+- [ ] **Step 2: verify it fails**
+
+Run: `cd apps/web && npx playwright test tests/thread-ui.spec.ts`
+Expected: FAIL — bespoke shimmer, no loader.
+
+- [ ] **Step 3: add the `transparent` prop and swap the components**
+
+In `ThreadComposer`: add the prop, merge form classes with `cx()` so `bg-background-primary-default`/`border` are omitted when transparent (the loader paints the surface). In `ThreadScreen`: import both components, replace the shimmer `<span>` with `<AgentThinking variant="wave" label={runLabel} showTimer={false} />`, remove the now-unused `CSSProperties` import if lint reports it, and wrap `<ThreadComposer transparent …>` in `<ComposerLoader active={runIsActive || sending}>`.
+
+- [ ] **Step 4: verify**
+
+Run: `cd apps/web && npx playwright test tests/thread-ui.spec.ts && npm run typecheck && npm run lint && npx playwright test tests/golden.spec.ts tests/a11y.spec.ts`
+Expected: PASS, goldens and axe still green.
+
+- [ ] **Step 5: record the deliberate deferrals and commit**
+
+In `docs/STATE.md`, record that `file-upload` waits for issue #20 (no `threads.send` attachment ids), `sidebar` waits for a shell/golden pass, and `date-calendar` waits for proposal #14 — installed but not wired, so no dead UI. Commit: `git add apps/web docs && git commit -m "feat(ui): BoardUI thinking indicator and composer loader (REQ-012)"`

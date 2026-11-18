@@ -119,6 +119,8 @@ would downgrade `electron-builder` and is rejected. Revisit on the next major.
 | `tailwind-merge` | 3.7.0 | MIT | the class merger behind BoardUI's `cx()` |
 | `@types/node` | **22.20.5** | MIT | matches the Node 22 runtime CI uses |
 | `@types/react` / `@types/react-dom` | 19.3.0 | MIT | React types |
+| `@internationalized/date` | 3.12.4 | Apache-2.0 | BoardUI `date-calendar` / `date-picker` date arithmetic (2026-11-18 UI slice) |
+| `motion` | 12.43.0 | MIT | BoardUI component motion language for the 2026-11-18 free components |
 
 **Fonts.** The web client loads **Inter** through `next/font/google`, which downloads it at build
 time and self-hosts the WOFF2 file: nothing is requested from a font host at runtime. Inter is

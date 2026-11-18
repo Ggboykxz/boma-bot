@@ -50,7 +50,12 @@ vendored BoardUI source. `/ui-kit` writes this file; `/ui-verify` adds the evide
 
 ## Component table
 
-Installed today (M0): `direction` (foundation), `button` (base), `cx`, `directional-icon`.
+Installed originally (M0): `direction` (foundation), `button` (base), `cx`, `directional-icon`.
+Installed 2026-11-18 from the free BoardUI tier at the owner's request:
+`composer-loader` and `agent-thinking` (application, chat), `file-upload`, `date-calendar`,
+`sidebar` and their transitive dependencies (`input`, `icon-button`, `avatar`, `dropdown`,
+`select`, `switch`, `tabs`, `tooltip`, `settings-modal`, `theme-toggle`, `scroll-fade`, …).
+The Pro tier is absent (no licence on this machine); nothing Pro is vendored.
 
 | REQ | Screen | Components | States | Milestone |
 | --- | --- | --- | --- | --- |
@@ -84,7 +89,14 @@ The vendored files (`styles/theme.css`, `styles/typography.css`, `styles/globals
 | `.boma-focus` (focus ring for our own links) | BoardUI components carry their own ring; our navigation links do not. Same token, same width, same offset. | `styles/boma.css` |
 | The navigation labels use `text-text-primary` | `text-text-secondary` on the secondary surface reaches 4.42:1 in light mode, under the AA floor. | `components/shell/app-shell.tsx`; the axe gate found it |
 
-No other file was edited. `npm run lint` and the axe gate are what keep the deviations honest.
+No other **product** file was edited. The 2026-11-18 free-component install added five narrow
+`eslint-disable-next-line react-hooks/set-state-in-effect` comments to vendored BoardUI source
+(`dashboard-user-menu.tsx`, `plan-art-flame.tsx`, `settings-modal.tsx`, `date-picker.tsx`,
+`shared.tsx`) — each names the vendored file and the one-shot sync it permits; no behaviour or
+tokens changed, and `npm run lint`/axe stay green. Re-run the installer only after diffing those
+five files: `install_components` overwrites by default unless `overwrite: false` is respected.
+
+`npm run lint` and the axe gate are what keep the deviations honest.
 
 ## Copy conventions
 
