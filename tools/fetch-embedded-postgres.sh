@@ -42,7 +42,9 @@ fetch_one() { # artifact os-label
     *) echo "unknown os: $label" >&2; exit 2 ;;
   esac
   tmp="$(mktemp -d)"; trap "rm -rf '$tmp'" EXIT
-  curl -fSL --retry 3 --retry-delay 2 -o "$tmp/pg.jar" "$BASE/$artifact/$PG_VERSION/$artifact-$PG_VERSION.jar"
+  # repo1's CDN occasionally answers a transient 404 for a published artifact; curl's plain
+  # --retry skips 404, so retry all errors while the SHA-256 gate below stays strict.
+  curl -fSL --retry 5 --retry-all-errors --retry-delay 3 -o "$tmp/pg.jar" "$BASE/$artifact/$PG_VERSION/$artifact-$PG_VERSION.jar"
   local actual
   actual="$(isha "$tmp/pg.jar")"
   if [ "$actual" != "$expected" ]; then
