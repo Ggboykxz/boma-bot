@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { listBots, serverBots, subscribeBots } from "@/lib/bot-directory";
+import { BotCreateForm } from "@/components/shell/bot-create-form";
 import {
   botsList,
   groupsCreate,
@@ -162,7 +163,7 @@ export function BotRail() {
   return (
     <aside className="flex w-full flex-col gap-6 lg:w-56 lg:shrink-0">
       <nav aria-label={t("shell.rail.bots")} className="flex flex-col gap-1">
-        <h2 className="text-text-secondary text-caption-1-semibold">{t("shell.rail.bots")}</h2>
+        <BotCreateForm />
         {roster === null && directory.length === 0 ? (
           <p className="text-text-secondary text-body-2-regular">{t("shell.rail.bots.empty")}</p>
         ) : null}
