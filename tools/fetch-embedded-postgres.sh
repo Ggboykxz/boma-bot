@@ -42,9 +42,24 @@ fetch_one() { # artifact os-label
     *) echo "unknown os: $label" >&2; exit 2 ;;
   esac
   tmp="$(mktemp -d)"; trap "rm -rf '$tmp'" EXIT
-  # repo1's CDN occasionally answers a transient 404 for a published artifact; curl's plain
-  # --retry skips 404, so retry all errors while the SHA-256 gate below stays strict.
-  curl -fSL --retry 5 --retry-all-errors --retry-delay 3 -o "$tmp/pg.jar" "$BASE/$artifact/$PG_VERSION/$artifact-$PG_VERSION.jar"
+  # Maven's CDN rate-limits shared runner IPs (429) as well as returning transient 404s.
+  # Retry with a real backoff, then try the second canonical host; the SHA-256 gate below is
+  # unchanged, so a different host can never supply different bytes.
+  local urls=(
+    "$BASE/$artifact/$PG_VERSION/$artifact-$PG_VERSION.jar"
+    "https://repo.maven.apache.org/maven2/io/zonky/test/postgres/$artifact/$PG_VERSION/$artifact-$PG_VERSION.jar"
+  )
+  local url fetched=0
+  for url in "${urls[@]}"; do
+    if curl -fSL --retry 8 --retry-all-errors --retry-delay 6 -o "$tmp/pg.jar" "$url"; then
+      fetched=1
+      break
+    fi
+  done
+  if [ "$fetched" -ne 1 ]; then
+    echo "could not fetch $artifact-$PG_VERSION.jar from any mirror" >&2
+    exit 1
+  fi
   local actual
   actual="$(isha "$tmp/pg.jar")"
   if [ "$actual" != "$expected" ]; then
