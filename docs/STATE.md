@@ -116,7 +116,12 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   stay out; no upstream app catalog is imported. A third pass found two more gaps: issue #16
   (`REQ-057` requires 14 locales, the client ships 3 — `en`/`fr`/`he`; the locale-count assertion
   is missing from CI) and issue #17 (PROPOSAL: post-creation agent editing — no `bots.update` and
-  no spec REQ, owner approval needed first).
+  no spec REQ, owner approval needed first). A fourth pass added #18 (REQ-061: the ACP registry has
+  only `opencode` while the spec rationale names six executors and upstream has 13) and #19
+  (PROPOSAL: macOS + Linux arm64 packs — we ship x64 Windows/Linux only); issue #14 now also
+  covers the missing schedule/routine UI (routines RPC has no create/update UI route). The ACP
+  workspace-retention knob was checked and found already implemented (`BOMA_ACP_KEEP_WORKSPACES`)
+  — no issue opened for it; STATE was stale on that point too.
 - **Windows desktop boot gate (2026-11-17).** The CI `desktop-boot-windows` job kept failing on
   the portable pack; three distinct defects, all diagnosed and fixed:
   1. The portable exe is `Boma Bot.exe` (productName), not `boma-desktop.exe` (fixed in `f52399d`).
