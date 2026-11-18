@@ -113,7 +113,10 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   control surface (the pause/resume backend exists). Lesson: the matrix in IMPROVEMENTS.md is a
   snapshot of 2026-11-15; STATE.md/PLAN.md and the code are the current truth. REQ-049 (voice) stays
   deferred by owner decision; the hosted account service, credit billing and permissive defaults
-  stay out; no upstream app catalog is imported.
+  stay out; no upstream app catalog is imported. A third pass found two more gaps: issue #16
+  (`REQ-057` requires 14 locales, the client ships 3 — `en`/`fr`/`he`; the locale-count assertion
+  is missing from CI) and issue #17 (PROPOSAL: post-creation agent editing — no `bots.update` and
+  no spec REQ, owner approval needed first).
 - **Windows desktop boot gate (2026-11-17).** The CI `desktop-boot-windows` job kept failing on
   the portable pack; three distinct defects, all diagnosed and fixed:
   1. The portable exe is `Boma Bot.exe` (productName), not `boma-desktop.exe` (fixed in `f52399d`).
@@ -177,6 +180,13 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
     `taskkill /T /F` + explicit `process.exit`; the migration config fix (`1690b03`), the health
     probe fix (`c450ea1`) and the productName fix (`4bcb92b`) are all in. v0.3.0-rc2 was cut from
     this state (tag `v0.3.0-rc2`).
+  - **v0.3.0-rc2 published (2026-11-18, release run `44345686580`, 4/4 jobs green including
+    `publish`).** The earlier rc2 run (`44205794686`) had all three build/boot jobs green but the
+    publish job failed with `fatal: not a git repository` — no `actions/checkout` in that job;
+    fixed in `815b103`, tag retagged, rerun green. Six assets on the release: Linux server
+    tarball, Linux desktop tarball, Windows NSIS installer + portable zip, both SHA256SUMS files
+    — all attested before upload. The old `v0.3.0-rc` remains published but is superseded and
+    broken; v0.3.0 final waits for the owner's rc2 smoke.
 - **M28 — local automation API + operator CLI (2026-11-16, REQ-072; this commit).**
   - The token-gated automation surface landed: `/api/v1/automation/*`, off unless both
     `BOMA_AUTOMATION_TOKEN` (≥16 chars) and `BOMA_AUTOMATION_AGENTS` (comma-separated bot ids, or
