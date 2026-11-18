@@ -67,3 +67,35 @@ test("REQ-004 the new-bot action stays available when the roster cannot answer",
   await page.goto("/app/");
   await expect(page.getByRole("button", { name: "New bot" })).toBeVisible();
 });
+
+test("REQ-061 a detected executor is attached only after an explicit click", async ({ page }) => {
+  let attaches = 0;
+  await seedRpc(page, {
+    answers: {
+      "bots/detectedExecutors": { executors: ["opencode"] },
+      "bots/connectAcp": {
+        botId: "bot_golden",
+        executor: "opencode",
+        attachedAt: "2026-11-18T00:00:00Z",
+      },
+    },
+  });
+  await page.route("**/rpc/bots/connectAcp", async (route) => {
+    attaches += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        botId: "bot_golden",
+        executor: "opencode",
+        attachedAt: "2026-11-18T00:00:00Z",
+      }),
+    });
+  });
+  await page.goto("/app/");
+  await expect(page.getByText("opencode — Detected on this machine")).toBeVisible();
+  expect(attaches).toBe(0);
+  await page.getByRole("button", { name: "Attach" }).click();
+  expect(attaches).toBe(1);
+  await expect(page.getByRole("button", { name: "Attached" })).toBeVisible();
+});

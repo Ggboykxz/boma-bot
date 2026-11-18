@@ -489,6 +489,19 @@ export function botsCreate(
   return call<BotReply>("bots", "create", request, signal);
 }
 
+/** `bots.detectedExecutors` — compiled-in ACP executors found on the deployment machine (REQ-061). */
+export function botsDetectedExecutors(signal?: AbortSignal): Promise<{ executors: string[] }> {
+  return call("bots", "detectedExecutors", {}, signal);
+}
+
+/** `bots.connectAcp` — attaches a detected executor to one bot (REQ-061). */
+export function botsConnectAcp(
+  request: { botId: string; executor: string },
+  signal?: AbortSignal,
+): Promise<{ botId: string; executor: string; attachedAt: string }> {
+  return call("bots", "connectAcp", request, signal);
+}
+
 /** `bots.get` — reads one bot. */
 export function botsGet(request: { botId: string }, signal?: AbortSignal): Promise<BotReply> {
   return call<BotReply>("bots", "get", request, signal);

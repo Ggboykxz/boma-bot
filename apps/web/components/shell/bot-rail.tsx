@@ -7,6 +7,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { listBots, serverBots, subscribeBots } from "@/lib/bot-directory";
 import { BotCreateForm } from "@/components/shell/bot-create-form";
+import { AcpDetectedRow } from "@/components/shell/acp-detected-row";
 import {
   botsList,
   groupsCreate,
@@ -191,6 +192,7 @@ export function BotRail() {
                 />
               ))}
         </div>
+        <AcpDetectedRow />
         {snoozed.length > 0 ? (
           <div className="flex flex-col gap-1">
             <button
