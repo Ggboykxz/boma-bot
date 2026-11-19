@@ -26,10 +26,9 @@ Proposal only — no code changed; no claim asserts a passing test.
    `answerGiven`/`failure` reset to null: the card reverts to "Waiting" with live buttons while the
    parent's `answeredCards` set has already lifted the composer gate — card and gate disagree, and a
    second answer is offered (server then returns `CONFLICT`).
-4. **[C] One-way, thin callback.** `onCardAnswered` is optional and carries only `(cardId, answer)`
-   with no outcome or kind. If the parent omits it the local card looks answered but the gate stays
-   blocked. `thread-screen.tsx` (l.386-388) only ever adds the id to a set — no persistence — so a
-   reload re-offers an answered card; the server refuses it, producing avoidable churn.
+4. **[C] One-way, thin callback.** `onCardAnswered` is optional and carries only `(cardId, answer)`,
+   no outcome or kind; if omitted the local card looks answered but the gate stays blocked. The parent
+   (l.386-388) only adds the id to a set — no persistence — so reload re-offers answered cards.
 5. **[G] Split-screen drift.** Another device answering yields `CONFLICT`; handled honestly
    (l.142-146), but with no subscription the card converges only on the next refetch or click.
 
@@ -62,7 +61,7 @@ Proposal only — no code changed; no claim asserts a passing test.
     right where the divider sits.
 11. **[G] Modal card may be off-screen.** §8.3 (l.112) says an unanswered modal card scrolls into
     view and takes focus; nothing here or in the parent does that, so a card below the divider can be
-    answered blind or left unseen. Focus/scroll is a parent concern; note it for coordination.
+    answered blind. Focus/scroll is a parent concern; note it for coordination.
 
 ### 1.4 Malformed blocks
 

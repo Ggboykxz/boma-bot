@@ -54,10 +54,9 @@ are patched locally, but ADR-003 codegen has not landed, so drift accumulates pe
 F4. **Auth 401 (CONFIRMED behavior; GUESS impact).** The handler fires only from `call()`, so a
 session expiry discovered by `authCapabilities` or a subscribe stream never redirects. It is called
 synchronously before the `RpcError` is built — if the host handler throws, the typed error is lost.
-It fires on every 401, including a background poll or an idempotent replay, giving redirect storms;
-guard logic lives in the host, not here. `setSpaceId(null)` does not clear `localStorage`, so a
-stale/foreign space id is resent on every call and the server's tenant-as-404 (§3.1) looks like a
-normal missing resource with no recovery path.
+It fires on every 401 (background poll, idempotent replay) → redirect storms; guard logic lives in the
+host, not here. `setSpaceId(null)` does not clear `localStorage`, so a stale/foreign space id is resent
+and the server's tenant-as-404 (§3.1) looks like a normal missing resource with no recovery path.
 
 ## Concrete hardening for v0.4.0 (GUESS)
 

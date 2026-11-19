@@ -94,14 +94,13 @@ needs a test. Read-only review; this document is the only write.
   `Conflict` but add uniform delay + tighter limiter. Any uniform response is an externally visible
   change — record as DEVIATION in `docs/PARITY.md` and wait for approval before shipping.
 - **Recovery channel:** stop printing live links to general logs by default; deliver via a dedicated
-  out-of-band sink or emit only a short-lived reference, and redact `recovery_link` from `tracing`.
-  If spec mandates link printing, gate it to a dedicated sink with rotation/retention limits.
-- **Cookie hardening:** add `__Host-` prefix (drops `Domain`, forces `Secure`/`Path=/`), consider
-  `SameSite=Strict`, and replace silent `if let Ok` with an error/metric so a dropped `Set-Cookie`
-  never masquerades as success. Add boundary length checks on email/name before hashing.
-- **Observability:** add request-id `tracing` spans and counters for sign-in success/failure, limiter
-  trips, reset issued/consumed and cookie failures — IP/email truncated or omitted, never passwords
-  or tokens (AGENTS.md: no PII/secrets in logs).
+  sink or a short-lived reference, and redact `recovery_link` from `tracing`. If spec mandates it,
+  gate printing to a sink with rotation/retention limits.
+- **Cookie hardening:** add `__Host-` prefix (forces `Secure`/`Path=/`), consider `SameSite=Strict`,
+  and replace silent `if let Ok` with an error/metric so a dropped `Set-Cookie` cannot look like
+  success. Add boundary length checks on email/name before hashing.
+- **Observability:** add request-id `tracing` spans and counters for sign-in, limiter trips, resets and
+  cookie failures — IP/email truncated, never passwords or tokens (AGENTS.md: no PII/secrets in logs).
 
 ## Risks / trade-offs
 
@@ -115,7 +114,6 @@ needs a test. Read-only review; this document is the only write.
   verify against `spec/golden` before changing and gate behind approval.
 - Removing log-printed links can make recovery unusable in deployments that relied on them — require a
   working delivery channel or explicit opt-in flag first, and document the migration.
-- `SameSite=Strict`/`__Host-` may affect cross-subdomain or embedded flows; check the spec's UI origin
-  and CORS before tightening (CONFIRMED behavior, deployment impact GUESS).
+- `SameSite=Strict`/`__Host-` may affect cross-subdomain/embedded flows; check UI origin and CORS (GUESS impact).
 - Rate-limit hot-path changes touch shared infra used by other public endpoints (`public.rs`) — keep
   behavior backward-compatible and benchmark contention before/after.

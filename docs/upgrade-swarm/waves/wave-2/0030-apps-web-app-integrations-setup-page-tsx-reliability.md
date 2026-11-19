@@ -1,34 +1,33 @@
 # 0030 — apps/web/app/integrations/setup/page.tsx — reliability (v0.4.0)
 
-Worker #030 (retry) · `apps/web/app/integrations/setup/page.tsx` · reliability · READ-ONLY review of
-`before-m5`. The module is a 16-line server component (`Suspense` around the client screen); the failure surface
-lives in `components/integrations/integrations-setup.tsx`, `lib/api/rpc.ts` (`call()`), the Slack callback
-in `crates/api/src/public.rs`, and the Rust messaging store/use-cases. READ-ONLY; no code ran; file
-facts CONFIRMED by reading, test status GUESS.
+Worker #030 (retry) · `apps/web/app/integrations/setup/page.tsx` · reliability · READ-ONLY review of `before-m5`.
+The module is a 16-line server component (`Suspense` around the client screen); the failure surface lives in
+`components/integrations/integrations-setup.tsx`, `lib/api/rpc.ts` (`call()`), the Slack callback in
+`crates/api/src/public.rs`, and the Rust messaging store/use-cases. No code ran; facts CONFIRMED by reading,
+test status GUESS.
 
 Spec anchors: spec/08-ui-ux.md §8.7 (`/integrations/setup` — post-OAuth landing: confirm the connection,
-surface a partial-install report rather than a green check), §8.1/§8.9 (a blank panel is a bug;
-failure states must be named), REQ-032/REQ-034/REQ-048, REQ-057 (a11y).
+surface a partial-install report rather than a green check), §8.1/§8.9 (blank panel is a bug), REQ-032/
+REQ-034/REQ-048, REQ-057 (a11y).
 
 ## What is already right (keep, don't re-propose)
 
-- `Promise.allSettled` for the three reads; AbortController cancels in-flight reads on unmount;
-  skipped plugin parts ARE surfaced per plugin with reason (REQ-034 honoured in shape); plugin-source
-  link uses `noopener noreferrer nofollow`; skeleton with `aria-busy` exists.
+- `Promise.allSettled` reads; AbortController cancels on unmount; skipped plugin parts ARE surfaced per
+  plugin with reason (REQ-034 honoured in shape); plugin-source link uses `noopener noreferrer nofollow`;
+  skeleton with `aria-busy` exists.
 
 ## Failure modes → hardening
 
 ### F1. Total load failure renders a blank page, indistinguishable from "nothing installed"
-Rejected results from `allSettled` are silently dropped (integrations-setup.tsx:67-86); `phase` then flips
-to `"ready"`. If all three RPCs fail (offline, 500, 401 with no `unauthorizedHandler` toast surface here),
-the screen renders header + nothing — no error, no retry, no empty state. House style already solves this
-(`admin/plugins-screen.tsx`: `error` phase + `role="alert"` panel + `common.retry`; `activity-screen.tsx`
-same). `call()` has no timeout either (rpc.ts:245), so a hung RPC pins the skeleton forever (§8.1).
-P1. Track per-section status (`loading|ready|failed`) or a single `loadFailed` flag. On any rejection,
-    render the plugins-screen pattern: `role="alert"`, one sentence, a Retry `Button` that re-runs the
-    effect (`reloadToken` state). Distinct copy for 401/session-expired ("sign in again" link) vs generic
-    failure. Emptiness of a section asserts only what was evidenced by a fulfilled call; a failed or empty
-    section is hidden with an inline note, never silently.
+Rejected `allSettled` results are silently dropped (integrations-setup.tsx:67-86); `phase` then flips to
+`"ready"`. If all three RPCs fail (offline, 500, 401), the screen renders header + nothing — no error,
+no retry, no empty state. House style already solves this (`admin/plugins-screen.tsx`: `error` phase +
+`role="alert"` panel + `common.retry`; `activity-screen.tsx` same). `call()` has no timeout either
+(rpc.ts:245), so a hung RPC pins the skeleton forever (§8.1).
+P1. Track per-section status (`loading|ready|failed`) or one `loadFailed` flag. On any rejection render
+    the plugins-screen pattern: `role="alert"`, one sentence, a Retry `Button` re-running the effect
+    (`reloadToken`). Distinct copy for 401/session-expired vs generic failure. A section asserts
+    emptiness only on a fulfilled call; a failed section gets an inline note, never silence.
 P5. Add `AbortSignal.timeout(10_000)` default in `call()` (opt-out per call site) so F1's failure path is
     reachable at all — otherwise "hang" never becomes a named failure.
 
@@ -54,19 +53,18 @@ P2. Callback failure should `303` to `/integrations/setup?error=install_failed` 
 param is client-forgeable: a crafted link paints a success banner with arbitrary (possibly phishing-toned)
 text on a trusted-looking screen. And if the install actually failed post-redirect, or `messaging.list`
 rejects, the banner still claims "Installed: slack" over an empty/contradictory page.
-P3. Allowlist the known platform vocabulary (`slack|telegram|<generic>`); drop unknown values. Only render
-    the banner when the corresponding read corroborates (fulfilled `messaging.list` containing an active
-    installation of that platform, or fulfilled `marketplace.list` for plugin installs); otherwise render
-    a neutral "we could not confirm the install — check the list below" note. Never let the query string
-    outrank server state.
+P3. Allowlist known platform vocabulary (`slack|telegram|<generic>`); drop unknowns. Render the banner
+    only when the matching read corroborates (fulfilled `messaging.list` with an active install of that
+    platform, or fulfilled `marketplace.list`); otherwise a neutral "could not confirm the install" note.
+    Never let the query string outrank server state.
 
 ### F4. Partial-setup truth is half-rendered; revoked/dead installs are invisible
 - Plugin skipped parts render (good), but the `partial` phase computed from them (:73-79) has **no render
   branch anywhere** — it is write-only state; the "partial" outcome is indistinguishable from "ready".
 - `messaging.list` returns rows of ALL statuses (store `list()` has no status filter), yet the screen
-  filter is `status === "active"` only (:113): `removed` rows vanish silently, and there is no health
-  signal for a live-but-dead install. Token revocation (Slack app uninstalled / `invalid_auth`) is never
-  detected: outbound delivery logs `status >= 400` and swallows (`usecases.rs` ~:3275), nothing is marked.
+  filter is `status === "active"` only (:113): `removed` rows vanish silently; there is no health signal
+  for a live-but-dead install. Token revocation (Slack app uninstalled / `invalid_auth`) is never detected:
+  outbound delivery logs `status >= 400` and swallows (`usecases.rs` ~:3275), nothing is marked.
   A dead install looks perfect on the one screen whose job is post-install honesty (REQ-048).
 P4. (a) Delete or implement the `partial` phase — minimal: compute `hasSkipped` inline and give the plugins
      section a visible "some parts were skipped" header note (copy exists: `integrations.plugins-note`).
@@ -82,16 +80,16 @@ P4. (a) Delete or implement the `partial` phase — minimal: compute `hasSkipped
   hosts) before render; drop the link otherwise. React does not sanitise href schemes.
 - Dead `AuthShell` import (:8) and unused `useRouter`/`router` (:4, :48) — remove (lint hygiene; static
   export still type-checks them).
-- `skipped.map((part, index) =>` uses `key={index}` (:152) — key by `part.part` + index is acceptable but
-  prefer the part name; `String(part["part"] ?? part)` renders `[object Object]` for nested objects —
-  coerce defensively (`typeof === "string" ? … : JSON.stringify`).
+- `skipped.map((part, index) =>` uses `key={index}` (:152) — prefer the part name as key;
+  `String(part["part"] ?? part)` renders `[object Object]` for nested objects — coerce defensively
+  (`typeof === "string" ? … : JSON.stringify`).
 - Suspense `fallback={null}` (page.tsx) = blank first paint; use the screen's skeleton.
 
 ## axe / a11y notes
-The page is in the a11y route list (`tests/a11y.spec.ts`). After P1-P4: failure panels use `role="alert"`;
-banner + reconciliation note need `aria-live="polite"` (installed banner already has it); retry button
-keeps visible focus (`boma-focus`); no colour-only states; skipped report stays text; skeleton `aria-hidden`;
-new copy must hold 4.5:1 both themes — new strings × 14 locales (en…zh) otherwise the catalogue falls back.
+The page is in the a11y route list (`tests/a11y.spec.ts`). Failure panels use `role="alert"`; banner +
+reconciliation note keep `aria-live="polite"`; retry keeps visible focus (`boma-focus`); no colour-only
+states; skeleton `aria-hidden`; new copy must hold 4.5:1 both themes — and ship × 14 locales or the
+catalogue falls back.
 
 ## Risks and trade-offs
 - R1. Goldens/REQ-057 pin this page's landmarks: F1's error panel and F4(b)'s extra section change
@@ -108,17 +106,17 @@ new copy must hold 4.5:1 both themes — new strings × 14 locales (en…zh) oth
 
 ## Explicit non-goals
 No redesign of the install flows (Slack/Telegram/generic), no per-bot assignment fiction, no retry queue for
-platform delivery (deliberate: duplicate delivery worse than none), no i18n system rework, no visual restyle,
+platform delivery (deliberate: duplicate delivery worse than none), no i18n rework, no visual restyle,
 no admin/plugins surface.
 
 ## Suggested v0.4.0 rollout
-Wave A (page-only, independently revertable): P1 (error+retry), P3 (banner allowlist + corroboration),
-P4(a,b), F5 items. Tests: Playwright — all-three-fail, one-fail, hung (fake timeout), `?installed=evil`,
-`?installed=slack` with list rejecting, reinstall `?error=install_failed`; axe on `/integrations/setup`
-light/dark/RTL. Wave B (cross-surface): P5 timeout, P2 callback `?error=` redirect + page branch, P4(c)
-health fields + admin-visible revocation signal + server reinstall idempotency.
-Acceptance: no bare `catch` decides this screen; a failed load is named and retryable; the confirmation
-banner never outranks server state; skipped parts and non-active installs are visible, honest evidence.
+Wave A (page-only, revertable): P1 (error+retry), P3 (banner allowlist + corroboration), P4(a,b), F5.
+Tests: Playwright — all-three-fail, one-fail, hung (fake timeout), `?installed=evil`, `?installed=slack`
+with list rejecting, reinstall `?error=install_failed`; axe on the route light/dark/RTL. Wave B
+(cross-surface): P5 timeout, P2 callback `?error=` redirect + page branch, P4(c) health fields +
+admin-visible revocation signal + server reinstall idempotency.
+Acceptance: no bare `catch` decides this screen; a failed load is named and retryable; the banner never
+outranks server state; skipped parts and non-active installs are visible, honest evidence.
 
 _Scope: line refs against `before-m5`; READ-ONLY, no code/tests/builds ran; server-side items GUESS-verified
 by reading; wire health contract is a proposal, not an agreed schema._
