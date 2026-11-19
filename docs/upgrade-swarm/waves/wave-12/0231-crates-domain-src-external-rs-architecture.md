@@ -1,11 +1,9 @@
 # Worker 0231 — `crates/domain/src/external.rs` architecture proposal (v0.4.0)
 
-Lens: architecture (structure, invariants, layering, coupling). Read-only review; scope is the
-module plus the call sites needed to judge it. CONFIRMED = read in this worktree this session
-(`external.rs`, `lib.rs`, `ids.rs`, `migrations/0054_external_agents.sql`, `app/src/usecases.rs`,
-`app/src/ports.rs`, `infra/src/stores/external_agents.rs`, `spec/01-requirements.md`,
-`docs/adr/026-external-agents.md`, sibling proposals 0167/0207); PROPOSAL = forward-looking;
-GUESS = inferred. No code was changed.
+Lens: architecture (structure, invariants, layering, coupling). Read-only review. CONFIRMED = read
+this session in `external.rs`, `lib.rs`, `migrations/0054_external_agents.sql`, `usecases.rs`,
+`ports.rs`, `infra/src/stores/external_agents.rs`, `spec/01-requirements.md` and ADR-026;
+PROPOSAL = forward-looking; GUESS = inferred. No code was changed.
 
 ## Current structure (CONFIRMED)
 
@@ -17,10 +15,9 @@ GUESS = inferred. No code was changed.
 - `NewExternalAgent { bot_id, space_id, base_url, agent_name, secret_name, saved_at: String }` —
   the write input.
 
-Both derive only `Debug, Clone, PartialEq, Eq`; no serde, no validation, no methods, no constants,
-no tests. Identity is `bot_id` (there is no separate connection id); `secret_name` is a vault
-*reference*, never a bearer value. `lib.rs` re-exports many domain types but **not** `external::*`;
-callers use `boma_domain::external::…`.
+Both derive only `Debug, Clone, PartialEq, Eq`; no serde, no validation, no methods, no tests.
+Identity is `bot_id` (no separate connection id); `secret_name` is a vault *reference*, never a
+bearer value. `lib.rs` does not re-export `external::*`; callers use `boma_domain::external::…`.
 
 Cross-layer facts (CONFIRMED):
 
@@ -54,11 +51,10 @@ Keep the domain IO-free: reuse the repo's hand-validator pattern (`mcp::validate
 rather than pulling `reqwest` into `domain`; if `url` is added instead, that needs an ADR and a
 locked dependency.
 
-Risks: (a) two owners of the URL rule would drift — decide one before wiring; (b) the existing
-error is `AppError::Rule(DomainError::InvalidName("…"))` with specific messages, so keep the text
-byte-identical or the API error shape becomes a DEVIATION; (c) do not reject any endpoint the
-current build accepts (loopback http, trailing slashes); (d) touches usecase, port, both adapters,
-testkit and wire mapping — mechanical but wide.
+Risks: (a) two owners of the URL rule would drift — decide one; (b) the error is
+`AppError::Rule(DomainError::InvalidName("…"))` with specific messages, so keep them byte-identical
+or the API error shape becomes a DEVIATION; (c) do not reject endpoints the current build accepts
+(loopback http, trailing slashes); (d) touches usecase, port, adapters, testkit and wire mapping.
 
 ### U2 — One constructor plus invariant assertions, with REQ-059 tests in the module (PROPOSAL)
 Add `NewExternalAgent::for_bot(space, bot, base_url, agent_name, secret_name, now) ->
@@ -100,18 +96,17 @@ Add a domain-level `ExecutorTarget { base_url, agent_name, credential: Credentia
 stops raw `String`s propagating into the app. Align with worker 0167's payload/codec work and
 ADR-026's requirement that run/thread identity be sent unchanged.
 
-Risks: (a) the domain must not reveal the vault — `CredentialRef` carries a name only; reveal stays
-in `worker.rs`; (b) a public API shape change needs a DEVIATION entry only if externally visible —
-keep it internal and unsserialised; (c) do not invent a status/liveness field on the record (the run
-state machine owns failure per ADR-026); (d) coordinate with 0167 so two proposals do not define
-conflicting executor config types.
+Risks: (a) `CredentialRef` carries a name only — reveal stays in `worker.rs`; (b) keep the type
+internal and unserialised, or an API change needs a DEVIATION entry; (c) no status/liveness field —
+the run state machine owns failure per ADR-026; (d) coordinate with 0167 to avoid conflicting
+executor config types.
 
 ## Explicit non-goals (CONFIRMED rationale)
 
-- No persisted `status` enum: failure/health belongs to REQ-012's run state machine and
-  `AppError::Unavailable`; a column would need a migration and change the wire shape.
-- No `serde` derives and no credential value on domain types: wire DTOs are deliberately separate
-  and the bearer never lands in the DB.
+- No persisted `status` enum: failure belongs to REQ-012's run state machine; a column needs a
+  migration and changes the wire shape.
+- No `serde` derives or credential values on domain types: wire DTOs stay separate; the bearer
+  never lands in the DB.
 - No `Timestamp` newtype here: every sibling module uses plain RFC3339 `String`; that is a
   workspace-wide decision.
 - No remote thread bookkeeping: "the AG-UI thread is our thread" (ADR-026).

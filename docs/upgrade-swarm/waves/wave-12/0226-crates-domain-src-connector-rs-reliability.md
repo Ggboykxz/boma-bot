@@ -96,12 +96,9 @@ must not pre-empt it (CONFIRMED).
 ## Risks / trade-offs
 
 - R1. P1/P8 may reject a future tool name using a dot; default to kebab and record the decision.
-- R2. P2 touches domain + infra + DB check constraint; canonicalise existing rows and verify the
-  five status call sites agree before merging.
-- R3. P3 changes an internal port signature (app/infra/testkit together); keep the RPC error body
-  byte-identical, or record a DEVIATION in docs/PARITY.md.
-- R4. P4 keeps secrecy out of domain by validating a borrowed view only; do not store `SecretString`
-  here.
+- R2. P2 touches domain + infra + a DB check constraint; canonicalise existing rows and verify the five status call sites agree before merging.
+- R3. P3 changes an internal port signature (app/infra/testkit together); keep the RPC error body byte-identical, or record a DEVIATION in docs/PARITY.md.
+- R4. P4 keeps secrecy out of domain by validating a borrowed view only; do not store `SecretString` here.
 - R5. P5 changes error text; update golden/RPC fixtures. No wire *shape* change.
 - R6. P6 adds a column and awaits DEC-10 — defer to v0.5 if key rotation lands later.
 - R7. P7 needs an `Error` status consumers can see; ship as log/metric first to avoid a wire change.
