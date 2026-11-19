@@ -7,10 +7,9 @@ ADR-002. CONFIRMED = read this session; runtime likelihood/impact = GUESS. Propo
 
 ## 1. Current behavior (CONFIRMED)
 
-- Eight `SpaceStore` methods. Each is one SQL statement (except `create`) inside `tenant::as_system`
-  (sets `boma.space_id=''`, `boma.system_reason=<closed enum>`) or `tenant::in_space` (sets
-  `boma.space_id=<id>`); settings are transaction-scoped via `set_config(...,true)` and reverted on
-  commit/rollback (tenant.rs:75-84,107-140), so a pooled connection carries no tenant forward.
+- Eight `SpaceStore` methods. Each is one SQL statement (except `create`) in `tenant::as_system`
+  (`boma.space_id=''`, closed-enum reason) or `tenant::in_space` (`boma.space_id=<id>`); settings are
+  transaction-scoped via `set_config(...,true)` and reverted on commit/rollback (tenant.rs:75-140).
 - `create` (:144-189): `in_space` transaction inserts `spaces` then the owner `space_members` row —
   the space/membership atomicity REQ-042 requires. No key row is written here.
 - `add_member` (:54-93): `INSERT ... ON CONFLICT (space_id,user_id) DO NOTHING`; `rows_affected()==0`
@@ -22,9 +21,8 @@ ADR-002. CONFIRMED = read this session; runtime likelihood/impact = GUESS. Propo
   and bot (0025:7-17). DEKs are minted **lazily** by `load_or_create_dek` on first secret
   write/read, using `ON CONFLICT DO NOTHING` + re-read of the surviving row (space_keys.rs:23-62);
   `stores/secrets.rs:62-90` keeps a second inline copy "stable for the recorded path".
-- `spaces_of`/`default_for` order by app-provided `created_at` strings; `default_for` tie-breaks
-  deterministically with `is_default DESC, created_at ASC, id ASC` (:246). All driver errors map to
-  `Unavailable` (tenant.rs:153-156).
+- `spaces_of`/`default_for` order by app-provided `created_at` (`default_for` tie-breaks by `id`, :246);
+  all driver errors map to `Unavailable` (tenant.rs:153-156).
 
 ## 2. Failure modes
 
@@ -103,8 +101,8 @@ index enforces one default space per organization, so `default_for` resolves tie
   (ADR-002). Do not rotate/rekey or log key material, wrapped or plain, in new paths.
 - A/B/C and F/G change visible behavior or schema — record in `STATE.md` + `PARITY.md`, wait for
   owner approval; D/E are local and reversible. Sequence E+D -> G+F -> A -> B -> C.
-- `tools/trace_check.py` counts declaration lines, not comments: name tests with REQ ids. All
-  likelihood/impact above is GUESS until the integration tests run.
+- `tools/trace_check.py` counts declarations, not comments: name tests with REQ ids. Impact is GUESS
+  until the integration tests run.
 
 ## 5. Suggested tests (integration, real PG)
 
@@ -118,9 +116,8 @@ index enforces one default space per organization, so `default_for` resolves tie
 
 ## Bottom line
 
-`create` already gets the hard invariant right — space and first membership commit together. The
-reliability gaps start afterwards: DEKs are minted lazily by two duplicated paths, a single cascade
-can erase a tenant irreversibly and can orphan it via last-owner deletion, and `Conflict`/`Unavailable`
-hide benign retries and permanent corruption alike. E+D+G+F are local, reversible wins; A/B/C genuinely
-harden provisioning and deletion but change behavior or schema and need ADRs plus owner sign-off.
-Runtime impact is GUESS until the proposed integration tests run.
+`create` gets the hard invariant right — space and first membership commit together. Gaps start
+afterwards: DEKs are minted lazily by two duplicated paths, one cascade can erase a tenant
+irreversibly or orphan it via last-owner deletion, and `Conflict`/`Unavailable` hide benign retries
+and permanent corruption alike. E+D+G+F are reversible wins; A/B/C need ADRs and owner sign-off.
+Impact is GUESS until the integration tests run.

@@ -1,16 +1,14 @@
 # 0416 — migrations/0001_init.sql — reliability (v0.4.0)
 
-Worker #416 · module `migrations/0001_init.sql` · lens: reliability · READ-ONLY review of
-`rebuild-workspace/.worktrees/before-m5` at the v0.3.0-era tree. Proposals only; no code changed
-in this pass. Language: English. **Additive only** — every proposal is a new statement or a new
-migration file; none edits an existing migration in place.
+Worker #416 · module `migrations/0001_init.sql` · lens: reliability · READ-ONLY review of the
+v0.3.0-era `before-m5` tree. Proposals only; no code changed. **Additive only** — each proposal
+is a new statement or new migration file; none edits an existing migration in place.
 
 ## Ground truth (CONFIRMED by reading the tree this session)
 
 - 0001 creates one global table `app_meta(key text PRIMARY KEY, value jsonb NOT NULL,
-  updated_at timestamptz NOT NULL DEFAULT now())`, inserts `('schema', '{"milestone":"M0"}')`
-  with `ON CONFLICT (key) DO NOTHING`, and adds a COMMENT. No RLS, no grants, no triggers, no
-  CHECKs, no FKs.
+  updated_at timestamptz NOT NULL DEFAULT now())`, inserts `('schema','{"milestone":"M0"}')` with
+  `ON CONFLICT DO NOTHING` + a COMMENT. No RLS, grants, triggers, CHECKs or FKs.
 - 0002 installs `boma.current_space_id()` / `boma.is_system()` and the RLS pattern for tenant
   tables (`ENABLE` + `FORCE ROW LEVEL SECURITY`, policy `... OR boma.is_system()`, default-deny).
   Helpers do **not** exist at the time 0001 runs — a policy in 0001 cannot call them.
@@ -23,9 +21,8 @@ migration file; none edits an existing migration in place.
 
 ## What it already does right (keep, do not re-propose)
 
-- `PRIMARY KEY` gives a btree on `key` and implies `NOT NULL UNIQUE`; for a handful of metadata
-  rows that is the only index worth having. Do not add a GIN index on `value` — it is write
-  amplification with no reader at this size.
+- `PRIMARY KEY` gives a btree on `key` and implies `NOT NULL UNIQUE`; for a handful of metadata rows
+  that is the only index worth having. Do not add GIN on `value` — write amplification, no reader.
 - `ON CONFLICT DO NOTHING` makes a replayed seed non-destructive: it cannot reset a milestone
   that a later migration bumped. Keep this property.
 - Seed + DDL in one migration transaction; a partial `app_meta` never commits alone.
@@ -36,8 +33,7 @@ migration file; none edits an existing migration in place.
 ### F1. Weak input constraints on a control-plane table (missing constraints)
 
 `value jsonb NOT NULL` accepts scalars/arrays/null-objects; a reader doing `value->>'milestone'`
-then gets NULL silently and reports "unknown version." `key` accepts empty, huge or garbage
-strings that can collide with future namespaces.
+gets NULL silently and reports "unknown version." `key` accepts empty, huge or garbage strings.
 
 P1. In a **new** migration `0060_app_meta_hardening.sql`, add
 `ALTER TABLE app_meta ADD CONSTRAINT app_meta_value_is_object CHECK (jsonb_typeof(value)='object');`
@@ -48,10 +44,10 @@ P3. Keep the PK as the sole index; add a COMMENT explaining why no index on `val
 
 ### F2. Isolation is documented, not enforced (RLS gaps / privilege gaps)
 
-app_meta has no RLS and no explicit REVOKE. If a client role ever gains SELECT (broad grant,
-future role change, a dynamic table name), metadata is exposed — the exact leak REQ-043 prevents.
-Being global like `users`/`sessions` is no defence: those rely on app-layer checks, but app_meta's
-own comment promises clients never read it.
+app_meta has no RLS and no explicit REVOKE. If a client role ever gains SELECT (broad grant, future
+role change, a dynamic table name), metadata is exposed — the exact leak REQ-043 prevents. Being
+global like `users`/`sessions` is no defence: those rely on app-layer checks, app_meta's comment
+promises clients never read it.
 
 P4. In `0060` (after `boma.is_system()` exists), `ALTER TABLE app_meta ENABLE ROW LEVEL SECURITY;`
    and `FORCE ROW LEVEL SECURITY;`, with
@@ -66,11 +62,11 @@ P6. Add a regression test (name carries REQ-043) that a tenant-scoped connection
 
 ### F3. Weak cascade/immutability semantics (drift and accidental mutation)
 
-app_meta has no FKs, so there is no cascade *correctness* risk today; the reliability risk is the
-opposite — nothing stops an operator or stray script from UPDATE/DELETE-ing the deployment marker,
-and `updated_at` never advances on UPDATE (no trigger), so diagnostics go stale. Also the seed is
-hardcoded `M0`: once later migrations move the product to M5, the marker still reads M0 unless
-something bumps it — a misleading source of truth for on-call.
+app_meta has no FKs, so no cascade *correctness* risk today; the opposite is the risk — nothing
+stops an operator or stray script from UPDATE/DELETE-ing the deployment marker, and `updated_at`
+never advances on UPDATE (no trigger), so diagnostics go stale. The seed is also hardcoded `M0`:
+once later migrations move the product to M5 the marker stays M0 unless something bumps it — a
+misleading source of truth for on-call.
 
 P7. Add a `BEFORE UPDATE OR DELETE` trigger that raises an exception for `OLD.key = 'schema'`
    (or for all rows if app_meta is intended as append-only metadata), making the marker immutable.
@@ -87,8 +83,7 @@ P10. Add a test asserting readiness is driven by `_sqlx_migrations` (spec 04 §4
 
 ### F4. Migration-pipeline integrity (checksum / downgrade)
 
-The main reliability trap is process, not SQL: editing 0001 in place changes its SQLx checksum and
-`MIGRATOR.run` will refuse to start on any database that already applied it — a deploy-wide outage.
+The main trap is process: editing 0001 changes its SQLx checksum, so `MIGRATOR.run` refuses to start where it already applied — a deploy-wide outage.
 
 P11. Land every proposal above strictly as new migrations (`0060`, `0061`), never as edits to
    `0001`. Add a CI grep/gate (or a note in the deploy runbook) forbidding edits to applied
