@@ -88,3 +88,40 @@ body: JSON.stringify(CAPABILITIES),
   await page.goto("/app/board/");
   await expect(page.getByText(t("en", "board.absent"))).toBeVisible();
 });
+
+test("REQ-038 the board filters tickets by assignee with BoardUI controls", async ({ page }) => {
+  await seedBots(page);
+  await page.route("**/rpc/boards/get", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        tickets: [
+          TICKET,
+          {
+            ...TICKET,
+            id: "tic_other",
+            key: "BOT-2",
+            title: "Second ticket",
+            state: "in_progress",
+            assigneeBotId: "bot_other",
+          },
+        ],
+      }),
+    });
+  });
+  await page.route("**/api/auth/capabilities", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(CAPABILITIES),
+    });
+  });
+
+  await page.goto("/app/board/");
+  await expect(page.getByText("Second ticket")).toBeVisible();
+  await page.getByRole("button", { name: "All bots Filter by assignee" }).click();
+  await page.getByRole("option", { name: "Analyst" }).click();
+  await expect(page.getByText("Audit the week's bills")).toBeVisible();
+  await expect(page.getByText("Second ticket")).toHaveCount(0);
+});

@@ -9,6 +9,7 @@ import {
 } from "@remixicon/react";
 
 import { Button } from "@/components/base/buttons/button";
+import { Select, SelectItem } from "@/components/base/select/select";
 import {
   boardsGet,
   botsList,
@@ -49,6 +50,7 @@ export function BoardScreen() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const [commenting, setCommenting] = useState(false);
+  const [filterBot, setFilterBot] = useState("");
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   const load = () =>
@@ -250,9 +252,27 @@ export function BoardScreen() {
         </form>
       ) : null}
 
+      <div className="flex items-end gap-2">
+        <Select
+          label={t("board.filter.assignee")}
+          size="sm"
+          selectedKey={filterBot || "all"}
+          onSelectionChange={(key) => setFilterBot(key === "all" ? "" : String(key))}
+        >
+          <SelectItem id="all">{t("board.filter.all")}</SelectItem>
+          {bots.map((bot) => (
+            <SelectItem key={bot.id} id={bot.id}>{bot.name}</SelectItem>
+          ))}
+        </Select>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {COLUMNS.map((column) => {
-          const columnTickets = tickets.filter((ticket) => parseColumn(ticket.state) === column);
+          const columnTickets = tickets.filter(
+            (ticket) =>
+              parseColumn(ticket.state) === column &&
+              (filterBot === "" || ticket.assigneeBotId === filterBot),
+          );
           return (
             <section key={column} aria-label={t(`board.column.${column}`)} className="flex flex-col gap-2">
               <h2 className="text-text-secondary text-body-2-semibold uppercase tracking-wide text-caption-1-semibold">

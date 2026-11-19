@@ -142,6 +142,11 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
   pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
   for the owner's rc4 smoke.
+- **2026-11-19 — board/triage UI upgrade (second synthesis signal, REQ-038).** The board now has
+  a BoardUI assignee filter with per-column counts recomputed from the filtered set; all three
+  catalogues carry the new labels. A `REQ-038` Playwright test covers filter + counts; 42 other
+  web tests (goldens, axe) stay green apart from the known local RTL artefact. Raw inputs in the
+  create form are the next BoardUI swap if this direction is kept.
 - **2026-11-18/19 — swarm orchestrator exercised for real dev (Queen = main agent).** Swarm
   `2026-11-18-001` dispatched 7 weighted workers (accessibility, security, product, UX, Rust,
   performance, i18n) on the next-UI-slice question; votes and the deterministic tally are in
