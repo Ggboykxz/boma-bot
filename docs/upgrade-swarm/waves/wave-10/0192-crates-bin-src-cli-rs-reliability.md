@@ -11,8 +11,8 @@ or GUESS (inferred). Read-only task; only this file was written.
 - `probe` is the only job that skips `load_config()` (cli.rs:77), so it needs no `BOMA_DATABASE_URL`
   by design (module doc, cli.rs:4-6). Every other job calls `load_config()` (cli.rs:93-97), which
   parses the whole environment and installs the global tracing subscriber before dispatch.
-- `main.rs:17-19` returns `anyhow::Result<()>` straight from `cli::run()`; the binary edge is the
-  one place anyhow is allowed (AGENTS.md).
+- `main.rs:17-19` returns `anyhow::Result<()>` from `cli::run()`; the binary edge is the one place
+  anyhow is allowed (AGENTS.md).
 - Existing tests (cli.rs:99-155) cover happy parsing for every job, probe defaults, admin nesting,
   and rejection of an unknown job (`req_058_an_unknown_job_is_refused`).
 
@@ -65,8 +65,7 @@ or GUESS (inferred). Read-only task; only this file was written.
 
 H1 (cli.rs, low risk). Validate `--path` at the boundary: require a leading `/`, reject control
 characters (especially CR/LF) and whitespace, cap at 512 bytes. Add
-`req_058_probe_path_refuses_crlf` and `req_058_probe_path_requires_leading_slash`. Keeps the
-flag; tightens accepted values.
+`req_058_probe_path_refuses_crlf` and `req_058_probe_path_requires_leading_slash`. Flag unchanged.
 
 H2 (cli.rs, low risk). Pass the job name into `load_config(job)` and include it in the context:
 `configuration for 'rekey' is invalid`. Call sites at cli.rs:79, 86-89. Add a test asserting the
