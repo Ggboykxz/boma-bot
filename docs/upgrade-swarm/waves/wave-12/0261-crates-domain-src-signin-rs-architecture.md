@@ -3,8 +3,8 @@
 Worker: 261 | Lens: architecture | Module: `crates/domain/src/signin.rs`
 Status: proposal only — no code changed | Language: English
 Scope: sign-in request model structure inside `boma-domain` (pure rules: no IO, no async, no clock).
-Behaviour contract: REQ-060 (`spec/01-requirements.md:500-510`). Wire strings `pending` /
-`granted` / `refused` and all public field names are compatibility surfaces — keep them.
+Contract: REQ-060 (`spec/01-requirements.md:500-510`). Wire strings `pending`/`granted`/
+`refused` and public field names are compatibility surfaces — keep them.
 
 ## 1. Current structure (CONFIRMED — read this session)
 
@@ -48,7 +48,6 @@ wire/db     unchanged strings; only the mapping code shrinks
 ```
 
 No new crate dependency in `boma-domain`; validation stays dependency-free.
-
 ## 3. Concrete upgrades (ranked: value / risk)
 
 ### U1 — Own the status vocabulary and the legal transitions (high value, low risk)
@@ -110,13 +109,11 @@ be part of a published contract, drop the rename and keep only the re-export.
 - D1 (owner): U2 folds `granted_by` into enum variants — acceptable internal API change?
 - D2 (owner): is stricter origin/display_name validation (U3) an acceptable DEVIATION?
 - D3: does a grant reuse key already exist outside this module (U4)? Needs a grep in infra.
-
 ## 5. Evidence and limits
 
-CONFIRMED from files read this session: `signin.rs` (full), `ids.rs` (full), `lib.rs` (full),
-`ticket.rs` (full), `infra/src/stores/signin.rs:1-70`, `app/src/usecases.rs:9700-9794`,
-`api/src/wire.rs:2110-2148`, `api/src/authroutes.rs:90-109`, `api/src/rpc.rs:4114-4122`,
-`testkit/src/memory.rs:8851-8919`, and `spec/01-requirements.md:500-510`.
-GUESS items are labelled above. No commands, tests or goldens were run — fixture impact of
-U2/U3 is unverified; the implementing wave must check goldens before changing behavior.
-Line budget: ~118.
+CONFIRMED from files read this session: `signin.rs`, `ids.rs`, `lib.rs`, `ticket.rs` (full),
+`infra/src/stores/signin.rs:1-70`, `app/src/usecases.rs:9700-9794`, `api/src/wire.rs:2110-2148`,
+`api/src/authroutes.rs:90-109`, `api/src/rpc.rs:4114-4122`, `testkit/src/memory.rs:8851-8919`,
+`spec/01-requirements.md:500-510`. GUESS items are labelled above. No commands, tests or
+goldens were run — fixture impact of U2/U3 is unverified; the implementing wave must check
+goldens before changing behavior.

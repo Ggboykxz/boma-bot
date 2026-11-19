@@ -115,6 +115,5 @@ executor config types.
 
 U1 → U2 → U3 → U5 → U4 (optional). Gate each step with `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings` and the domain test suite; keep
-`bots.connectExternal` / `bots.agentStatus` wire shapes and migration 0054 unchanged (any
-difference is a recorded DEVIATION per AGENTS.md). Traceability: new tests declare `req_059_…` in
-their names. Keep the frozen REQ-001..058 floor untouched.
+`bots.connectExternal` / `bots.agentStatus` wire shapes and migration 0054 unchanged (DEVIATION
+otherwise). Tests declare `req_059_…`; keep the frozen REQ-001..058 floor untouched.
