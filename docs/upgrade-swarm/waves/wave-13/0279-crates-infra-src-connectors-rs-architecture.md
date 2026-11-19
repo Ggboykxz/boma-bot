@@ -116,5 +116,4 @@ secrets/PII in logs — URLs may carry query tokens; log only the validated host
 - `req_032_http_json_keeps_status_content_type_and_body_shape`.
 - `req_032_feed_parser_never_panics_on_arbitrary_bytes` (proptest) + Atom/RSS entity cases.
 - `req_032_connector_call_emits_structured_span_without_url_or_token`.
-
-Status: proposal only; no code changed (READ-ONLY worker).
+- Status: proposal only; no code changed (READ-ONLY worker).
