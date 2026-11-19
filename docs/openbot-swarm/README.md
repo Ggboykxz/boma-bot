@@ -12,7 +12,7 @@ Each brief is **inspiration only**: no upstream code, asset, wording or brand en
 Workers read the upstream capability as data, then write a parity proposal grounded in our spec,
 BoardUI tokens and existing RPCs. Waves of live Queen/worker agents consume the briefs in order.
 
-Status: waves 1-3 complete (30 proposals in `waves/`); briefs 31-1000 queued. During wave 3 the
+Status: waves 1-4 complete (40 proposals in `waves/`); briefs 41-1000 queued. During wave 3 the
 sparse clone was temporarily lost to a session restart; those workers were told to mark upstream
 claims GUESS. The clone was re-established at HEAD `02a7493` with docs/apps/packages/src/scripts,
 so later waves read the target directly.
