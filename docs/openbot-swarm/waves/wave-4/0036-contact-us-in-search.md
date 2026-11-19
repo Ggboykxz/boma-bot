@@ -27,16 +27,16 @@
 
 ## 2. Where Boma Bot stands (CONFIRMED unless marked)
 
-- No contact/support screen in spec/08 §8.1 (anything not listed is not a screen), no contact RPC, no
-  contact field; `/api/auth/capabilities` advertises auth/billing/`localFirst` only (spec/openapi.yaml:81-106).
+- No contact/support screen in spec/08 §8.1 (unlisted means absent), no contact RPC/field; capabilities
+  advertise auth/billing/`localFirst` only (spec/openapi.yaml:81-106).
 - The only **shipped, wired** search is `/app/artifacts`: `artifacts.search` narrows the grid client-side
   over `artifacts.listSpace` (spec/08 §8.5, REQ-036; `artifacts-grid.tsx`; `apps/web/lib/api/rpc.ts:1045`;
   `artifacts.spec.ts` already pins narrowing).
 - Two other "search" filters are dormant template material — `dashboard-sidebar.tsx` (⌘/Ctrl-L over local
   labels; "Support" row is a dead `href="#"`) and `settings-storage.tsx` ("Search files" over mocked rows);
   nothing in the shipped shell imports either (grep clean).
-- spec/03 §3.1 (line 29) declares `search` of the 52 namespaces but nothing is wired: no `crates/api/src/rpc.rs`
-  procedure, no `search.*` in `apps/web/lib/api/rpc.ts`, no `spec/golden/search*.json`.
+- spec/03 §3.1 (line 29) declares `search` among the 52 namespaces but nothing is wired: no
+  `crates/api/src/rpc.rs` procedure, `search.*` wrapper in `apps/web/lib/api/rpc.ts`, or `spec/golden/search*.json`;
   `Message.searchTokens` (spec/02:42) is unreferenced. Inventing `search.*` is out of scope (GUESS).
 - The **artifacts library is the only RPC-backed corpus searchable in-app** — name, type, bot, size, updated
   time, version chain (REQ-036 MUST); the honest analogue of upstream's similar-report search.
@@ -70,9 +70,7 @@ via `t()` with English fallback (`artifacts.empty.support*`), 14 locales incl. R
 palette/hex, no `dark:` literals, no Pro, no second design system. The target is a configured URL, never
 rendered inline; RTL mirrors with `ms`/`me`, ids/URLs stay LTR in `<bdi>`.
 
-## 5. One REQ-named Playwright test
-
-In `apps/web/tests/artifacts.spec.ts` (reuse `seedGrid`; import `CAPABILITIES` as today):
+## 5. One REQ-named Playwright test (`apps/web/tests/artifacts.spec.ts`; reuse `seedGrid`)
 
 ```ts
 test("REQ-036 the artifacts empty result offers the support link only when the deployment configures one", async ({ page }) => {
@@ -81,9 +79,8 @@ test("REQ-036 the artifacts empty result offers the support link only when the d
   const search = page.getByRole("searchbox", { name: t("en", "artifacts.search") });
   await search.fill("zzz-no-match");
   await expect(page.getByRole("link", { name: t("en", "artifacts.empty.support") })).toHaveCount(0);
-  // Owner stubs capabilities with the support target; a later route shadows the earlier one.
-  await page.route("**/api/auth/capabilities", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...CAPABILITIES, supportUrl: "https://support.example.test/contact" }) }));
+  // A later route shadows the earlier one.
+  await page.route("**/api/auth/capabilities", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...CAPABILITIES, supportUrl: "https://support.example.test/contact" }) }));
   await page.reload();
   await search.fill("zzz-no-match");
   const help = page.getByRole("link", { name: t("en", "artifacts.empty.support") });
@@ -111,11 +108,11 @@ named, keyboard-reachable link; search still narrows. No golden needed (state, n
 No upstream code, asset, wording, brand or Pro; no phone-home, no silent send, no support transport; no
 new REQ/field/migration; REQ-017 untouched; no approval semantics. Upstream is an oracle, not a source.
 
-CONFIRMED — spec/08 §8.1/§8.5/§8.9, spec/01 REQ-036/REQ-057, spec/02:42, spec/03 §3.1 (line 29),
-spec/openapi.yaml:81-106; `artifacts-grid.tsx` empty-state (`t("artifacts.empty")`), `artifacts.spec.ts`
-(`seedGrid`), dormant `dashboard-sidebar.tsx`/`settings-storage.tsx` (unimported), `crates/api/src/rpc.rs`
-and `apps/web/lib/api/rpc.ts` (no `search`), no `spec/golden/search*.json`; upstream HEAD `559d5ac`:
-contact page + `/v1/contact` + per-IP/global rate limits, sitemap omits `/contact` (`content-feed.ts`),
+CONFIRMED — spec/08 §8.1/§8.5/§8.9; spec/01 REQ-036/REQ-057; spec/02:42; spec/03 §3.1 (line 29);
+spec/openapi.yaml:81-106; `artifacts-grid.tsx` empty-state, `artifacts.spec.ts` (`seedGrid`), dormant
+`dashboard-sidebar.tsx`/`settings-storage.tsx` (unimported), `crates/api/src/rpc.rs` and
+`apps/web/lib/api/rpc.ts` (no `search`), no `spec/golden/search*.json`; upstream HEAD `559d5ac`: contact
+page + `/v1/contact` + per-IP/global rate limits, sitemap omits `/contact` (`content-feed.ts`),
 similar-report search (`feedback.ts`), palette without a contact action (`global-search-sources.ts`),
 Help-rail destinations (`RailHelpMenu.tsx`). No build or test was run for this document.
 GUESS — the support-target config shape, whether Support becomes a rail/nav entry, copy tone, and any
