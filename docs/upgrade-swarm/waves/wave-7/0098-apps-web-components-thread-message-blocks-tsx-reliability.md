@@ -2,12 +2,11 @@
 
 ## Scope note
 
-This module renders one message's typed blocks; only `CardBlock` is stateful (an `answer` RPC plus
-local `busy`/`answerGiven`/`failure`/`draft`). The unread divider is owned by `thread-screen.tsx`
-(l.304-308, 479-490), not here, so this review covers only how block rendering and card answers can
-destabilise it. Confidence: **[C]** = verified by reading this file, `rpc.ts`, `thread-screen.tsx`,
-`spec/08-ui-ux.md` §8.3 and ADR-033 this session; **[G]** = inferred, needs a test to confirm.
-Proposal only — no code changed.
+Only `CardBlock` is stateful (an `answer` RPC plus `busy`/`answerGiven`/`failure`/`draft`). The
+unread divider is owned by `thread-screen.tsx` (l.304-308, 479-490), so this covers only how block
+rendering and card answers destabilise it. **[C]** = verified by reading this file, `rpc.ts`,
+`thread-screen.tsx`, `spec/08-ui-ux.md` §8.3 and ADR-033; **[G]** = inferred, needs a test.
+Proposal only — no code changed; no claim asserts a passing test.
 
 ## 1. Failure modes
 
@@ -24,9 +23,9 @@ Proposal only — no code changed.
    pins `busy = true` forever — the card can never be acted on again.
 3. **[C] Index-key remount.** `MessageBlocks` keys rows by `` `${block.type}-${index}` `` (l.36). A
    streamed update or an inserted/reordered block shifts a card's index, React remounts it, and
-   `answerGiven`/`failure` reset to null: the card reverts to "Waiting" with live Approve/Deny while
-   the parent's `answeredCards` set has already lifted the composer gate. Card and gate disagree, and
-   a second answer is offered for an already-answered card (server then returns `CONFLICT`).
+   `answerGiven`/`failure` reset to null: the card reverts to "Waiting" with live buttons while the
+   parent's `answeredCards` set has already lifted the composer gate — card and gate disagree, and a
+   second answer is offered (server then returns `CONFLICT`).
 4. **[C] One-way, thin callback.** `onCardAnswered` is optional and carries only `(cardId, answer)`
    with no outcome or kind. If the parent omits it the local card looks answered but the gate stays
    blocked. `thread-screen.tsx` (l.386-388) only ever adds the id to a set — no persistence — so a
@@ -38,9 +37,8 @@ Proposal only — no code changed.
 
 6. **[C] The guard is correct today but fragile.** `draft.trim()` is submitted only when non-empty
    (l.208-211) and submit is disabled while blank (l.222). ADR-033 removed a former
-   `draft.trim() || "approve"` fallback; any refactor that reintroduces a default answer inside
-   `answer()` silently recreates the safety defect. Treat this as a regression-test invariant, not a
-   one-off fix.
+   `draft.trim() || "approve"` fallback; any refactor restoring a default inside `answer()` recreates
+   the safety defect. Treat this as a regression-test invariant, not a one-off fix.
 7. **[C] Answer string is overloaded as UI state.** The Approve button calls `answer("approve")`
    (l.189) and the checkmark/label key off `answerGiven === "approve"` / `"deny"` / `"answered"`
    (l.155-160, 233). A `question` answered with the literal text "approve" renders the green check
@@ -56,9 +54,8 @@ Proposal only — no code changed.
 9. **[C] Answer is not locally inert.** `AnswerReply.runId` (rpc.ts l.451-457) means an answer resumes
    the held run, which streams new messages. `thread-screen` recomputes `dividerIndex` from `readSeq`
    and `unreadCount` (l.306-308); `onCardAnswered` advances neither, so immediately after answering
-   the divider can sit stale relative to the new messages. Fix belongs in `thread-screen`
-   (refetch `threadsHead` / advance read position), but this module must not assume a stable block
-   list across the answer.
+   the divider can sit stale. The fix belongs in `thread-screen` (refetch `threadsHead` / advance
+   read position); this module must not assume a stable block list across the answer.
 10. **[C] Index keys corrupt the "last read" boundary visually.** When the server replaces a card
     block with an answered text block, following blocks change index and React reuses the wrong
     instance — text/image/file content can briefly render under the wrong block before settling,
@@ -76,18 +73,18 @@ Proposal only — no code changed.
 13. **[C] Unknown card kinds become questions.** `kind` is any string. Only `approval`/`purchase`
     and `question` are handled (l.121-122); `takeover` — a card kind in §8.3 (l.90) — and any
     unknown kind fall into the free-text form, inviting a user to "answer" a takeover card.
-14. **[C] `default: return null` hides data.** `BlockView` (l.97-99) silently drops any block type
-    outside the union (e.g. a new streamed type before `normalizeBlock` catches up): content vanishes
-    with no signal. React escapes `block.text`/`name`, so there is no XSS here, only silent loss.
+14. **[C] `default: return null` hides data.** `BlockView` (l.97-99) silently drops block types
+    outside the union (e.g. a new streamed type before `normalizeBlock` catches up): content
+    vanishes with no signal. React escapes `text`/`name`, so this is loss, not XSS.
 
 ## 2. Concrete hardening (prioritized)
 
 **P0 — close the answer races**
 1. **[C] Ref-based in-flight lock + `AbortController`.** Keep `useRef<Set<string>>` (or one cardId
    key) checked and set *before* the async call, with a single `busy` map for rendering; store the
-   controller, pass `signal` to `threadsAnswer`, abort in unmount cleanup, release in `finally`.
-   *Risk:* aborting a request the server already applied looks like local failure — reconcile on the
-   next refetch / `CONFLICT`, never claim the effect did not happen.
+   controller, pass `signal` to `threadsAnswer`, abort on unmount, release in `finally`. *Risk:*
+   aborting a request the server applied looks like local failure — reconcile on refetch / `CONFLICT`,
+   never claim the effect did not happen.
 2. **[C] Stable keys.** Use `cardId` for cards and `artifactId` for image/file, index only as last
    resort. *Risk:* cardId must be globally unique; if not, prefix with the message id (new prop).
 3. **[C] Separate outcome from answer text.** Replace `answerGiven: string | null` with an explicit

@@ -22,19 +22,17 @@ cross-reference wave-3/0036 (owner of the entry).
 
 ## Failure modes
 
-1. **Bad step param masquerades as step 1.** `parseStep`'s default branch hides broken links,
-   mistyped URLs and handler fallbacks. Analytics and tests see "step 1" for a non-step-1 URL.
-   No `dynamicParams = false`: "only 1/2/3 exist" is implied, enforced nowhere here.
+1. **Bad step param masquerades as step 1.** The default branch hides broken links, mistyped URLs
+   and handler fallbacks; analytics and tests see "step 1" for a non-step-1 URL. No
+   `dynamicParams = false`: existence of 1/2/3 only is implied, never enforced.
 2. **Partial completion state is invisible at the page boundary.** The page passes only `step`.
    Deep-linking to `/onboarding/3/` with empty or stale `spaceId` (space deleted server-side) is
    accepted silently; the failure surfaces later as a cryptic `modelsConnect` error, or never.
-   `/onboarding/2/` with no space bookmark likewise "works" while creating an orphaned bot.
+   `/onboarding/2/` with no bookmark likewise "works" while creating an orphaned bot.
    Steps are spec-skippable, so gating is wrong — but *validating* is not. [wizard]
 3. **Lost progress, two kinds.** (a) `saveProgress`/`loadProgress` failures are swallowed; a
-   storage-full or private-mode user gets zero resume signal, silently, despite the
-   "reloading resumes" contract (spec §8.2). (b) Form drafts (`spaceName`, `botName`) live in
-   component state only; browser back/forward or an accidental refresh discards typed-but-unsubmitted
-   input with no warning. Neither is a crash; both are silent data loss.
+   storage-full/private-mode user gets zero resume signal despite spec §8.2. (b) Form drafts live
+   in component state only; back/forward or refresh discards typed-but-unsubmitted input.
 4. **SSR / prerender fragility.** Sound today (storage read in effect only), but fragile: any
    future "resume-aware" edit reading storage during render or in a `useState` initializer
    reintroduces hydration mismatch on a static page with no server to patch it. `autoFocus` inputs
@@ -42,8 +40,8 @@ cross-reference wave-3/0036 (owner of the entry).
 5. **Step-3 dead end with no error and no retry.** If `modelsCatalog`/`modelsCredentials` both
    fail or hang (no timeout beyond unmount-abort), `catalog` stays `null` →
    `noProvidersReachable` false; `credentials` stays `null` → `connected` 0 → `canFinish` false →
-   **Finish permanently disabled, zero feedback**. The user is stranded on the one non-skippable
-   step. `allSettled` was chosen for resilience; without a rejection path it is a silent trap.
+   **Finish permanently disabled, zero feedback** — stranded on the one non-skippable step.
+   `allSettled` without a rejection path is a silent trap.
 6. **Double-fire before `busy` flips.** Enter handlers call `createSpace`/`createBot` without the
    `busy` check the buttons have; rapid Enter/Enter or Enter+click can issue duplicate
    `spacesCreate`/`botsCreate` (cf. 0036). Also, post-connect `modelsCredentials()` sits in the
@@ -106,10 +104,9 @@ cross-reference wave-3/0036 (owner of the entry).
 
 ## Risks & rollout
 
-Highest risk is #1 (404 vs redirect) — it is externally visible; decide redirect-vs-404 with the
-owner before flipping, and log the choice in docs/PARITY.md. #2/#3 add controls and may shift UI
-goldens. #4/#5/#6 are internal and low risk. Order: 6 → 1 (behind owner decision) → 4 → 5 → 3 →
-2 → 7. No new dependencies; bundle impact negligible.
+Highest risk is #1 (404 vs redirect) — externally visible; decide with the owner before flipping,
+and log the choice in docs/PARITY.md. #2/#3 add controls and may shift UI goldens. #4/#5/#6 are
+internal, low risk. Order: 6 → 1 (owner decision) → 4 → 5 → 3 → 2 → 7. No new dependencies.
 
 ## Success criteria
 

@@ -14,7 +14,7 @@ boundary and keeps `page.tsx` trivial. Complements 0043 (architecture). No overl
 - Mount: `authCapabilities(signal)` (abort on unmount) → `ready`/`error`; `localFirst === true`
   redirects `/app/`; else render skeleton → form.
 - `submit`: `setStatus("submitting")` → `await authSignUp({email, password, name, locale:"en"})`
-  with **no** `AbortSignal` and no timeout → `router.replace(next)`; **any** rejection maps to
+  with **no** `AbortSignal`/timeout → `router.replace(next)`; **any** rejection maps to
   `status="failed"` + `signup.error` ("the address may already exist"). `next` is same-origin-checked.
 - `RpcError` carries `code`/`status`; `throwErr` preserves HTTP status; the screen ignores both.
 - Server: rate-limit 5 per 600 s per IP; email validated + lowercased (`Email::new`); password
@@ -112,9 +112,9 @@ boundary and keeps `page.tsx` trivial. Complements 0043 (architecture). No overl
 
 ## Suggested gates
 
-`pnpm --filter @boma/web test` (unit: error-code mapping table), Playwright a11y spec gains a
-closed-sign-up fixture, Rust integration test: concurrent first sign-up admits exactly one owner
-(bootstrap gate), contract test: client minLength === server MIN_PASSWORD_LENGTH.
+`pnpm --filter @boma/web test` (error-code mapping table); Playwright a11y spec gains a
+closed-sign-up fixture; Rust integration test: concurrent first sign-up admits exactly one owner
+(bootstrap gate); contract test: client `minLength` === server `MIN_PASSWORD_LENGTH`.
 
 ## Explicit non-goals
 
