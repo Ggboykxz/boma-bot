@@ -115,18 +115,18 @@ where
 {
     let mut transaction = pool.begin().await.map_err(unavailable)?;
 
-    // `is_local = true`: the setting belongs to this transaction only, so a pooled connection
-    // never carries a tenant to the next borrower.
-    sqlx::query("SELECT set_config('boma.space_id', $1, true)")
-        .bind(space_id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(unavailable)?;
-    sqlx::query("SELECT set_config('boma.system_reason', $1, true)")
-        .bind(system_reason)
-        .execute(&mut *transaction)
-        .await
-        .map_err(unavailable)?;
+    // Both settings land in one statement: there is no point inside the transaction where the
+    // space is set but the reason is not (or vice versa). `is_local = true` keeps them scoped to
+    // this transaction, so a pooled connection never carries a tenant to the next borrower.
+    sqlx::query(
+        "SELECT set_config('boma.space_id', $1, true), \
+         set_config('boma.system_reason', $2, true)",
+    )
+    .bind(space_id)
+    .bind(system_reason)
+    .execute(&mut *transaction)
+    .await
+    .map_err(unavailable)?;
 
     let outcome = body(&mut transaction).await;
     match outcome {
