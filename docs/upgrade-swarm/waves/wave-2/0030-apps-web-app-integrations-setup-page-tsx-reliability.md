@@ -1,10 +1,9 @@
 # 0030 — apps/web/app/integrations/setup/page.tsx — reliability (v0.4.0)
 
 Worker #030 (retry) · `apps/web/app/integrations/setup/page.tsx` · reliability · READ-ONLY review of `before-m5`.
-The module is a 16-line server component (`Suspense` around the client screen); the failure surface lives in
-`components/integrations/integrations-setup.tsx`, `lib/api/rpc.ts` (`call()`), the Slack callback in
-`crates/api/src/public.rs`, and the Rust messaging store/use-cases. No code ran; facts CONFIRMED by reading,
-test status GUESS.
+16-line server component (`Suspense` around the client screen); the failure surface lives in `components/integrations/integrations-setup.tsx`, `lib/api/rpc.ts` (`call()`), the Slack callback in
+`crates/api/src/public.rs`, and the Rust messaging store/use-cases. No code ran; facts CONFIRMED by
+reading, test status GUESS.
 
 Spec anchors: spec/08-ui-ux.md §8.7 (`/integrations/setup` — post-OAuth landing: confirm the connection,
 surface a partial-install report rather than a green check), §8.1/§8.9 (blank panel is a bug), REQ-032/
@@ -20,8 +19,8 @@ REQ-034/REQ-048, REQ-057 (a11y).
 
 ### F1. Total load failure renders a blank page, indistinguishable from "nothing installed"
 Rejected `allSettled` results are silently dropped (integrations-setup.tsx:67-86); `phase` then flips to
-`"ready"`. If all three RPCs fail (offline, 500, 401), the screen renders header + nothing — no error,
-no retry, no empty state. House style already solves this (`admin/plugins-screen.tsx`: `error` phase +
+`"ready"`. If all three RPCs fail (offline, 500, 401), the screen renders header + nothing — no error, no
+retry, no empty state. House style already solves this (`admin/plugins-screen.tsx`: `error` phase +
 `role="alert"` panel + `common.retry`; `activity-screen.tsx` same). `call()` has no timeout either
 (rpc.ts:245), so a hung RPC pins the skeleton forever (§8.1).
 P1. Track per-section status (`loading|ready|failed`) or one `loadFailed` flag. On any rejection render
@@ -88,12 +87,11 @@ P4. (a) Delete or implement the `partial` phase — minimal: compute `hasSkipped
 ## axe / a11y notes
 The page is in the a11y route list (`tests/a11y.spec.ts`). Failure panels use `role="alert"`; banner +
 reconciliation note keep `aria-live="polite"`; retry keeps visible focus (`boma-focus`); no colour-only
-states; skeleton `aria-hidden`; new copy must hold 4.5:1 both themes — and ship × 14 locales or the
-catalogue falls back.
+states; skeleton `aria-hidden`; new copy must hold 4.5:1 both themes — × 14 locales or the catalogue falls back.
 
 ## Risks and trade-offs
-- R1. Goldens/REQ-057 pin this page's landmarks: F1's error panel and F4(b)'s extra section change
-  landmarks — review against fixtures before merging; DEVIATION, never silent drift.
+- R1. Goldens/REQ-057 pin this page's landmarks: F1's error panel and F4(b) change landmarks —
+  review against fixtures before merging; DEVIATION, never silent drift.
 - R2. F2 touches the callback route (Rust) + page contract (`?error=`): owning-wave coordination required;
   keep the API's uniform 401 byte-identical for non-browser callers (security property — do not weaken).
 - R3. P5 (10 s RPC timeout) affects every procedure; list long-poll procedures and opt them out — mechanical
@@ -102,12 +100,10 @@ catalogue falls back.
   health fields are additive server work). Ship page-side first with honest wording, then wire health.
 - R5. F4(b) could surface stale "removed" installs and confuse re-install; copy must say why + link the
   re-auth flow; pair with the server-side reinstall idempotency fix or re-install still dead-ends (F2).
-- R6. Error copy must never include server internals; `RpcError.message` is safe to show per rpc.ts, keep it.
+- R6. Error copy never includes server internals; `RpcError.message` is safe to show per rpc.ts, keep it.
 
 ## Explicit non-goals
-No redesign of the install flows (Slack/Telegram/generic), no per-bot assignment fiction, no retry queue for
-platform delivery (deliberate: duplicate delivery worse than none), no i18n rework, no visual restyle,
-no admin/plugins surface.
+No redesign of the install flows (Slack/Telegram/generic), no per-bot assignment fiction, no retry queue for platform delivery (deliberate: duplicate delivery worse than none), no i18n rework, no visual restyle, no admin/plugins surface.
 
 ## Suggested v0.4.0 rollout
 Wave A (page-only, revertable): P1 (error+retry), P3 (banner allowlist + corroboration), P4(a,b), F5.

@@ -19,7 +19,6 @@ REQ-004, REQ-005, REQ-012, REQ-017, REQ-020.
 - Clocks are injected (`Clock::now() -> String`) and timestamps are caller-supplied RFC 3339, so
   goldens are reproducible (CONFIRMED). Fenced writes exist (`set_status`, `set_steering_consumed`,
   `fence: Option<i64>`) (CONFIRMED).
-- Secrets cross as `secrecy::SecretString` on the newer ports (CONFIRMED).
 
 ## Failure modes
 
@@ -58,8 +57,7 @@ hand-writes the Postgres adapters (CONFIRMED). Two separate implementations of ~
 construction: an in-memory store that does not allocate `seq` atomically, does not enforce the
 `(thread, run)` pending-card uniqueness, or does not return `Conflict` on a second `accept` will make
 a REQ test green while the real store rejects the same call (GUESS — needs a differential run).
-Scripted clocks/ids return canned values, so boundary cases (`expires_at > now`, lease expiry, fence
-mismatch) are exercised with convenient timestamps that production never produces (CONFIRMED design).
+Canned scripted clocks/ids exercise boundary cases (`expires_at > now`, fence) with timestamps production never produces (CONFIRMED).
 No shared conformance suite that runs one behavioural assertion set against both families was found
 (GUESS — limited keyword search of `crates/testkit/src`).
 
