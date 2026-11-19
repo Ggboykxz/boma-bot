@@ -7,4 +7,4 @@ Each brief is **inspiration only**: no upstream code, asset, wording or brand en
 Workers read the upstream capability as data, then write a parity proposal grounded in our spec,
 BoardUI tokens and existing RPCs. Waves of live Queen/worker agents consume the briefs in order.
 
-Status: wave 1 complete (10 proposals in `waves/wave-1/`); briefs 11-1000 queued.
+Status: waves 1-2 complete (20 proposals in `waves/`); briefs 21-1000 queued.

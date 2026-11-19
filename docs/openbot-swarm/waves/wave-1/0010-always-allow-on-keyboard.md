@@ -10,8 +10,7 @@
 The analysed host separates an agent's overall permission tier from a distinct, standing "let this
 tool class run without asking" decision the *user* owns. Restated generically:
 
-- The standing grant is a named, reversible policy state, not the absence of a prompt. When it is on,
-  no decision card is created — there is nothing to answer.
+- The standing grant is a named, reversible policy state: when on, no decision card is created.
 - Where the provider records it, the choice is scoped per server, per tool and per account, kept in
   that provider's own file-backed config; the host stores nothing of its own for consent.
 - A host-side automation layer can answer its own approvals so no card reaches a client; a client
@@ -35,9 +34,8 @@ it and get a visible, non-animated response? This defines that path, not a permi
 
 - §intro "**Keyboard first.** Every action in a menu is reachable without a pointer." The policy
   control must be tabbable and operable with Enter/Space, never pointer-only — the anti-pattern above.
-- §8.3 "Waiting on user — the card is the state: it scrolls into view, **takes focus** ...". A modal
-  card takes focus today; with no card, on a mode change move focus to the named status region (or
-  the composer, per idle) instead of leaving focus on a removed card.
+- §8.3 "Waiting on user — the card ... **takes focus** ...". With no card, on a mode change move focus
+  to the named status region (or composer, per idle) instead of leaving it on a removed card.
 - §8.9 announcements go through a polite live region, "the transcript itself is not a live region."
   Announce a mode change once there; a screen reader hears it without reading every token.
 - §8.9 "**Keyboard** — send, new line, stop run, focus composer, next/previous bot, close panel,
@@ -58,11 +56,10 @@ it and get a visible, non-animated response? This defines that path, not a permi
 - **Shortcut hints** — reuse the installed `Kbd` component (`components/base/kbd/kbd.tsx`), already
   token-based; no second pill style. Approve/Deny stay native buttons, so Enter/Space work for free.
   Always-allow adds **no** global key handler; any handler respects the §8.9 text-field guard.
-- **Animate rule — keyboard shortcuts must not be animated.** `tests/motion.spec.ts` already states
-  "The frequent actions (keyboard, list navigation) deliberately have no animation." A shortcut's
-  visible effect is immediate: no transition, ripple, pulse or entrance animation on focus changes or
-  shortcut-driven state changes. The only permitted motion is the 120–180 ms, reduced-motion-respecting
-  token cross-fade for the card→empty status change (§8.9), never on a value being actively read.
+- **Animate rule — keyboard shortcuts must not be animated.** `tests/motion.spec.ts` says "The frequent
+  actions (keyboard, list navigation) deliberately have no animation." A shortcut's effect is immediate:
+  no transition, ripple or entrance animation on focus/shortcut changes. The sole permitted motion is a
+  120–180 ms reduced-motion token cross-fade for the card→empty change (§8.9), never on a value being read.
 
 ## 5. One REQ-named Playwright test
 
@@ -99,8 +96,8 @@ test("REQ-017 always-allow mode has a keyboard-only path with a visible focus ri
 });
 ```
 
-It pins the no-card state, a Tab-reachable control, a token focus ring, the enabled composer and no
-animation (adjust the switch role/name to the implementation; REQ name and assertions stay).
+It pins no-card state, Tab-reachable control, token focus ring, enabled composer and no animation
+(adjust the switch role/name to the implementation; REQ name and assertions stay).
 
 ## 6. First slice (test-first, small, reversible)
 
@@ -112,12 +109,11 @@ animation (adjust the switch role/name to the implementation; REQ name and asser
    endpoint is confirmed (GUESS — check `crates/api/src/rpc.rs`).
 4. On mode change, move focus to the status region and announce once via the polite live region;
    no animation on any keyboard/shortcut effect (§4).
-5. Gates: web typecheck, lint, the REQ-017 test, `motion.spec.ts`, axe in light/dark/RTL. Record
-   CONFIRMED/GUESS in `docs/STATE.md`; no DEVIATION, no new dependency.
+5. Gates: typecheck, lint, REQ-017 test, `motion.spec.ts`, axe light/dark/RTL; log state, no DEVIATION.
 
 ## 7. Boundaries
 
 - No upstream code, asset, wording or brand; §1 is inspiration only, restated.
 - No Pro, no second design system, no hand-edited BoardUI skill; free-tier tokens only.
 - No new REQ, permission-semantics change or policy write without the owner — logged as a proposal.
-- Strict animate rule: keyboard shortcuts and focus changes are never animated.
+  Strict animate rule: keyboard shortcuts and focus changes are never animated.
