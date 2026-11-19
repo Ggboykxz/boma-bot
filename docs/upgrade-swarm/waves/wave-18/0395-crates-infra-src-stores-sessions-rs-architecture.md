@@ -1,0 +1,44 @@
+# 0395 — crates/infra/src/stores/sessions.rs — architecture lens (v0.4.0)
+
+- Target: `before-m5` (v0.3.0-rc5), module `crates/infra/src/stores/sessions.rs` (92 lines). Read-only review; no code edited.
+- Related files read: `crates/infra/src/stores/rows.rs` (`SessionRow`, `rows::session`), `crates/infra/src/tenant.rs` (`as_system`, `unavailable`, `is_unique_violation`), `crates/app/src/ports.rs` (`SessionStore`, `NewSession`), `crates/domain/src/account.rs` (`Session`), `crates/app/src/usecases.rs` (`resolve_session`), `crates/app/src/accounts.rs` (`grant_session`, SCIM paths), `crates/testkit/src/memory.rs` (`MemorySessionStore`), `migrations/0002_m1.sql`, `crates/infra/tests/m1.rs` (`req_041_…`), `spec/01-requirements.md` REQ-041/043/044/045, `spec/05-known-defects.md` D-08.
+- Status of claims: all line references below are CONFIRMED by reading the files this session; the cleanup-job gap is CONFIRMED by a repo-wide grep (no `delete_expired`/sessions sweep exists).
+
+## The shape today
+
+A deliberately thin adapter: `PostgresSessionStore { pool: PgPool }`, `const fn new`, plus four `SessionStore` methods written as inline SQL with `.map_err(tenant::unavailable)`. `sessions` is a **global** table (no `space_id`, no RLS), keyed by `id`, with `token_hash bytea UNIQUE`, `expires_at`/`created_at timestamptz`, FK `user_id → users ON DELETE CASCADE`, and an index on `user_id` (CONFIRMED: `0002_m1.sql:104-110,299`). The domain `Session` carries only `id`, `user_id`, `expires_at` as an RFC-3339 string via `boma.rfc3339(...)`; the hash never leaves the store.
+
+What is good and should stay: the hash is never returned or logged; `find_by_token_hash` re-checks it in constant time (`sessions.rs:58-60`); `delete_for_user` runs in a `tenant::as_system(…, SystemReason::Authentication)` transaction with rollback on error; `rows.rs` owns the row→domain mapping.
+
+The architecture is weak in five places:
+
+1. **No expiry at the storage layer.** `resolve_session` compares `expires_at.as_str() <= now.as_str()` in Rust (`usecases.rs:87`); the store still returns expired rows, and nothing ever deletes them. Expired cookies accumulate forever, and a single missed app-level check would authenticate an expired session.
+2. **Session revocation SQL is scattered.** Besides `delete_for_user`, `accounts.rs:175` and `accounts.rs:253` issue their own `DELETE FROM sessions WHERE user_id = $1` in SCIM paths, and `crates/infra/tests/common/mod.rs:371` a third variant with `LIKE ... ESCAPE`. Four copies of one rule can drift, and only two use a system reason.
+3. **Unique-violation handling diverges from the in-memory oracle.** `MemorySessionStore::create` returns `AppError::Conflict` on a duplicate hash (`memory.rs:1697-1703`); the Postgres adapter maps the same condition to `Unavailable` (503). `tenant::is_unique_violation` already exists (`tenant.rs:159`) and is used by cards/runs/messages, but not here. CONFORMANCE risk: the memory store and the real store answer differently on the same input.
+4. **Tenant/transaction policy is incoherent inside one file.** `create`, `find_by_token_hash` and `delete` use the raw pool; only `delete_for_user` opens a system transaction (extra `BEGIN` + two `set_config` + `COMMIT`). Sessions are not tenant data, so the wrapper is arguably pure overhead — but `AGENTS.md` wants every query tenant-aware, and ADR-002's static check is about *where* `boma.space_id` is set, not whether it is set everywhere. The choice is undocumented. Separately, the `SELECT`/`RETURNING` projection is repeated as a raw string, so a column rename breaks in two places in this file despite `rows.rs`'s "one place" promise.
+5. **Secret-equivalent data sits in a `#[derive(Debug)]` row.** `SessionRow.token_hash: Vec<u8>` (`rows.rs:33-38`) is fully printable if the row is ever traced, and the exact lookup already proves equality (`WHERE token_hash = $1` on a UNIQUE bytea) before the constant-time re-check. `Debug` on a secret is a latent leak, not a current one (GUESS: no log site found in this module).
+
+## Concrete upgrades for v0.4.0
+
+### 1. Make expiry a store invariant: filtered read + bounded pruning (highest value)
+Add `delete_expired(now: &str, limit: i64) -> Result<u64, AppError>` that deletes `WHERE expires_at < $1::timestamptz` in batches (never one unbounded `DELETE`), and call it from the existing periodic job that scans leases. Optionally add `AND expires_at > now()` to the lookup as defence in depth. Keep the app-level string check too — it is cheap and independent.
+Risks: (a) a filtered lookup changes the port's semantics for any caller that wanted expired rows (none found this session — GUESS, verify by grep before merging); (b) batched deletes need a test that a large backlog drains over several passes without holding a long transaction; (c) the `expires_at` string comparison in Rust is only safe for canonical UTC RFC-3339 — do not replace the DB comparison with it; (d) pruning is invisible to clients, so no DEVIATION, but it must be noted in `docs/STATE.md`.
+
+### 2. Own session revocation in this store; remove the scattered SQL
+Route the two SCIM deletions in `accounts.rs` through `sessions.delete_for_user` (or a shared `tx`-accepting helper if they must stay in one transaction with the membership/deactivation writes). Expose `delete_many_for_users` or a `delete_for_user_in(conn, …)` variant so callers keep their atomicity instead of inlining SQL.
+Risks: (a) `delete_for_user` currently owns its own transaction; a `&PgConnection` variant is needed or the SCIM atomicity regresses — this is the main design constraint; (b) the SCIM paths use `SystemReason::ScimDirectorySync`, which must be preserved, not silently replaced with `Authentication`; (c) `docs/QUALITY_BAR.md` forbids feature creep — this is a consolidation, not a new capability; keep the `u64` return so REQ-044/045 revocation counts stay testable.
+
+### 3. Map unique violations to `AppError::Conflict` and add a parity test
+Mirror the other stores: match `Err(error) if tenant::is_unique_violation(&error) => Err(AppError::Conflict)` in `create`, leaving other errors on `Unavailable`. Add an integration test that inserts the same `token_hash` twice and asserts `Conflict` on both adapters (Postgres and `MemorySessionStore`).
+Risks: (a) the error code changes from 503 to 409 on a duplicate hash — externally visible in principle; REQ-041 does not mandate either, so record the decision in `docs/STATE.md`, and in `docs/PARITY.md` if it counts as a DEVIATION; (b) genuine hash collisions are astronomically unlikely, so prefer a deterministic test that forces the same hash over hoping for one; (c) D-08 (asserted session lifetime) is adjacent — check that the auth config test also pins cookie attributes while touching this area.
+
+### 4. State one tenant/transaction policy and de-duplicate the projection
+Since `sessions` is global, document the rule: **no tenant wrapper for id/hash lookups and single-row writes; `as_system` for any multi-row or admin sweep**, with the reason enum chosen by the caller. Collapse the repeated `SELECT id, user_id, token_hash, boma.rfc3339(expires_at)` / `RETURNING` text into one `const SESSION_COLUMNS: &str` (or a small helper) so the shape is written once.
+Risks: (a) removing the wrapper from `delete_for_user` would lose its rollback — if you drop it, wrap the DELETE in a plain `pool.begin()` instead; (b) ADR-002's CI grep must still pass; (c) `query_as` is runtime-checked, so no `.sqlx` metadata needs regenerating, but a `const` string must stay in sync with `SessionRow` field order — add a compile-time-ish mapping test.
+
+### 5. Tighten secret hygiene around `token_hash`
+Give the hash its own narrow row type (or wrap it in `secrecy::SecretVec` with a manual `Debug` that prints `[REDACTED]`), so the value cannot be printed by a future `tracing::debug!(?row)`. Keep the exact `WHERE token_hash = $1` lookup and the `crate::crypto::constant_time_eq` re-check; do not "optimize" either away.
+Risks: (a) changing `NewSession.token_hash: Vec<u8>` (a public port field) to a secret newtype ripples into `app`, `testkit` and `conformance` — prefer a store-local row wrapper to keep the blast radius small; (b) `secrecy` is already the AGENTS default for secrets, but adding it here must be recorded in `docs/DEPENDENCIES.md` if not already; (c) any new log/span must carry session/user ids only, never the hash or cookie.
+
+## Explicit non-goals
+No new session feature outside REQ-041/044/045: no sliding expiry, rotation or reuse detection without a `docs/STATE.md` decision and approval first. No change to the hashed-token storage model, the `Session` wire shape, the constant-time comparison, or the `no-store` policy. No weakening of `req_041_…` or the tenant-isolation checks. Deviations from the spec or changes to externally visible error codes must be recorded in `docs/PARITY.md` before shipping.

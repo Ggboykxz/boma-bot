@@ -19,11 +19,10 @@ Reuse these patterns.
 ## 2. Failure modes
 
 ### 2.1 Loss / phantom failure
-- **CONFIRMED** `create` (l. 228-289) commits the INSERT inside `with_tenant`, then calls `find`
-  in a **second** transaction. If that read fails transiently, the caller gets `Unavailable`
-  (l. 289) although the installation was committed. Retry re-hits the unique slot and returns
-  `Conflict`. Net effect: an install that exists is reported as failed, then as a duplicate —
-  caller/DB state drift with no way to recover through the port.
+- **CONFIRMED** `create` (l. 228-289) commits the INSERT in `with_tenant`, then calls `find` in a
+  **second** transaction. A transient read failure returns `Unavailable` (l. 289) though the install
+  committed; retry re-hits the unique slot and returns `Conflict`. An existing install is reported
+  failed, then as a duplicate — state drift with no port-level recovery.
 - **CONFIRMED** `mark_removed` only flips `status`; `messaging_installations_platform_workspace`
   covers *all* rows, there is no delete port, and `create`'s conflict re-SELECT has no status filter.
   A removed workspace can never be reinstalled; `find_active_by_platform_workspace` returns `None`
@@ -38,12 +37,10 @@ Reuse these patterns.
   cursor or `has_more`: rows beyond 50 are invisible and truncation is undetectable.
 
 ### 2.2 Delivery order
-- **CONFIRMED** Both list queries use `ORDER BY created_at DESC` only. `created_at` defaults to
-  `now()` / callers pass timestamps, so ties are common; PostgreSQL gives no stable tie order, so
-  the same list can reorder between requests and a thread can appear to move across the (implicit)
-  boundary. This is read-order drift, not message delivery, but it makes "what arrived first"
-  unauditable. **GUESS**: actual send ordering lives in the worker/runs layer, not this store; do
-  not try to add sequencing here without a port-level idempotency key.
+- **CONFIRMED** Both lists use `ORDER BY created_at DESC` only; `created_at` comes from `now()` or
+  callers, so ties are common and PostgreSQL gives no stable tie order — the same list can reorder
+  between requests. **GUESS**: real send ordering lives in the worker/runs layer; do not add
+  sequencing here without a port-level idempotency key.
 
 ### 2.3 Deduplication
 - **CONFIRMED** Thread dedup is sound *per workspace*, but the key excludes `installation_id`
@@ -56,10 +53,9 @@ Reuse these patterns.
   `messaging_install_states` grows without bound and only becomes slower over time.
 
 ### 2.4 State drift / error classification
-- **CONFIRMED** Every `sqlx::Error` in the file is mapped through `tenant::unavailable` →
-  `Unavailable` (retryable). Permanent failures (unique violation, FK violation on a stale
-  bot/space/user id, check violation) are indistinguishable from a transient outage, so upper
-  layers waste retries and real bugs are hidden behind "dependency unavailable".
+- **CONFIRMED** Every `sqlx::Error` maps through `tenant::unavailable` → `Unavailable` (retryable).
+  Permanent failures (unique, FK on a stale bot/space/user id, check) are indistinguishable from a
+  transient outage: retries are wasted and real bugs hidden behind "dependency unavailable".
 - **CONFIRMED** `create` uses the caller's `created_at` for both timestamp columns while
   `mark_removed` uses `now()`; mixed clocks can move `updated_at` backwards, and `list` does not
   order by it, so the drift is invisible.
