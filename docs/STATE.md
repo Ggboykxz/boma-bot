@@ -142,6 +142,10 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
   pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
   for the owner's rc4 smoke.
+- **2026-11-19 — v0.3.0-rc5 cut (dev run `44429722001` 7/7 green, packaged Windows boot included).**
+  First build with the full UI/UX pass: swarm-selected approval cards, board filter, strict motion,
+  BoardUI form controls and 14 locales. rc4 remains published but superseded; v0.3.0 final waits for
+  the owner's rc5 smoke.
 - **2026-11-19 — motion pass, BoardUI form and 14 locales.** Motion follows the strict recipe:
   press feedback 100 ms ease-out (pointer only), card entrance 220 ms with the strong ease-out
   curve, 40 ms board-row stagger, reduced-motion keeps fade and drops movement. A `REQ-057`

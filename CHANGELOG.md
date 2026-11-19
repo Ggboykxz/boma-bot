@@ -4,6 +4,25 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [0.3.0-rc5] - 2026-11-19
+
+Release candidate 5: the UI/UX pass requested after rc4, validated by full dev run `44429722001`.
+
+### Added
+
+- **Contextual approval cards (REQ-007/017)** — BoardUI `Button`/`Input`, a translated region name,
+  effect/reversal copy and an explicit status line; chosen by a seven-worker Queen swarm by both
+  majority (5/7) and weighted vote (6.6/8.6). No wire change.
+- **Board assignee filter (REQ-038)** — BoardUI `Select` with column counts following the filter.
+- **Motion pass (REQ-057)** — pointer-only press feedback, strong-ease-out card entrance, 40 ms
+  stagger; reduced motion keeps the fade and drops movement. BoardUI form controls replace raw
+  inputs; 14 locales ship with core strings translated and English fallback for the long tail.
+
+### Fixed
+
+- Swarm dissent from the Rust worker was accepted as a scope guard: no transport or golden data
+  change shipped with the approval-card slice.
+
 ## [0.3.0-rc4] - 2026-11-18
 
 Release candidate 4: adds the group-room execution controls the owner asked for after rc3.
