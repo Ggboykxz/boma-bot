@@ -4,6 +4,46 @@ Notable changes to Boma Bot. This repository is pre-1.0; the format follows Keep
 loosely and the versions follow semver from the public contract's point of view (wire and HTTP
 interfaces, migrations, data formats), not from internal refactors.
 
+## [Unreleased]
+
+Everything pushed to `dev` after v0.3.0-rc5 (tag `40e4959`), verified by dev run `44559012804`
+(7/7 jobs green, including the packaged Windows boot gate). Entries are grouped by kind; **all
+of this ships in the next release**, and `CHANGELOG.md` is the authoritative record — nothing
+lands in a release without an entry here.
+
+### Fixed
+
+- **No implicit approval on an empty question answer (REQ-017, ADR-033)** — `CardBlock` no longer
+  submits `draft || approve` for question cards: Submit stays disabled until a non-empty answer
+  exists, the action reads "Send answer", and a `REQ-017` Playwright test proves no `threads.answer`
+  call fires on an empty field. The REQ-007 pending-card golden now pins the explicit affordance;
+  the three core locales carry the new copy. Approval and purchase cards are unchanged.
+- **Tenant settings are applied in one transaction-scoped statement (REQ-043, ADR-002)** — the space
+  id and the system reason were set by two sequential queries, leaving a window in which one was
+  present without the other. One `set_config` pair closes that window and halves the round trips;
+  a source-scan test pins the invariant. No wire change, no policy change.
+
+### Docs
+
+- **OpenBot parity swarm, waves 1-5** (`d5636ce`, `d80f1b5`, `a7745ae`, `41d4814`, `53fe72b`) —
+  50+ specialised workers restate upstream capabilities in our own words as parity proposals
+  (inspiration only; no upstream code, brand, wording, URLs or Pro components). Proposals live under
+  `docs/openbot-swarm/`.
+- **Internal v0.4.0 upgrade swarm, all 530 briefs delivered** (`9789428` … `0f51bce`) — one
+  read-only proposal per module per lens (architecture / reliability) read from the real files,
+  waves 1-22, `docs/upgrade-swarm/`.
+- **v0.4.0 upgrade plan** (`bea5176`) — `docs/upgrade-swarm/PLAN-v0.4.0.md`: 12 cross-cutting
+  themes with cited brief ids, a P0/P1/P2 roadmap, an owner-decision register and the coverage
+  appendix. First P0 item (tenant statements) already landed; the rest await approval.
+- **Release discipline recorded** — every release now carries a complete delta of everything that
+  changed, docs included (see AGENTS.md "Working method" and the `publish` job's preflight check).
+
+### CI
+
+- The release `publish` job now fails fast when `CHANGELOG.md` has no `## [<version>]` section for
+  the tag being published: the release notes and the artifacts must enumerate every change, or the
+  publication is refused.
+
 ## [0.3.0-rc5] - 2026-11-19
 
 Release candidate 5: the UI/UX pass requested after rc4, validated by full dev run `44429722001`.

@@ -1859,3 +1859,14 @@ Row order matches implementation order.
 - No product code, spec, golden, dependency, gate or migration was edited — docs only. All schema
   ideas are additive-only (sqlx checksum freeze, `0485`). This is a plan, not shipped behavior.
 - Next: owner picks items from the P0 list and the decision register; implement test-first with REQ-named tests.
+
+## Release discipline rule (2026-11-19) — CONFIRMED
+
+- Owner instruction, now binding in `AGENTS.md` (Working method) and enforced by `.github/workflows/release.yml`:
+  every release documents **everything** that changed since the previous release in `CHANGELOG.md`
+  and the release notes — no silent commits, documentation included. The `publish` job fails fast
+  when `CHANGELOG.md` has no `## [<version>]` section for the tag being published.
+- Delta since v0.3.0-rc5 (tag `40e4959`) documented in `CHANGELOG.md` under `[Unreleased]`:
+  a2c3311 (REQ-017/ADR-033 empty-answer approval guard), 1b628c8 (REQ-043/ADR-002 single-statement
+  tenant settings), 28 commits total — the rest is docs (OpenBot waves 1-5, 530-brief upgrade swarm,
+  PLAN-v0.4.0.md). Dev run `44559012804` is 7/7 green including the Windows boot gate.

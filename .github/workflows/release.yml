@@ -287,6 +287,14 @@ jobs:
         with:
           name: boma-release-windows-${{ github.sha }}
           path: release-assets
+      - name: Assert the CHANGELOG documents this release
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -Eq "^## \[${VERSION}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section: the release must enumerate everything that changed since the previous release, documentation included. Add the section and push, or refuse publication."
+            exit 1
+          fi
       - name: Create the release from the tested artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

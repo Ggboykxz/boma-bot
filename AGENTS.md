@@ -72,6 +72,7 @@ Mark every claim in docs/ as CONFIRMED (verified by a command, test, capture or 
 After /ui-kit, restart opencode so the BoardUI skill and the always-on design rules are loaded. MCP tools and skills are bound at session start.
 /parity and /audit run as the auditor agent: by convention it writes only under docs/ and never fixes code. Switch back to the build agent afterwards.
 Never put secrets in the repo: environment variables, ship .env.example. That includes the BoardUI license key.
+Every release documents **everything** that changed since the previous release, in `CHANGELOG.md` and in the release notes — no silent commits, documentation included. A `publish` run without a `## [<version>]` section in `CHANGELOG.md` is refused.
 Slash commands
 
 /plan, /adr , /scaffold, /implement , /parity, /improve, /audit, /release , /resume, /ui-kit, /ui-verify, /ui-parity
