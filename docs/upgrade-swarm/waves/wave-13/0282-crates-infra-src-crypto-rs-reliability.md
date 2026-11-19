@@ -113,6 +113,7 @@ be zeroized. `spawn_blocking` adds overhead on an idle box — benchmark before/
 1. Flip the length-check side channel and add the RNG-failure/clock-fallback counters (small,
    no interface change).
 2. Wrap Argon2 work in `spawn_blocking` + zeroize local buffers (internal only).
-3. Consolidate the constant-time helper and add entropy/format invariant tests (ADR for the
-   shared-crate dependency). Each item needs REQ-tagged tests (`req_040_*`/`req_041_*` names). Any externally visible
-auth or expiry change is a DEVIATION in `docs/PARITY.md` awaiting approval.
+3. Consolidate the constant-time helper and add entropy/format tests (ADR for shared crate).
+
+Add REQ-tagged tests (`req_040_*`/`req_041_*`) per item; any observable auth/expiry change is a
+DEVIATION in `docs/PARITY.md` awaiting approval.

@@ -26,9 +26,8 @@
 **Architecture gap:** the catalogue (`domain/connector.rs::builtin_connectors`) and the runner's
 `match` are two independent sources of truth for which tools exist; adding a catalogue entry without
 editing this match yields a runtime "does not have that tool". Both arms buffer the whole response
-with `response.bytes().await` *before* checking the cap, so a hostile endpoint can force an
-unbounded allocation. The `CheckedOutbound` returned by the guard is discarded (`fetch` line 43),
-and no per-call telemetry exists.
+with `response.bytes().await` *before* the cap check, so a hostile endpoint can force an unbounded
+allocation. The guard's `CheckedOutbound` is discarded (`fetch` line 43); no per-call telemetry exists.
 
 ## Target structure for v0.4.0
 
@@ -56,8 +55,8 @@ the exact current error string. Add a construction-time consistency check betwee
 registry. **Risks:** (a) must preserve the public `ConnectorRunner` signature and all wire shapes —
 any change is a DEVIATION for `docs/PARITY.md`; (b) a strict startup assertion could block boot if a
 catalogue entry has no adapter — **GUESS:** fail closed in tests, log-and-skip in production until
-all adapters land; (c) `ScriptedConnectorRunner` in testkit implements the port, not the registry —
-untouched, but verify its tests still pass.
+all adapters land; (c) testkit's `ScriptedConnectorRunner` implements the port, not the registry —
+verify its tests still pass.
 
 ### 2. Unify the guarded request and enforce caps while streaming (security/reliability)
 **CONFIRMED:** the guard + GET is duplicated; `response.bytes().await` buffers the entire body before
@@ -75,10 +74,9 @@ documented per-call host-resolution model (D-05).
 `thiserror::Error` enum (`BadArguments`, `BlockedUrl`, `Unavailable`, `TooLarge`, `NoCredential`,
 `UnknownTool`), converted to `AppError` in one `From` impl at the `ConnectorRunner` boundary, with
 the **same human-readable strings** so `usecases.rs:1065` stays byte-identical. **Risks:** (a) any
-message change is externally visible — lock the current strings with golden-style assertions before
-refactoring; (b) do not leak resolved addresses or the guard's reason verbatim if it contains
-internal detail; keep the existing reason text for parity but route it through the typed variant;
-(c) keep `AppError::Unavailable` for network failures unchanged.
+message change is externally visible — lock the current strings with assertions before refactoring;
+(b) do not leak resolved addresses — keep the existing reason text but route it through the typed
+variant; (c) keep `AppError::Unavailable` for network failures unchanged.
 
 ### 4. Replace or fuzz-harden the feed parser (correctness; AGENTS.md parser rule)
 **CONFIRMED:** `block_end` uses `min("</entry>".len(), "</item>".len())` (8 vs 7), an off-by-one for
@@ -89,17 +87,17 @@ cases first (random tag soup must never panic and must respect `limit`), then ei
 crate (`quick-xml` / `roxmltree`, added with `cargo add` + docs.rs + `docs/DEPENDENCIES.md`) or fix
 the scanner in place with a real tokenizer for entities. **Risks:** (a) a DOM parser changes
 whitespace/CDATA semantics — preserve `title/link/summary` and the "malformed feed returns what
-parsed" behavior exactly (DEVIATION check); (b) new dependency needs license review; (c) keep
-`req_032_*` test names in the trace gate.
+parsed" behavior exactly (DEVIATION check); (b) new dependency needs a license review; (c) keep
+`req_032_*` names in the trace gate.
 
 ### 5. Add per-call telemetry and inject typed limits/config instead of magic constants
 **CONFIRMED:** only two `tracing::warn!` lines exist; caps/timeout are module constants and no
 structured span records connector, tool, status, bytes or latency. Change: one `tracing::info_span!`
 per call with `connector`, `tool`, `status`, `bytes`, `elapsed_ms` (never the raw URL or token) and
 a `ConnectorLimits` struct injected at `new()`, defaults 30 s / 512 KiB / 16 KiB. **Risks:** (a) no
-secrets/PII in logs — URLs may carry query tokens; log only the host that `CheckedOutbound` already
-validates (**GUESS**); (b) keeping defaults identical avoids a DEVIATION; (c) avoid logging inside
-the credential-bearing adapter; (d) cheap counters/timings must not become a DoS vector themselves.
+secrets/PII in logs — URLs may carry query tokens; log only the validated host (**GUESS**);
+(b) identical defaults avoid a DEVIATION; (c) no logging inside the credential-bearing adapter;
+(d) cheap counters/timings must not become a DoS vector themselves.
 
 ## Risks & ordering
 
