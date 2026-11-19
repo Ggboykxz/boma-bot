@@ -26,6 +26,45 @@
 
 .boma-target {
   min-block-size: 2.75rem;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+/* Pointer-only press feedback: a keyboard shortcut must never wait for an animation. */
+@media (hover: hover) and (pointer: fine) {
+  .boma-target:active {
+    transform: scale(0.98);
+    transition: transform 100ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+}
+
+/* Board rows arrive as a short stagger, not all at once (state indication, 40 ms apart). */
+.boma-stagger > :nth-child(2) { animation-delay: 40ms; }
+.boma-stagger > :nth-child(3) { animation-delay: 80ms; }
+.boma-stagger > :nth-child(4) { animation-delay: 120ms; }
+
+/* A card that starts waiting for a decision enters once, from a believable scale. */
+.boma-card-in {
+  animation: boma-card-in 220ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes boma-card-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boma-target,
+  .boma-target:active {
+    transform: none;
+    transition: background-color 150ms ease, color 150ms ease;
+  }
+  .boma-card-in {
+    animation: boma-fade-in 200ms ease-out both;
+  }
+  @keyframes boma-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
 }
 
 .boma-focus:focus-visible {

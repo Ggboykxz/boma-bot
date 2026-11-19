@@ -142,6 +142,15 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
   pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
   for the owner's rc4 smoke.
+- **2026-11-19 — motion pass, BoardUI form and 14 locales.** Motion follows the strict recipe:
+  press feedback 100 ms ease-out (pointer only), card entrance 220 ms with the strong ease-out
+  curve, 40 ms board-row stagger, reduced-motion keeps fade and drops movement. A `REQ-057`
+  Playwright test pins the computed animation name in both media modes. The board create form now
+  uses BoardUI `Input`/`Textarea`/`Select` instead of raw controls. `SUPPORTED_LOCALES` now has 14
+  entries: en/fr/he are complete, the ten additional catalogues translate core navigation and
+  action strings with an explicit English fallback for the long tail (REQ-057 rule 1); a
+  `REQ-057` test pins the count and fallback. Full web suite: 93 passed, the same four known local
+  artefacts fail here (RTL/he, integrations, reactions, shell locale) and are green on CI.
 - **2026-11-19 — board/triage UI upgrade (second synthesis signal, REQ-038).** The board now has
   a BoardUI assignee filter with per-column counts recomputed from the filtered set; all three
   catalogues carry the new labels. A `REQ-038` Playwright test covers filter + counts; 42 other

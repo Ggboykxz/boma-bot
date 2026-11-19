@@ -12,12 +12,12 @@
  * bug waiting for the locale switch.
  */
 
-export type Locale = "en" | "fr" | "he";
+export type Locale = "en" | "ar" | "de" | "es" | "fr" | "he" | "it" | "ja" | "ko" | "nl" | "pl" | "pt" | "ru" | "zh";
 
 export type Direction = "ltr" | "rtl";
 
 /** Locales the M0 shell can render. `he` is here as the RTL proof, not as a shipped translation. */
-export const SUPPORTED_LOCALES: readonly Locale[] = ["en", "fr", "he"] as const;
+export const SUPPORTED_LOCALES: readonly Locale[] = ["en", "ar", "de", "es", "fr", "he", "it", "ja", "ko", "nl", "pl", "pt", "ru", "zh"] as const;
 
 const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
   en: {
@@ -1071,6 +1071,118 @@ const CATALOGUES: Record<Locale, Readonly<Record<string, string>>> = {
     "reset.error.short": "הסיסמה חייבת להיות באורך עשרה תווים לפחות.",
     "reset.error.mismatch": "שתי הסיסמאות אינן תואמות.",
     "reset.error.invalid": "הקישור אינו תקין, פג תוקף או כבר נוצל. בקש קישור חדש.",
+  },
+  // Ten more locales ship with their core navigation/action strings translated;
+  // everything not listed here deliberately falls back to English (REQ-057 rule 1).
+  ar: {
+    "shell.nav.threads": "المحادثات",
+    "shell.rail.bots": "البوتات",
+    "shell.theme.toggle": "تبديل الوضع الداكن",
+    "common.cancel": "إلغاء",
+    "common.retry": "إعادة المحاولة",
+    "thread.card.approve": "موافقة",
+    "thread.card.deny": "رفض",
+    "board.title": "اللوحة",
+  },
+  de: {
+    "shell.nav.threads": "Unterhaltungen",
+    "shell.rail.bots": "Bots",
+    "shell.theme.toggle": "Dunkelmodus umschalten",
+    "common.cancel": "Abbrechen",
+    "common.retry": "Erneut versuchen",
+    "thread.card.approve": "Zustimmen",
+    "thread.card.deny": "Ablehnen",
+    "board.title": "Pinnwand",
+  },
+  es: {
+    "shell.nav.threads": "Hilos",
+    "shell.rail.bots": "Bots",
+    "shell.theme.toggle": "Cambiar tema oscuro",
+    "common.cancel": "Cancelar",
+    "common.retry": "Reintentar",
+    "thread.card.approve": "Aprobar",
+    "thread.card.deny": "Rechazar",
+    "board.title": "Tablero",
+  },
+  it: {
+    "shell.nav.threads": "Thread",
+    "shell.rail.bots": "Bot",
+    "shell.theme.toggle": "Attiva tema scuro",
+    "common.cancel": "Annulla",
+    "common.retry": "Riprova",
+    "thread.card.approve": "Approva",
+    "thread.card.deny": "Rifiuta",
+    "board.title": "Bacheca",
+  },
+  ja: {
+    "shell.nav.threads": "スレッド",
+    "shell.rail.bots": "ボット",
+    "shell.theme.toggle": "ダークモードを切り替え",
+    "common.cancel": "キャンセル",
+    "common.retry": "再試行",
+    "thread.card.approve": "承認",
+    "thread.card.deny": "拒否",
+    "board.title": "ボード",
+  },
+  ko: {
+    "shell.nav.threads": "스레드",
+    "shell.rail.bots": "봇",
+    "shell.theme.toggle": "다크 모드 전환",
+    "common.cancel": "취소",
+    "common.retry": "다시 시도",
+    "thread.card.approve": "승인",
+    "thread.card.deny": "거부",
+    "board.title": "보드",
+  },
+  nl: {
+    "shell.nav.threads": "Gesprekken",
+    "shell.rail.bots": "Bots",
+    "shell.theme.toggle": "Donkere modus wisselen",
+    "common.cancel": "Annuleren",
+    "common.retry": "Opnieuw proberen",
+    "thread.card.approve": "Goedkeuren",
+    "thread.card.deny": "Weigeren",
+    "board.title": "Bord",
+  },
+  pl: {
+    "shell.nav.threads": "Wątki",
+    "shell.rail.bots": "Boty",
+    "shell.theme.toggle": "Przełącz tryb ciemny",
+    "common.cancel": "Anuluj",
+    "common.retry": "Ponów",
+    "thread.card.approve": "Zatwierdź",
+    "thread.card.deny": "Odrzuć",
+    "board.title": "Tablica",
+  },
+  pt: {
+    "shell.nav.threads": "Conversas",
+    "shell.rail.bots": "Bots",
+    "shell.theme.toggle": "Alternar modo escuro",
+    "common.cancel": "Cancelar",
+    "common.retry": "Tentar novamente",
+    "thread.card.approve": "Aprovar",
+    "thread.card.deny": "Recusar",
+    "board.title": "Quadro",
+  },
+  ru: {
+    "shell.nav.threads": "Потоки",
+    "shell.rail.bots": "Боты",
+    "shell.theme.toggle": "Переключить тёмную тему",
+    "common.cancel": "Отмена",
+    "common.retry": "Повторить",
+    "thread.card.approve": "Одобрить",
+    "thread.card.deny": "Отклонить",
+    "board.title": "Доска",
+  },
+  zh: {
+    "shell.nav.threads": "会话",
+    "shell.rail.bots": "机器人",
+    "shell.theme.toggle": "切换深色模式",
+    "common.cancel": "取消",
+    "common.retry": "重试",
+    "thread.card.approve": "批准",
+    "thread.card.deny": "拒绝",
+    "board.title": "看板",
   },
 };
 

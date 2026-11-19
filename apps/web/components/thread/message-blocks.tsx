@@ -163,7 +163,7 @@ function CardBlock({ block, onCardAnswered }: CardBlockProps) {
     <section
       role="region"
       aria-label={t("thread.card.region")}
-      className="bg-background-secondary-default border-separator-border border rounded-3xl p-3 flex flex-col gap-2"
+      className="boma-card-in bg-background-secondary-default border-separator-border border rounded-3xl p-3 flex flex-col gap-2"
     >
       <p className="text-text-primary text-body-medium">{t("thread.block.card")}</p>
       {answerGiven === null ? (

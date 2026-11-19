@@ -10,6 +10,8 @@ import {
 
 import { Button } from "@/components/base/buttons/button";
 import { Select, SelectItem } from "@/components/base/select/select";
+import { Input } from "@/components/base/input/input";
+import { Textarea } from "@/components/base/textarea/textarea";
 import {
   boardsGet,
   botsList,
@@ -206,40 +208,31 @@ export function BoardScreen() {
             void createTicket();
           }}
         >
-          <label className="flex flex-col gap-1">
-            <span className="text-text-secondary text-body-2-medium">{t("board.field.title")}</span>
-            <input
-              autoFocus
-              type="text"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              className="boma-focus text-text-primary bg-background-primary-default border-border-button-default h-10 rounded-md border px-3 text-body-regular placeholder:text-text-placeholder"
-              placeholder={t("board.field.title-placeholder")}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-secondary text-body-2-medium">{t("board.field.description")}</span>
-            <textarea
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              rows={2}
-              className="boma-focus text-text-primary bg-background-primary-default border-border-button-default rounded-md border px-3 py-2 text-body-regular placeholder:text-text-placeholder"
-              placeholder={t("board.field.description-placeholder")}
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-secondary text-body-2-medium">{t("board.field.assignee")}</span>
-            <select
-              value={assignee}
-              onChange={(event) => setAssignee(event.target.value)}
-              className="boma-focus border-border-button-default bg-background-primary-default h-10 rounded-md border px-2 text-body-regular"
-            >
-              <option value="">{t("board.field.assignee-none")}</option>
-              {bots.map((entry) => (
-                <option key={entry.id} value={entry.id}>{entry.name}</option>
-              ))}
-            </select>
-          </label>
+          <Input
+            label={t("board.field.title")}
+            value={title}
+            onChange={setTitle}
+            placeholder={t("board.field.title-placeholder")}
+            isRequired
+          />
+          <Textarea
+            label={t("board.field.description")}
+            value={description}
+            onChange={setDescription}
+            rows={2}
+            placeholder={t("board.field.description-placeholder")}
+          />
+          <Select
+            label={t("board.field.assignee")}
+            size="sm"
+            selectedKey={assignee || "none"}
+            onSelectionChange={(key) => setAssignee(key === "none" ? "" : String(key))}
+          >
+            <SelectItem id="none">{t("board.field.assignee-none")}</SelectItem>
+            {bots.map((entry) => (
+              <SelectItem key={entry.id} id={entry.id}>{entry.name}</SelectItem>
+            ))}
+          </Select>
           {actionError ? <p className="text-text-error-primary text-body-2-medium" role="alert">{actionError}</p> : null}
           <div className="flex items-center gap-2">
             <Button variant="primary" type="submit" disabled={busy}>
@@ -279,7 +272,7 @@ export function BoardScreen() {
                 {t(`board.column.${column}`)}
                 <span className="text-text-tertiary ml-2">{columnTickets.length}</span>
               </h2>
-              <ul className="flex min-h-32 flex-col gap-2">
+              <ul className="boma-stagger flex min-h-32 flex-col gap-2">
                 {columnTickets.map((ticket) => (
                   <li key={ticket.id} className="animate-row-slide-in">
                     <button
