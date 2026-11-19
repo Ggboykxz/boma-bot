@@ -64,3 +64,45 @@ test("REQ-017 an approval answer records the explicit choice and unlocks the com
   expect(answers).toEqual([{ cardId: "card_approval", answer: "deny" }]);
   await expect(page.getByRole("region", { name: "Pending decision" })).toContainText("Denied");
 });
+
+test("REQ-017 a question card never records an empty answer as approval", async ({ page }) => {
+  const answers: unknown[] = [];
+  await seedRpc(page, {
+    answers: {
+      "bots/get": {
+        id: "bot_golden",
+        name: "Boma Bot",
+        threadId: "thr_golden",
+        archivedAt: null,
+        snoozedUntil: null,
+        unreadCount: 0,
+      },
+      "threads/messages": {
+        messages: [
+          {
+            id: "msg_card_question",
+            seq: 1,
+            role: "user",
+            blocks: [{ type: "card", cardId: "card_question", kind: "question" }],
+            createdAt: "2026-01-01T00:00:01Z",
+          },
+        ],
+      },
+    },
+  });
+  await page.route("**/rpc/threads/answer", async (route) => {
+    answers.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true }),
+    });
+  });
+  await page.goto("/app/bot_golden/");
+  const send = page.getByRole("button", { name: "Send answer" });
+  await expect(send).toBeDisabled();
+  expect(answers).toEqual([]);
+  await page.getByRole("textbox", { name: "Answer" }).fill("Use the Q3 numbers");
+  await send.click();
+  expect(answers).toEqual([{ cardId: "card_question", answer: "Use the Q3 numbers" }]);
+});

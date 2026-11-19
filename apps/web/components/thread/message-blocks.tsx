@@ -204,8 +204,11 @@ function CardBlock({ block, onCardAnswered }: CardBlockProps) {
               className="flex items-end gap-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                // The button is always enabled: an empty answer approves with the default.
-                void answer(draft.trim() || "approve");
+                // REQ-017: an empty answer is never turned into an implicit approval (ADR-033).
+                const text = draft.trim();
+                if (text.length > 0) {
+                  void answer(text);
+                }
               }}
             >
               <Input
@@ -216,11 +219,14 @@ function CardBlock({ block, onCardAnswered }: CardBlockProps) {
                 size="small"
                 className="min-w-0 flex-1"
               />
-              <Button type="submit" size="small" disabled={busy}>
-                {t("thread.card.approve")}
+              <Button type="submit" size="small" disabled={busy || draft.trim().length === 0}>
+                {t("thread.card.submit")}
               </Button>
             </form>
           )}
+          {isQuestion && answerGiven === null && draft.trim().length === 0 ? (
+            <p className="text-text-secondary text-caption-1-regular">{t("thread.card.answer.hint")}</p>
+          ) : null}
         </>
       ) : (
         <p className="text-text-secondary text-body-medium flex items-center gap-2">

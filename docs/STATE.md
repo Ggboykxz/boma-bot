@@ -142,6 +142,12 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
   pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
   for the owner's rc4 smoke.
+- **2026-11-19 — no silent approval on an empty question answer (issue #21, ADR-033).** Swarm
+  brief 0029 flagged `draft.trim() || "approve"` in `CardBlock`: an empty question card was
+  recorded as an approval. The client now disables the submit control until a non-empty answer is
+  typed, labels it "Send answer", and never calls `threads.answer` on an empty field. The REQ-007
+  pending-card golden was updated to the explicit affordance (recorded in ADR-033). Three
+  `REQ-007`/`REQ-017` Playwright tests pass; approval/purchase cards are unchanged.
 - **2026-11-19 — v0.3.0-rc5 cut (dev run `44429722001` 7/7 green, packaged Windows boot included).**
   First build with the full UI/UX pass: swarm-selected approval cards, board filter, strict motion,
   BoardUI form controls and 14 locales. rc4 remains published but superseded; v0.3.0 final waits for

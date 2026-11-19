@@ -16,17 +16,22 @@
     },
     {
       "role": "button",
-      "state": "enabled",
-      "name": "Approve"
+      "state": "disabled",
+      "name": "Send answer"
     },
     {
       "role": "textbox",
       "state": "enabled"
     },
     {
+      "role": "button",
+      "state": "absent",
+      "name": "Approve"
+    },
+    {
       "role": "navigation",
       "state": "visible"
     }
   ],
-  "notes": "A waiting question keeps the composer usable (only approvals are modal) and leaves navigation reachable, so the user can leave the thread and come back. Reference capture: none (static pass). REQ-007."
+  "notes": "A waiting question keeps the composer usable (only approvals are modal) and leaves navigation reachable. ADR-033: the empty field cannot silently approve, so the submit control is a disabled 'Send answer' and there is no 'Approve' affordance on a question card. Reference capture: none (static pass). REQ-007."
 }
