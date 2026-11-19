@@ -10,6 +10,8 @@ import {
   RiTerminalLine,
 } from "@remixicon/react";
 
+import { Button } from "@/components/base/buttons/button";
+import { Input } from "@/components/base/input/input";
 import { RpcError, threadsAnswer, type Block } from "@/lib/api/rpc";
 import { useTranslation } from "@/lib/use-translation";
 
@@ -160,13 +162,22 @@ function CardBlock({ block, onCardAnswered }: CardBlockProps) {
   return (
     <section
       role="region"
-      aria-label={block.kind}
+      aria-label={t("thread.card.region")}
       className="bg-background-secondary-default border-separator-border border rounded-3xl p-3 flex flex-col gap-2"
     >
       <p className="text-text-primary text-body-medium">{t("thread.block.card")}</p>
       {answerGiven === null ? (
         <>
           <p className="text-text-secondary text-body-2-regular">{t(explainKey)}</p>
+          <p role="status" className="text-text-secondary text-caption-1-semibold">
+            {t("thread.card.waiting")}
+          </p>
+          {isApproval ? (
+            <>
+              <p className="text-text-primary text-body-2-regular">{t("thread.card.effect.approve")}</p>
+              <p className="text-text-secondary text-body-2-regular">{t("thread.card.reversal")}</p>
+            </>
+          ) : null}
           {failure === "failed" ? (
             <p role="alert" className="text-text-error-primary text-body-2-medium flex items-center gap-1">
               <RiAlertLine size={16} aria-hidden />
@@ -175,22 +186,18 @@ function CardBlock({ block, onCardAnswered }: CardBlockProps) {
           ) : null}
           {isApproval ? (
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void answer("approve")}
-                className="boma-target boma-focus bg-background-primary-default border-border-button-default border text-text-primary text-body-medium rounded-md px-3 py-2 hover:bg-background-secondary-hover disabled:opacity-50"
-              >
+              <Button type="button" size="small" disabled={busy} onClick={() => void answer("approve")}>
                 {t("thread.card.approve")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                size="small"
+                variant="secondary"
                 disabled={busy}
                 onClick={() => void answer("deny")}
-                className="boma-target boma-focus text-text-secondary hover:text-text-primary rounded-md px-3 py-2 text-body-medium disabled:opacity-50"
               >
                 {t("thread.card.deny")}
-              </button>
+              </Button>
             </div>
           ) : (
             <form
@@ -201,21 +208,17 @@ function CardBlock({ block, onCardAnswered }: CardBlockProps) {
                 void answer(draft.trim() || "approve");
               }}
             >
-              <input
-                type="text"
+              <Input
+                label={t("thread.card.answer")}
                 value={draft}
-                onChange={(event) => setDraft(event.target.value)}
+                onChange={setDraft}
                 placeholder={t("thread.card.answer")}
-                aria-label={t("thread.card.answer")}
-                className="border-border-button-default border rounded-md bg-background-primary-default text-text-primary px-2 py-1 text-body-regular outline-none focus-visible:ring-2 focus-visible:ring-border-focus-ring min-w-0 flex-1"
+                size="small"
+                className="min-w-0 flex-1"
               />
-              <button
-                type="submit"
-                disabled={busy}
-                className="boma-target boma-focus bg-background-primary-default border-border-button-default border text-text-primary text-body-medium rounded-md px-3 py-2 hover:bg-background-secondary-hover disabled:opacity-50"
-              >
+              <Button type="submit" size="small" disabled={busy}>
                 {t("thread.card.approve")}
-              </button>
+              </Button>
             </form>
           )}
         </>

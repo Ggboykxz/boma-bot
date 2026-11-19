@@ -38,10 +38,9 @@ Top jobs:
 
 ## 2. Five concrete UI changes
 
-All copy is a new key via `useTranslation()` → `t(locale, key)` (`lib/i18n.ts`); English source, fr/he
-translations, fallback to English — nothing hardcoded. Class lists via `cx()`; colours ride a
-`docs/UI.md` token. Bot/user values (readings, sample ids, site names, lab output) are untrusted text,
-never HTML.
+All copy is a new key via `useTranslation()` → `t(locale, key)`; English source, fr/he translations,
+fallback to English — nothing hardcoded. Class lists via `cx()`; colours ride a `docs/UI.md` token.
+Bot/user values (readings, sample ids, site names, lab output) are untrusted text, never HTML.
 
 **(a) Monitoring and exceedance status strip — thread `/app/:botId` header.**
 A read-only band above the transcript: named chips for active exceedances, parameter-vs-limit, open
@@ -128,9 +127,8 @@ measured chart geometry is never mirrored.
 - `test("REQ-037 unknown, revoked and expired tokens render the identical unavailable document", ...)`
 - `test("REQ-057 Hebrew RTL mirrors the board and axe reports zero critical or serious findings", ...)`
 
-Goldens under `spec/golden/ui/` stay byte-exact; a new state gets a new `REQ-<id>-<slug>.json`
-asserting seeded state, not a click path. New behaviour without a REQ (status strip, regulatory-impact
-marker, day grouping) needs an owner-assigned id before code — do not invent one in a test name.
+Goldens stay byte-exact; new states get a `REQ-<id>-<slug>.json` asserting seeded state, not a click
+path. Behaviour without a REQ (status strip, regulatory-impact marker, day grouping) needs an owner id.
 
 ## 6. Best first slice
 

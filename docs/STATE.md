@@ -142,6 +142,16 @@ Next up: the improvement program (`docs/IMPROVEMENTS.md`, analysis of `CopilotKi
   with the complete UI/exp set: bot-create button, opencode detection, BoardUI thinking/loader,
   pause/resume and reassign in rooms. rc1–rc3 remain published but superseded; v0.3.0 final waits
   for the owner's rc4 smoke.
+- **2026-11-18/19 — swarm orchestrator exercised for real dev (Queen = main agent).** Swarm
+  `2026-11-18-001` dispatched 7 weighted workers (accessibility, security, product, UX, Rust,
+  performance, i18n) on the next-UI-slice question; votes and the deterministic tally are in
+  `docs/swarms/2026-11-18-001/`. Majority and weighted vote both chose **A: contextual approval
+  card** (5/7; 6.6/8.6) — no arbitration needed. The Rust worker's wire-deviation objection was
+  accepted as a scope guard: the dispatched slice is copy/presentation only, no transport change.
+  Implemented in `CardBlock` with BoardUI Button/Input, a translated region name, effect/reversal
+  text and an explicit status line; `REQ-007`/`REQ-017` Playwright tests pass (goldens and axe
+  unchanged apart from the known local RTL artefact). Durable answered state remains a separate
+  proposal needing an ADR.
 - **2026-11-18 — swarm orchestrator design proposed (NOT approved yet).** Following the owner's
   request for GrokBot-class, provider-agnostic multi-agent orchestration,
   `docs/superpowers/specs/2026-11-18-swarm-orchestrator-design.md` and ADR-032 propose a Queen +
