@@ -52,12 +52,11 @@ wait for `tickets.move` before `setSelected` + `load()`. Refresh is manual-only.
 ## Hardening (v0.4.0)
 
 - **Split the failure axes.** Separate `loadPhase` (`loading|ready|error|absent`) from action
-  state. Non-404/non-401 → `error` phase with a full-screen `role="alert"` panel + retry
-  (`RiRefreshLine`, `variant="secondary"`); 404 keeps `absent`; 403 flips to a forbidden panel;
-  401 stays the global handler. Empty board is only "ready + zero tickets".
-- **Sequence the refresh.** One `refreshId` ref; `load()` aborts via a composed signal
-  (`AbortSignal.any([unmountSignal, AbortSignal.timeout(15_000)])`) and discards responses whose
-  id is not the latest. Every mutation then awaits its *own* refresh — fixes 2, 8 (unmount setState).
+  state. Non-404/non-401 → `error` + full-screen `role="alert"` panel + retry; 404 → `absent`;
+  403 → forbidden panel; 401 → global handler. Empty board is only "ready + zero tickets".
+- **Sequence the refresh.** One `refreshId` ref; `load()` uses a composed signal
+  (`AbortSignal.any([unmount, AbortSignal.timeout(15_000)])`), discards non-latest responses.
+  Every mutation awaits its *own* refresh — fixes 2, 8.
 - **Honest error attribution.** Wrap the mutation and the refresh separately: refresh failure
   "Couldn't refresh the board — ticket saved. Retry." vs action failure "Couldn't create the
   ticket." Keep `role="alert"`; clear the action error on dialog close and on new submit.

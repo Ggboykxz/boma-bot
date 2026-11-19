@@ -1,0 +1,38 @@
+# 0077 — apps/web/components/shell/acp-detected-row.tsx — architecture lens
+
+- Target: `before-m5` (v0.3.0-rc5), module `apps/web/components/shell/acp-detected-row.tsx` (76 lines, one `"use client"` component).
+- READ-ONLY review. Spec anchors: REQ-061 (local CLI agents as durable teammates; explicit click, no silent attach), `docs/superpowers/specs/2026-11-18-ui-bot-create-and-acp-detection-design.md` slice 2 (detected row → `bots.connectAcp` → roster refresh → navigate to bot), `apps/web/tests/bot-create.spec.ts` `REQ-061 …` gate, BoardUI rules (components first, semantic tokens, composite type, `cx`, RTL isolation).
+- No product code edited. Everything below is proposal, not shipped.
+
+## Structure today
+
+`AcpDetectedRow` owns three pieces of local state (`executors: string[]`, `attached: string | null`, `working: boolean`) plus the shared roster via `useSyncExternalStore(subscribeRoster, listRoster, serverRoster)`. One mount-only `useEffect` probes `botsDetectedExecutors(signal)` under an `AbortController`; failure and "none found" both collapse to `[]` and the component returns `null`. Target selection is implicit: `roster?.find((bot) => !bot.archivedAt && !bot.snoozedUntil)` — whichever active bot is first. `attach(executor)` checks `target && !working`, sets `working`, calls `botsConnectAcp({ botId, executor })` (no signal), awaits `refreshRoster()`, then sets `attached`; errors are swallowed with a comment and `finally` clears `working`. Render is a `<div>` mapping one flex row per executor: `<span>` with `executor — t("shell.rail.acp.detected")` and a BoardUI `<Button size="small" variant="secondary">` whose label is Attach/Attached. A tertiary `<p>` shows the no-bot hint. Tokens, composite type (`text-caption-1-regular`, `text-body-2-regular`) and the `useTranslation` catalogue are all correct — keep them. Mounted from `bot-rail.tsx:195`, after the bot list.
+
+## Confirmed observations (read this session)
+
+- **Attachment truth lives only in local state.** `RosterBotView` (rpc.ts:91-98) has no ACP field, and `bots.connectAcp` returns a `{ botId, executor, attachedAt }` echo (rpc.ts:498-503) that the component ignores (`setAttached(executor)` uses the request value). On remount/navigation `attached` resets to `null`, so an already-attached executor is offered as "Attach" again and a second attach can be posted. CONFIRMED.
+- **Implicit target.** The "attach to first active bot" rule is invisible to the operator and to `bot-rail.tsx`; with several bots the choice is arbitrary, and the design doc's "navigate to the bot" step is absent. The component is decoupled from the router today — adding navigation here would couple it. CONFIRMED (design doc §slice 2).
+- **Two ununified async flows.** Detection is abortable and mount-only; attach is non-abortable, shares one global `working` boolean across all rows, has no post-unmount guard, and has no error channel. Detection failure is indistinguishable from "no executor installed", so no retry affordance exists. CONFIRMED.
+- **Staleness.** Detection runs once; installing/removing an executor never re-surfaces a changed row. The server probe is best-effort (2 s PATH check, `crates/api/src/rpc.rs:4011-4023`), so "found" is a point-in-time claim the UI presents as durable. CONFIRMED.
+- **RTL mixing.** The executor id (an LTR command token) is concatenated into a translated `<span>` around an em dash; AGENTS.md requires isolating code-like tokens with `<bdi>`/`dir="auto"`. GUESS: no RTL golden currently seeds a detected executor. CONFIRMED for the string construction.
+- **Naming/abstraction mismatch.** A singular "Row" renders N executor rows with the full data-fetch, target-selection, mutation and presentation stack in one component — no container/presentational seam for tests or reuse. CONFIRMED.
+
+## Proposals (v0.4.0)
+
+1. **Make the server echo the source of truth, not local state.** In `attach`, use the reply `{ botId, executor, attachedAt }` instead of the request value, and derive each row's button state from the authoritative set rather than a hand-set `string | null`. Short term (no contract change): keep a module-level `attachedExecutors` store beside `roster.ts` — same external-store pattern — so remounts within the session agree. Real fix: add `acpExecutor: string | null` to `RosterBotView` so a reload is authoritative; that touches `spec/03-api-contract.md` + trace + owner sign-off as a DEVIATION. Risk: contract churn — prefer the store now, record the reload limitation in `docs/PARITY.md`, and gate the contract change behind approval. Keep `refreshRoster()` awaited before flipping the button.
+
+2. **Lift target selection to the parent via a prop/callback.** Have `bot-rail.tsx` pass the intended `targetBotId` (it already knows the active bot) and an `onAttached?(botId, executor)` hook for the design-doc navigation, instead of the component's silent `find()`. Keep the no-bot hint when the prop is unresolved. Risk: threading a new prop through the rail couples the two modules and could change which bot receives the executor — a behavior change requiring a DEVIATION entry; make the prop optional and retain the current first-active fallback until the owner blesses the change.
+
+3. **Unify the async states into one explicit status model.** Replace `working: boolean` with a per-executor status map (`idle | attaching | attached | error`), give both RPCs an `AbortSignal` with unmount cleanup, and add a detection retry control when the probe fails (distinct from "none detected"). Add i18n keys for "Attaching…" and a written attach-failure message surfaced via `role="alert"` + `aria-live`, never color-only. Risk: new catalogue keys need en/fr/he (and RTL) coverage, and extra golden churn; the existing `REQ-061 …` Playwright test must be extended, not weakened, to cover failure and retry paths.
+
+4. **Split container and presentational row.** Extract `AcpExecutorRow` receiving `{ executor, status, onAttach }`; keep detection, target resolution and mutation in the container. This mirrors the `RunRow` extraction proposed in 0045 and gives a pure surface for snapshot tests. Risk: prop-drilling and markup drift — keep class strings byte-identical, rely on `cx()` only where merging is needed, and gate on the existing Playwright test.
+
+5. **RTL-safe label and a documented refresh contract.** Wrap the executor id in `<bdi dir="auto">` and keep the translated suffix as a sibling text node; keep `focus-visible:ring-2 focus-visible:ring-border-focus-ring` on the button. Decide explicitly whether detection re-probes on focus/window-refresh or is documented as mount-only, and record the choice in `docs/STATE.md`. Risk: adding a re-probe risks extra PATH subprocesses on the server (2 s each, serialized) — default to mount-only plus a manual retry from upgrade 3, with a load note in the ADR.
+
+## Explicit non-goals
+
+No new BoardUI or Pro component (Button is already the right one). No router, no client-side authorization, no executor discovery beyond the compiled-in registry. No change to the "explicit click only" REQ-061 rule. No attachment of multiple executors to one bot without spec approval. No new design system or raw palette/hex colors.
+
+## Suggested sequencing
+
+4 (mechanical split) → 3 (status model + error channel + RTL keys) → 5 (RTL isolation + refresh decision) → 1 (echo/store, then contract change only if blessed) → 2 (target prop/navigation, DEVIATION first). Each step gated by `lint`, `typecheck`, the `REQ-061 …` Playwright test (extended as per 3), axe at 360 px in light/dark and `dir=rtl`, and unchanged BoardUI tokens.

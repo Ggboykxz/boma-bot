@@ -79,11 +79,11 @@ reload. No polling, no cursor use, no error surface on send, no boundary anywher
 - **H7. Hygiene.** Remove unused `groupsList` import; render send-pending state on the form
   (`aria-busy`); dismiss `reassignFailed` on next attempt.
 
-## Error states to add (i18n keys)
+## Error states to add (i18n, five locales, mirror `lib/i18n.ts`)
 
-`groups.error.load` (transient, with Retry), `groups.send.error`, `groups.members.empty`
-(composer disabled), `groups.member.unknown` (attribution fallback), `groups.transcript.error`
-(poll failure, non-blocking banner) — all five locales, mirroring `lib/i18n.ts` shape.
+`groups.error.load` (transient + Retry), `groups.send.error`, `groups.members.empty` (composer
+disabled), `groups.member.unknown` (attribution fallback), `groups.transcript.error` (poll
+banner, non-blocking).
 
 ## Test plan (REQ-named)
 
@@ -118,7 +118,7 @@ reload. No polling, no cursor use, no error surface on send, no boundary anywher
 - **R7** Member refresh on every send adds one RPC per send; acceptable, but watch p95 on
   `groups.get` and piggyback on the existing post-send `groupsMessages` reload if budgets bite.
 
-## Explicit non-goals / notes
+## Non-goals / notes
 
 No changes to `generateStaticParams` pins short of H1/H6 decisions, the wire contract, the
 mention-routing engine, or live streaming (owned by thread-screen proposals); no new

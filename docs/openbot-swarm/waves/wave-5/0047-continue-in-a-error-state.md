@@ -82,7 +82,7 @@ a rotated/replaced executor session once ACP grows persistence.
   `focus-visible:ring-2 focus-visible:ring-border-focus-ring`; state by text + icon, never colour alone (1.4.1);
   polite live region; entrance ≤ 120–180 ms cross-fade only, dropped under reduced motion (§8.9).
 - **Layout.** Reuse the existing `rounded-xl border-border-error-default` error idiom (`thread.error.send`/`load`); one
-  shared `ThreadFailureRow` component for thread + activity; `ModuleView` untouched.
+  shared `ThreadFailureRow` component for thread + activity; nothing else reshaped.
 
 ## 5. One REQ-named Playwright test
 
