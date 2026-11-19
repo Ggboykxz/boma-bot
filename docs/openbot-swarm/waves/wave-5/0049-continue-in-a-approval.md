@@ -1,7 +1,6 @@
 # Brief 0049 — continue-in-a through the approval lens (Boma Bot)
 
-- Brief: id 49, area `continue-in-a`, lens `approval` (`docs/openbot-swarm/briefs-1000.jsonl`).
-- Status: **PROPOSAL only** — no product code, spec, golden, catalogue or workflow changed.
+- Brief 49, area `continue-in-a`, lens `approval`; **PROPOSAL only** — no product code/spec/golden/catalogue changed.
 - Provenance: upstream read as **data** at `/tmp/opencode/openbot-parity` (HEAD `559d5ac`, 2026-11-19;
   inventory pins `386085ff`). No upstream code, asset, wording, identifier or brand reproduced; no Pro;
   all strings stay Boma Bot. **CONFIRMED** = read this session; **GUESS** = recommendation for the owner.

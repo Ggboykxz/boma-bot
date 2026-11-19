@@ -1,102 +1,123 @@
 # 0044 · apps/web/app/sign-up/page.tsx · LENS=reliability · v0.4.0 proposal
 
-## Scope note
+## Scope note (CONFIRMED — read at `before-m5`)
 
-The assigned module is the static-export index only: it wraps `<SignUpScreen />` in
-`<Suspense fallback={null}>` and holds no state. All reliability failure modes live one hop later in
-`components/auth/sign-up-screen.tsx` and the transport in `lib/api/rpc.ts` (`authCapabilities`,
-`authSignUp`, `RpcError`/`throwErr`). This reviews the page as flow entry and hardens across that
-boundary; an index-only change (e.g. a different fallback) would be theater.
+`page.tsx` is a 5-line `<Suspense fallback={null}>` shell around `SignUpScreen`; it holds
+no state. Every reliability mode lives one hop away in `components/auth/sign-up-screen.tsx`,
+`lib/api/rpc.ts` (`authCapabilities`, `authSignUp`, `throwErr`), and the server path
+(`crates/api/src/authroutes.rs::sign_up` → `crates/app/src/accounts.rs::sign_up` → infra
+`create_account`). Index-only edits would be theater; this hardens the flow across that
+boundary and keeps `page.tsx` trivial. Complements 0043 (architecture). No overlap with 0042/0041.
 
-## Current behavior (as read)
+## Current behavior (CONFIRMED from source)
 
-- `page.tsx`: `Suspense fallback={null}` → blank screen until the client screen renders; no error
-  boundary, so any render throw in `SignUpScreen` blanks the route with no recovery affordance.
-- `SignUpScreen` loads capabilities via `authCapabilities(signal)` with an `AbortController` aborted on
-  unmount; failure → `phase="error"` with a Retry button. `localFirst === true` → `router.replace("/app/")`.
-- `submit()` calls `authSignUp({ email, password, name, locale: "en" })` with **no** signal and **no**
-  status re-check, then `router.replace(next)`. Any throw is swallowed into one generic
-  `t("signup.error")` and `status="failed"`. The discarded `RpcError` carries `code` (`BAD_REQUEST`,
-  `CONFLICT`, `TOO_MANY_REQUESTS`, `INTERNAL`) and an explicitly user-safe `message`.
-- `next` is sanitized against absolute/protocol-relative URLs (`startsWith("/") && !startsWith("//")`),
-  default `/onboarding/1/`. `busy = status === "submitting"` disables inputs and the button.
+- Mount: `authCapabilities(signal)` (abort on unmount) → `ready`/`error`; `localFirst === true`
+  redirects `/app/`; else render skeleton → form.
+- `submit`: `setStatus("submitting")` → `await authSignUp({email, password, name, locale:"en"})`
+  with **no** `AbortSignal` and no timeout → `router.replace(next)`; **any** rejection maps to
+  `status="failed"` + `signup.error` ("the address may already exist"). `next` is same-origin-checked.
+- `RpcError` carries `code`/`status`; `throwErr` preserves HTTP status; the screen ignores both.
+- Server: rate-limit 5 per 600 s per IP; email validated + lowercased (`Email::new`); password
+  8–256 chars; name required non-empty after trim; account+org+space+`owner` membership written in
+  one transaction; duplicate email → unique index (`0002_m1.sql:72`) → `Conflict` → 409
+  `"That already exists."`; domain rule failure → 400 `"The request is not valid."` (these two
+  share the `signup.error` bucket in the UI).
+- i18n key `signup.closed` exists (en/fr/he) but is **dead code** — never rendered; capabilities
+  has **no** sign-up open/closed field; server has no closed/allow-list check (REQ-040 unmet).
 
 ## Failure modes
 
-1. **Duplicate owner / duplicate email (409 CONFLICT).** On a fresh deployment the first account may
-   become operator (spec §8.2, REQ-040). A second submit for an existing email returns CONFLICT but the
-   screen shows the same generic error as a network outage — no "email taken", no pointer to
-   `/sign-in`. Worse, two concurrent *first* signups race to claim owner; whichever the server accepts
-   first wins, and the loser gets an undifferentiated error with no reconciliation of who owns the
-   deployment. The server must enforce a single owner atomically; the client must surface the outcome.
-2. **Validation errors (400 BAD_REQUEST).** Password policy, name/email rejection and disabled-signup
-   refusals come back with a safe, displayable `message` and `code`, but `submit()` discards them. HTML
-   `required` / `type="email"` give only superficial client validation; a weak-password or
-   signups-closed user gets the same useless "error" string and cannot correct the input.
-3. **Double-submit race.** The only guard is the disabled DOM attributes driven by React `status`;
-   `submit()` itself never checks `status` and there is no in-flight ref, abort signal, or idempotency
-   key. Enter-key + click, or two rapid Enters before state commits, can fire two `authSignUp` calls.
-   Outcomes: first succeeds and navigates while the second 409s and its `catch` sets
-   `status="failed"`/fieldError — a visible error after the account was created and the session set;
-   or both reach the server and attempt duplicate creation/owner claims. No timeout means a hung
-   connection pins the button in `submitting` forever.
-4. **Network down / lost response.** `authCapabilities` failure is handled with a Retry button, but a
-   failed/hung `authSignUp` has no signal or timeout. Partial connectivity is the dangerous case: the
-   POST creates the account and session but the response is lost; the generic error invites a retry,
-   which now 409s and is misread as "email taken" although the user is actually signed in. There is no
-   "did it succeed?" reconciliation (e.g. probe `authCapabilities`/session on `failed`) and no
-   idempotency key to make a retry safe.
-5. **Entry-level gaps (in scope as flow entry).** `Suspense fallback={null}` shows nothing during load
-   and there is no `error.tsx`/boundary, so a render throw blanks `/sign-up`. `next` accepts `/\evil.com`
-   (backslash), which some browsers normalize to `//evil.com` — an open-redirect reliability/safety
-   edge on a freshly authenticated member.
+1. **Double-submit race.** `busy` derives from `status`, which lags a render. Two fast
+   activations (Enter mashing, double click before flush) both enter `submit`. Both POST with the
+   same email: first wins, second gets 409. The UI shows "address may already exist" for an
+   account that *was* created; the losing caller's session cookie may already be set. No idempotency
+   key exists, so a retried-after-timeout submit that actually succeeded re-POSTs into a guaranteed
+   409 and a false "already exists" alarm. (CONFIRMED client race; server 409 path CONFIRMED.)
+2. **Error black hole.** `catch {}` collapses every class into `signup.error`: 400 weak password /
+   bad email (misattributed to address-taken), 409 genuine conflict, 429 rate limit (user retries →
+   deeper lockout under a shared IP), 5xx, and offline `TypeError`. `status` is never reset to
+   `idle` on the failure path beyond `"failed"`, and there is no per-field error routing.
+   (CONFIRMED `sign-up-screen.tsx:submit`.)
+3. **Duplicate-owner / first-account bootstrap is unenforced.** UI copy promises "first account
+   becomes operator; every later invite lands as a member," but sign-up always creates a *separate*
+   org+space with `owner` membership (`infra/src/stores/accounts.rs:74,98`). Nothing arbitrates
+   "first" on a fresh deployment and no closed/allow-listed mode exists, so two concurrent fresh
+   sign-ups both become owners of their own orgs and the copy overpromises; on a deployment meant
+   to be closed, the form renders and fails only after submit, misattributed (see 2), instead of
+   the plain `signup.closed` state the screen was designed (and translated) to show. (CONFIRMED
+   code paths; product intent from `signup.first-account` copy and REQ-040.)
+4. **Network down / hung socket.** `authCapabilities` aborts on unmount but has no timeout — a
+   black-holed connection pins the skeleton forever. `authSignUp` has no signal and no timeout at
+   all — the submit button spins forever with no escape and no way to distinguish offline from
+   slow from dead. Capabilities failure shows a Retry but ignores `navigator.onLine` / `online`
+   events, so an offline user hammers a doomed endpoint; `localFirst` can only redirect after the
+   capabilities fetch succeeds, so even loopback mode stalls behind the network it should bypass.
+   (CONFIRMED missing timeout/listener.)
+5. **Capabilities-error conflation.** A 5xx/429/network capabilities failure and a genuinely
+   unavailable sign-up are indistinguishable from, and render the same as, a misconfigured deployment;
+   Retry on a permanently-failing endpoint is an infinite no-op loop with no backoff.
+   (CONFIRMED; retry wired to `reloadToken` only.)
+6. Minor: `locale:"en"` hardcoded regardless of active UI locale; password manager `autoComplete`
+   hints are correct, but the password field is not cleared on failure; `name` has no `required`
+   and no client check while the server rejects blank-after-trim — another 400 misattribution;
+   `throwErr` can surface raw non-JSON body text containing "email" (<300 chars) unsanitized. (CONFIRMED.)
 
-## Proposed hardening (v0.4.0)
+## Concrete hardening (v0.4.0)
 
-- **A. Branch on `RpcError.code` and show the safe message.** In `submit()`, `catch (err)` → narrow to
-  `RpcError`: `CONFLICT` → "email already registered, sign in" with a `Link` to `/sign-in?email=…`;
-  `BAD_REQUEST` → show `err.message` inline against the relevant field; `TOO_MANY_REQUESTS` →
-  "too many attempts, wait and retry"; `INTERNAL`/unknown → generic. Risk: server `message` wording
-  must stay user-safe — enforce with a test that asserts the envelope contract (spec §3.1), never
-  render raw fetch text. Keep one translation key per code; no leak of internals.
-- **B. Serialize submission.** Add `const inFlight = useRef(false)`; guard at the top of `submit()`
-  (`if (inFlight.current || busy) return;`) and set/clear it around the await; keep the disabled
-  attributes as a UI nicety, not the guard. Pass an `AbortController.signal` to `authSignUp` (the API
-  already accepts one) and abort on unmount. Risk: an aborted-on-unmount request still reached the
-  server — pair with C/E, and do not treat `AbortError` as a validation failure.
-- **C. Timeout + idempotency for the POST.** Wrap the signup fetch in a client timeout (~10 s) via the
-  signal, and generate a per-attempt idempotency key (UUID in `sessionStorage`, rotated per *submission
-  session*, not per keystroke) sent with the request so a timed-out retry cannot duplicate the
-  account. Risk: requires a backend contract — coordinate with the API owner; without it, at least
-  make `status="failed"` offer a single explicit "Retry" button and reconcile state before retrying.
-- **D. Reconcile ambiguous failure.** On ` failed` with no usable code (network/lost response), call
-  `authCapabilities`/a session probe; if a session now exists, route to `next` instead of showing an
-  error ("account likely created — continuing"). Risk: an extra round trip on genuine failures and a
-  small chance of misclassifying; guard the probe with its own timeout and never block the UI on it.
-- **E. Owner-race honesty.** If the server signals that an owner was just claimed by another account
-  (new `CONFLICT` detail), show a dedicated "this deployment already has an operator" message rather
-  than the email-taken copy. Risk: needs a server-side detail code; until then, fall back to A's
-  CONFLICT branch and flag the ambiguity in docs/STATE.md as a spec question, not a silent guess.
-- **F. Page-level resilience.** Replace `fallback={null}` with a minimal skeleton matching the screen's
-  loading block, and add `apps/web/app/sign-up/error.tsx` (client, reset button) so a render throw is
-  recoverable. Risk: an error boundary cannot catch errors in the boundary itself — keep it tiny.
-  Harden `next` to reject backslashes and any value that is not a single leading `/` plus safe chars.
-- **G. Test coverage (REQ-040).** Extend `apps/web/tests/sign-up.spec.ts` with Playwright route mocks:
-  409 CONFLICT shows sign-in pointer; 400 BAD_REQUEST shows the server message; 429 shows retry
-  copy; double Enter/click issues exactly one POST; lost-response retry reconciles to `next`;
-  network-down capabilities keeps the Retry button. Risk: route-mock brittleness — reuse the existing
-  auth fixture style; assert request counts, not timing.
+1. **In-flight guard, not just state.** `submit` takes an `inFlight` `useRef<boolean>` checked and
+   set synchronously before any `setState`, released in `finally`; keep `aria-busy` + disabled
+   inputs. Add `AbortSignal.timeout(15_000)` to the `authSignUp` fetch (argon2 hashing can be slow;
+   15 s is generous — a named constant), and abort on unmount. If `router.replace` returns without
+   navigation, reset to `idle`. *Risk:* timeout may fire after the server committed — the account
+   exists but the user sees an error; mitigate via the soft-worded 409 path (item 3), never re-POST.
+2. **Classify failures by code, never by prose.** Branch on `RpcError.code`: `BAD_REQUEST` →
+   field-level message (min-8 password, invalid email, name required — mirror the three domain
+   rules; keep server strings out), `CONFLICT` → "address already registered" + link to `/sign-in`,
+   `TOO_MANY_REQUESTS` → rate-limit message with 60 s cooldown timer, `FORBIDDEN` → treat as
+   closed-sign-up state (see 4); network/`TypeError` and 5xx → retryable message with Retry that
+   keeps entered data. Clear password, keep email/name. *Risk:* UI now couples to the server's
+   error-code contract (`spec/03-api-contract.md §3.1`); version the mapping and fall back to the
+   generic message for unknown codes.
+3. **Make 409 recoverable.** On `CONFLICT`, offer "Sign in instead" (carry `email` and `next` to
+   `/sign-in?next=…`) and, when the user believes the account is theirs, a forgot-password link.
+   Because a timed-out submit may have actually succeeded, a `CONFLICT` after a 15 s hang should be
+   soft-worded ("If this is the first attempt, your account may have been created — try signing in").
+   *Risk:* none beyond copy honesty; wording must stay symmetric with REQ-040 (never reveal which
+   addresses are registered).
+4. **Report sign-up availability instead of discovering it.** Extend `AuthCapabilities` with
+   `signUp: "open" | "closed" | "allowlisted"` (server: derive from deployment config; when absent
+   default to `open` to stay compatible). Render the already-translated `signup.closed` state when
+   closed/allowlisted, hide the form, link to `/sign-in` and the operator contact. Enforce
+   closed/allow-listed sign-up server-side per REQ-040 with a single transaction gate
+   (`SELECT … FOR UPDATE` on a deployment-meta row or advisory lock; `users` count / allow-list
+   consulted inside it) so two concurrent first sign-ups cannot both become owners. *Risk:* new
+   wire field is a contract change — old clients ignore it (serde default), new client against old
+   server must treat missing as `open`; the bootstrap gate adds one row read to sign-up (negligible)
+   and must be tested under concurrency.
+5. **Network-down honesty.** Add `navigator.onLine` check before submit + `online`/`offline`
+   listeners to flip a persistent, dismissible banner; submit disabled while offline (with reason
+   text). Give `authCapabilities` the same timeout class (10 s) and 2-step backoff on Retry
+   (1 s → 4 s), resetting on success. `localFirst` redirect should proceed without awaiting more
+   than the timeout. *Risk:* `navigator.onLine` is advisory (captive portals lie) — never use it to
+   hard-block, only to hint; keep the manual retry.
+6. **Client-side parity with server rules.** Trim email; lowercase before submit; `required` +
+   `minLength={8}` + maxLength 256 on password (matches `MIN/MAX_PASSWORD_LENGTH`); `required` on
+   name; `maxLength` on name/email (bound at 320 B). Pass `locale` from `useTranslation()`'s active
+   locale instead of hardcoded `"en"`. Use `throwErr`'s code path for non-JSON bodies but never
+   render raw body text. *Risk:* duplicating rules risks drift — generate the constants from the
+   spec or add a contract test asserting client `minLength` == server `MIN_PASSWORD_LENGTH`.
+7. **Failure-path polish.** `status` returns to `idle` on success path start; wrap the screen in
+   the same error boundary used elsewhere; keep `fallback={null}` in `page.tsx` but render the
+   skeleton as the Suspense fallback to avoid a blank flash on slow static shells. *Risk:* none.
 
-## Explicitly deferred
+## Suggested gates
 
-- Full password-strength meter / zxcvbn — product/spec decision, not a reliability fix.
-- Moving the screen to a server component with request-time capability read — incompatible with the
-  static export; would force dynamic rendering for a public auth page.
+`pnpm --filter @boma/web test` (unit: error-code mapping table), Playwright a11y spec gains a
+closed-sign-up fixture, Rust integration test: concurrent first sign-up admits exactly one owner
+(bootstrap gate), contract test: client minLength === server MIN_PASSWORD_LENGTH.
 
-## Risks & rollout
+## Explicit non-goals
 
-Ship A, B, F, G first (client-only, no server contract). Negotiate C/D/E with backend (idempotency
-key, owner-claim detail, session probe) and gate them behind a feature check until the API exists.
-No new npm dependencies; bundle impact negligible. Success: no double POST in tests, every `RpcError`
-code yields distinct actionable copy, network loss never shows "email taken", and `/sign-up` never
-blanks on a render throw.
+No change to password hashing, session cookie attributes, rate-limit algorithm (tracked D-01),
+or the invite flow. No new identity provider. Server items are limited to the capabilities field
+and the bootstrap gate; everything else is client-side.
