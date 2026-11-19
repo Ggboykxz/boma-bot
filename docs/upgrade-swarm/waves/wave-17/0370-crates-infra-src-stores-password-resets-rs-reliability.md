@@ -11,12 +11,11 @@ no concurrency or fault-injection test was run.
 - All three methods run through `tenant::as_system(..., SystemReason::Authentication, ...)`; the
   table is RLS-protected with `FORCE` and a system-only policy (`0048:18-22`) — a good boundary.
 - `create()` inserts `(id, user_id, token_hash, expires_at, created_at)`; `token_hash bytea` is
-  UNIQUE (`0048:9`), with no CHECK on hash length or `expires_at > created_at`. `consume()` is one
-  atomic statement:
-  `UPDATE … SET used_at=$2 WHERE token_hash=$1 AND used_at IS NULL AND expires_at > $2 RETURNING user_id`.
-  Hash, single-use and expiry are folded into the write — the right pattern.
-- `revoke_all_for_user()` is a separate statement
-  `UPDATE … SET used_at=$2 WHERE user_id=$1 AND used_at IS NULL` with no expiry predicate.
+  UNIQUE (`0048:9`), with no CHECK on hash length or `expires_at > created_at`.
+- `consume()` is one atomic statement — `UPDATE … SET used_at=$2 WHERE token_hash=$1 AND
+  used_at IS NULL AND expires_at > $2 RETURNING user_id` — folding hash, single-use and expiry
+  into the write: the right pattern. `revoke_all_for_user()` is a separate statement
+  `UPDATE … SET used_at=$2 WHERE user_id=$1 AND used_at IS NULL`, with no expiry predicate.
 - `tenant::unavailable` maps **every** SQL error (including the unique violation on `token_hash`
   and serialization failures) to `AppError::Unavailable`. A malformed returned `user_id` also
   maps to `Unavailable` (`password_resets.rs:78`).
@@ -117,6 +116,4 @@ reset flow shape and needs the REQ-040 concurrency expectation confirmed.
 - Is `password_version`/advisory-lock serialization (H3) in scope, given REQ-040 is broad and two
   simultaneous resets of one account are unlikely but not impossible?
 - Does any downstream consumer read raw `password_reset_tokens` rows, or are audit events the only
-  required record (H6)?
-- Confirm D-08 ("auth delegated wholesale to a library") does not already cover H7's logging
-  concern before opening a new defect entry.
+  required record (H6)? Confirm D-08 does not already cover H7's logging concern.
