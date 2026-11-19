@@ -88,26 +88,23 @@ caller could miss (GUESS).
 
 ## Risks / trade-offs
 
-- R1. Allowed edges reject previously accepted moves — externally visible; record any restriction
-  in `docs/PARITY.md` with approval. Default to all forward + explicit reopen edges so no current
-  UI flow breaks.
-- R2. P2/P3 change an app port and both store implementations (Postgres + testkit) and need a
-  migration for P3. Keep the RPC error body byte-identical.
-- R3. P4 adds a table and changes endpoint signatures; the spec has no explicit retry need — list
-  it in `docs/STATE.md` as a proposal first. Never reuse a security token as the key.
-- R4. P5/P6 change error text and rule location; update fixtures and add a test that a newline in a
-  title cannot forge a log line.
-- R5. `chars().count()` is already O(n); cap body size at the HTTP boundary so a multi-megabyte
-  payload never reaches the validator.
-- R6. P8 may need a column rewrite; ship as a consistency/metric check first.
-- English only; keep `cargo fmt --check`, `clippy -D warnings` and REQ-038 tests green each step.
+- R1. Allowed edges reject previously accepted moves — externally visible; record restrictions in
+  `docs/PARITY.md` with approval. Default to forward + explicit reopen edges.
+- R2. P2/P3 change an app port and both stores (Postgres + testkit), plus a P3 migration. Keep the
+  RPC error body byte-identical.
+- R3. P4 adds a table and changes endpoints; the spec has no explicit retry need — list it in
+  `docs/STATE.md` first. Never reuse a security token as the key.
+- R4. P5/P6 change error text and rule location; update fixtures and test that a newline in a title
+  cannot forge a log line.
+- R5. `chars().count()` is already O(n); cap body size at the HTTP boundary.
+- R6. P8 may need a column rewrite; ship as a consistency/metric check first. English only; keep
+  `cargo fmt --check`, `clippy -D warnings` and REQ-038 tests green each step.
 
 ## Tests (traceable names)
 
 `req_038_state_can_move_allows_forward_edges`, `req_038_state_can_move_rejects_illegal_jump`,
 `req_038_move_to_if_rejects_stale_source`, `req_038_move_is_idempotent_under_replay`,
-`req_038_create_is_idempotent_under_retry`, `req_038_validation_error_never_reflects_input`,
-`req_038_empty_comment_rejected_in_domain`, plus a `proptest` for both validators (P7).
+`req_038_create_is_idempotent_under_retry`, `req_038_validation_error_never_reflects_input`, `req_038_empty_comment_rejected_in_domain`, `proptest` for both validators (P7).
 
 ## Non-goals
 
@@ -117,7 +114,6 @@ new states or wire values; no change to the `BOT-<n>` format; no background-run 
 
 ## Recommendation
 
-Wave A (domain-only, revertable): P5, P6, P7, P8-tests + P1's `can_move` and tests. Wave B
-(cross-crate): P2 with a concurrent-move fault test, then P4 after a STATE.md decision. Defer P3
-(migration) and all expiry work. Facts CONFIRMED by reading; GUESS impact needs the tests above.
-No commands were run this pass.
+Wave A (domain-only): P5, P6, P7, P8-tests + P1's `can_move` and tests. Wave B (cross-crate): P2
+with a concurrent-move fault test, then P4 after a STATE.md decision. Defer P3 (migration) and all
+expiry work. Facts CONFIRMED by reading; GUESS impact needs the tests above. No commands run.

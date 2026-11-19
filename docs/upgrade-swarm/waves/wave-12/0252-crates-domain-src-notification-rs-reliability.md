@@ -116,5 +116,4 @@ invalid states — the same validation vacuum as `external.rs`.
 The domain is a passive data bag: secrecy, dedup, cap and key validity are all conventions in the
 app/RPC/DB layers, so alternate write paths persist invalid or secret-bearing state, the cap is
 check-then-act and bypassable N-fold, and invalid keys become undeletable zombies. H1/H2 are local and
-reversible (best first wave); H3–H5 harden reliability but change visible behavior and need owner
-sign-off. No code was changed by this worker.
+reversible (best first wave); H3–H5 change visible behavior and need owner sign-off. No code changed.

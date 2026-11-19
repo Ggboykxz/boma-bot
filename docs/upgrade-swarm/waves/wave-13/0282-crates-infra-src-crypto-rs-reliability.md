@@ -3,22 +3,19 @@
 Module: `crates/infra/src/crypto.rs`
 Lens: reliability
 Anchors: REQ-040/041 (sessions), D-08 (assert security config), AGENTS.md Rust standards
-(no blocking work on the async runtime, secrets in `secrecy`, constant-time comparison,
-no panics in non-test code).
+(no blocking async work, secrets in `secrecy`, constant-time comparison, no non-test panics).
 
-Claim status: "Current behavior" is CONFIRMED by reading this session — `crypto.rs` in full,
-the port signatures (`app/src/ports.rs:4117-4165`), the only in-tree caller of the exported
-helper (`stores/sessions.rs:47-62`), the auth reliability report (wave-9/0122), and the
-duplicate helpers (`app/src/usecases.rs:1932`, `domain/src/messaging.rs:85`,
-`testkit/src/scripts.rs:260`). Proposals and risks are GUESS (design inference; not
-implemented or tested by this worker).
+Claim status: "Current behavior" is CONFIRMED by reading `crypto.rs` in full, the port
+signatures (`app/src/ports.rs:4117-4165`), the exported helper's only caller
+(`stores/sessions.rs:47-62`), the auth report (wave-9/0122), and the duplicate helpers
+(`usecases.rs:1932`, `messaging.rs:85`, `scripts.rs:260`). Proposals/risks are GUESS.
 
 ## Current behavior (CONFIRMED)
 
-- Four adapters: `Argon2idHasher` (Argon2id default params, `try_generate_salt()`),
-  `TokenGenerator` (32 B `SysRng` → base64url token; SHA-256 for storage),
-  `IdGenerator` (19 B → 26 chars, counter fallback on RNG failure), `SystemClock`
-  (RFC 3339, second precision, epoch fallback), plus public `constant_time_eq`.
+- Four adapters: `Argon2idHasher` (Argon2id defaults, `try_generate_salt()`), `TokenGenerator`
+  (32 B `SysRng` → base64url token; SHA-256 for storage), `IdGenerator` (19 B → 26 chars,
+  counter fallback on RNG failure), `SystemClock` (RFC 3339, epoch fallback), plus public
+  `constant_time_eq`.
 - `hash`/`verify` are `async fn` but run Argon2 **synchronously on the caller's thread**.
 - Token/ID/password values are plain `String`/`&str`; local byte buffers are never zeroized.
 - RNG policy is split: token and password fail closed to `AppError::Unavailable`; the ID path
@@ -41,10 +38,9 @@ metric on every RNG failure / every ID-fallback, so a degrading CSPRNG is loud, 
 Keep token generation fail-closed. If any id is used as a bearer capability, move it to a
 `Result`-returning port and fail closed — that is a cross-crate API change (ADR + DEVIATION).
 
-Risks: a self-test can false-positive on a mocked RNG in tests — inject a test RNG, do not
-assert on wall-clock timing. Converting `new_id` to `Result` touches every store and test
-(hundreds of call sites); defer unless invitations truly rely on id secrecy. Paper fallback
-IDs must be documented as non-secret or they become a latent auth bug.
+Risks: a self-test can false-positive under a mocked RNG — inject a test RNG. Converting
+`new_id` to `Result` touches hundreds of call sites; defer unless invitations rely on id
+secrecy. Paper fallback IDs must be documented as non-secret or become a latent auth bug.
 
 ## Failure mode 2 — Key / secret handling
 
@@ -63,10 +59,9 @@ that `TokenGenerator` must stay high-entropy and comparison must stay constant-t
 Move rehash-on-login to the accounts use case (compare parsed params to current, rewrite on
 successful verify).
 
-Risks: wrapping return values in `secrecy::SecretString` is a wide ripple through the
-`TokenGenerator` port and all callers (`usecases.rs`, `accounts.rs`, `api/*`, `testkit`) —
-needs an ADR, not a v0.4.0 fast-follow. Rehash-on-login adds a DB write to the auth path;
-gate it behind a params-drift check and a test.
+Risks: `secrecy::SecretString` ripples through the port and all callers (`usecases.rs`,
+`accounts.rs`, `api/*`, `testkit`) — needs an ADR, not a v0.4.0 fast-follow. Rehash-on-login
+adds a DB write to auth; gate it behind a params-drift check and a test.
 
 ## Failure mode 3 — Constant-time comparison (CONFIRMED defect)
 
@@ -100,8 +95,8 @@ unrenderable clock as `Unavailable` rather than epoch; if the `Clock` trait must
 infallible, at minimum alert loudly. Pin a regression test that the canonical RFC-3339
 format is unchanged (the lexical compare depends on it).
 
-Risks: changing `Clock::now()` to `Result<String, _>` is a trait-wide change (ADR). Counters
-are internal-only and safe. Any expiry-format change is a DEVIATION awaiting approval.
+Risks: `Clock::now() -> Result<String, _>` is a trait-wide change (ADR). Counters are internal
+and safe. Any expiry-format change is a DEVIATION awaiting approval.
 
 ## Reliability cross-cutting — blocking the async runtime (CONFIRMED)
 
@@ -110,17 +105,14 @@ inline; under concurrent logins this blocks Tokio worker threads and inflates p9
 Move the Argon2 work into `tokio::task::spawn_blocking`, cloning owned inputs into the
 closure and zeroizing them afterwards.
 
-Risks: requires `Argon2: Clone` (it is `Clone`, CONFIRMED l.41) and owned `'static` data;
-the extra secret clone must be zeroized. `spawn_blocking` adds scheduling overhead on an
-otherwise idle single-core box — measure before/after with a benchmark.
+Risks: needs `Argon2: Clone` (CONFIRMED l.41) and owned `'static` data; the secret clone must
+be zeroized. `spawn_blocking` adds overhead on an idle box — benchmark before/after.
 
 ## Priority for v0.4.0
 
 1. Flip the length-check side channel and add the RNG-failure/clock-fallback counters (small,
    no interface change).
 2. Wrap Argon2 work in `spawn_blocking` + zeroize local buffers (internal only).
-3. Consolidate the constant-time helper and add the entropy/format invariant tests (ADR for
-   the shared-crate dependency).
-
-Each item needs REQ-tagged tests (`req_040_*`/`req_041_*` names). Any externally visible
+3. Consolidate the constant-time helper and add entropy/format invariant tests (ADR for the
+   shared-crate dependency). Each item needs REQ-tagged tests (`req_040_*`/`req_041_*` names). Any externally visible
 auth or expiry change is a DEVIATION in `docs/PARITY.md` awaiting approval.

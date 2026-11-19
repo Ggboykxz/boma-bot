@@ -18,8 +18,8 @@ pool**: when the pool is exhausted, `/ready` fails too, so an orchestrator sees 
 otherwise-healthy but busy process as down and restarts it, amplifying the incident.
 
 Hardening:
-- Add `idle_timeout`/`max_lifetime` (recycle stale or leaked connections) and a
-  conservative `min_connections` for steady-state latency; keep values in typed config.
+- Add `idle_timeout`/`max_lifetime` (recycle stale connections) and a conservative
+  `min_connections` for steady-state latency; keep values in typed config.
 - Emit pool metrics (`size`, `num_idle`, acquire wait time, timeouts) via `tracing`/metrics
   so exhaustion is observable before it becomes a restart. Give the probe a **dedicated,
   small connection budget** (separate pool or reserved permit) so a saturated request
@@ -42,9 +42,9 @@ midway leaves `success = false`; subsequent runs refuse to proceed until repaire
 code checks that the applied schema version matches the binary's expectations.
 
 Hardening:
-- Add an explicit preflight that reports pending/applied/divergent migrations
-  (`MIGRATOR.validate_applied` / applied-vs-available set) and fail fast on a dirty
-  `_sqlx_migrations` row with an operator-facing remediation message.
+- Add a preflight reporting pending/applied/divergent migrations (`MIGRATOR.validate_applied`
+  / applied-vs-available set); fail fast on a dirty `_sqlx_migrations` row with an
+  operator-facing remediation message.
 - Make `migrate()` idempotent-and-loud (log applied/skipped counts; keep the existing
   double-apply no-op test, tests/database.rs l.44-49). Enforce gap-free version numbers
   with a CI check; reject duplicate versions; keep migrations forward-only/transactional.
@@ -72,11 +72,9 @@ Hardening:
 - Add `connect_timeout` to `PgConnectOptions` and bounded TCP keepalives/keepalive
   intervals; set `idle_timeout`/`max_lifetime` so pools heal after failover.
 - Enable `test_before_acquire` (or periodic health validation) so dead connections are
-  recycled rather than returned to callers.
-- Record connection-error and reconnect events at `warn`/`info` with a counter; keep
-  credentials out of logs (REQ-054 — the URL is already redacted in config.rs l.106-113).
-- Retry transient `sqlx::Error` classes (with jittered backoff, bounded by
-  `acquire_timeout`) at the use-site layer, not blindly inside the adapter.
+  recycled, not returned. Record connection-error/reconnect events at `warn`/`info` with
+  a counter; keep credentials out of logs (REQ-054 — URL already redacted, config.rs l.106-113).
+- Retry transient `sqlx::Error` classes (jittered backoff bounded by `acquire_timeout`) at the use-site layer, not in the adapter.
 
 Risks: `test_before_acquire` adds latency and load on every checkout — make it
 configurable. Aggressive recycling can thrash a pool during a short outage; tune
@@ -98,15 +96,13 @@ Hardening:
 - Extend readiness with a cheap schema-existence check (e.g. `SELECT 1 FROM
   _sqlx_migrations LIMIT 1` plus one sentinel table) so first-launch reports
   *not ready* until migrations are applied. Keep the reason string generic (REQ-054).
-- Add a startup/bootstrap diagnostic that distinguishes "DB unreachable", "DB empty /
-  migrations pending", and "schema version mismatch" in operator logs.
-- Verify `search_path=public` resolves the expected schema at startup (fail fast if a
-  role-level override would shadow it).
+- Add a startup diagnostic distinguishing "DB unreachable", "DB empty / migrations
+  pending", and "schema version mismatch". Verify `search_path=public` resolves the
+  expected schema at startup (fail fast if a role override would shadow it).
 
 Risks: a schema-aware probe couples readiness to migration state and could mark a
-running-but-migrating replica unready — acceptable, but document it; keep it behind a
-config flag if the spec treats `/ready` as liveness-only → DEVIATION check. Ensuring the
-sentinel table is cheap and stable across migrations avoids probe flapping.
+running-but-migrating replica unready — acceptable if documented; keep it behind a config
+flag if `/ready` is liveness-only → DEVIATION check. Keep the sentinel table cheap/stable.
 
 ## Priority for v0.4.0
 
@@ -117,8 +113,7 @@ sentinel table is cheap and stable across migrations avoids probe flapping.
 3. Migration safety: applied/pending/dirty preflight, gap-free CI check, documented
    `boma migrate`-before-`serve` deploy order and dirty-state repair runbook.
 
-Each item needs REQ-tagged tests (module-level `req_053_*`/`req_054_*` names) — unit
-tests for option construction and error classification, integration tests in
-`crates/infra/tests/database.rs` against a real database for the probe/failover cases.
-Any externally visible change (readiness semantics, startup gate, retry behavior) must
-be recorded as a `docs/PARITY.md` DEVIATION awaiting approval before shipping.
+Each item needs REQ-tagged tests (`req_053_*`/`req_054_*`): unit tests for option
+construction/error classification and integration tests in
+`crates/infra/tests/database.rs` for the probe/failover cases. Any externally visible
+change (readiness semantics, startup gate, retries) is a `docs/PARITY.md` DEVIATION.

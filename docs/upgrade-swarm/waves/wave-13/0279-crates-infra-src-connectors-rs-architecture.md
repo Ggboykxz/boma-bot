@@ -11,16 +11,16 @@
 ## Current structure (as read)
 
 - One `HttpConnectorRunner { http: reqwest::Client }` (30 s timeout, redirects off) implements the
-  single coarse `ConnectorRunner::run`. Dispatch is one `match (connector_id, tool)` with two arms:
-  `("rss","read")` and `("http-json","get")`; anything else → `InvalidName("…does not have that tool")`.
-- Two constants: `MAX_BODY_BYTES` = 512 KiB (feed) and `MAX_JSON_BYTES` = 16 KiB (JSON answer).
-- `fetch()` guards the URL then GETs; **the http-json arm re-implements the same guard + GET inline**
-  to add the bearer header, duplicating URL check, content-type read, body read and size check.
-- Feed parsing is hand-rolled string scanning: `parse_feed`, `tag_text`, `link_of`, `clean_text`
-  (RSS 2.0 `<item>` + Atom `<entry>`, CDATA trim, six named entities). Three unit tests cover only
+  coarse `ConnectorRunner::run`: a `match (connector_id, tool)` with `("rss","read")` and
+  `("http-json","get")` arms; anything else → `InvalidName("…does not have that tool")`. Caps:
+  `MAX_BODY_BYTES` = 512 KiB (feed), `MAX_JSON_BYTES` = 16 KiB (JSON).
+- `fetch()` guards then GETs; **the http-json arm re-implements the same guard + GET inline** to add
+  the bearer header, duplicating URL check, content-type read, body read and size check.
+- Feed parsing is hand-rolled string scanning (`parse_feed`, `tag_text`, `link_of`, `clean_text`:
+  RSS 2.0 `<item>` + Atom `<entry>`, CDATA trim, six named entities). Three unit tests cover only
   parsing; none cover fetch, the guard path, the http-json arm or oversized bodies.
-- Every failure — bad URL, private address, missing credential, oversized body, unknown tool — is
-  mapped to `AppError::Rule(DomainError::InvalidName(…))`, surfaced by `usecases.rs:1065` as
+- Every failure — bad URL, private address, missing credential, oversized body, unknown tool — maps
+  to `AppError::Rule(DomainError::InvalidName(…))`, surfaced at `usecases.rs:1065` as
   `{"error": "the connector refused: …"}`.
 
 **Architecture gap:** the catalogue (`domain/connector.rs::builtin_connectors`) and the runner's
@@ -37,15 +37,14 @@ Keep `HttpConnectorRunner` as the public `ConnectorRunner` implementation (binar
 
 ```
 HttpConnectorRunner { http, adapters: HashMap<(String,String), Box<dyn ConnectorAdapter>>, limits }
-ConnectorAdapter (private trait)  // run(&self, args, credential, &Client) -> Result<Value, ConnectorError>
-RssReadAdapter                    // owns feed parsing + 512 KiB cap
-HttpJsonGetAdapter                // owns bearer header + 16 KiB cap
+ConnectorAdapter (private trait)  // run(args, credential, &Client) -> Result<Value, ConnectorError>
+RssReadAdapter / HttpJsonGetAdapter  // one per tool: feed parsing / bearer header + caps
 ConnectorError (thiserror)        // typed; mapped to AppError once at the port boundary
 ConnectorLimits { timeout, feed_cap, json_cap }  // validated, injected, defaults unchanged
 ```
 
-Register each adapter from `builtin_connectors()` at construction so catalogue and dispatch cannot
-drift; keep the public port signature and the `connector.<id>.<tool>` keys byte-identical.
+Register adapters from `builtin_connectors()` at construction so catalogue and dispatch cannot drift;
+keep the public port signature and `connector.<id>.<tool>` keys byte-identical.
 
 ## Concrete upgrades (with risks)
 
@@ -68,8 +67,8 @@ frames accumulating bytes with an early abort at `cap`. The rss adapter passes 5
 16 KiB. **Risks:** (a) the http-json adapter must still return `{status, contentType, body}` and
 keep parsing JSON-or-lossy-text exactly as now; (b) preserving the 30 s timeout and redirect policy
 is mandatory (parity); (c) chunked reads change allocation profile but not output — prove with
-wiremock that an oversized body is rejected without full buffering; (d) do not re-resolve/pin the
-checked host differently from `net_safety`'s documented per-call model (D-05).
+wiremock that an oversized body is rejected without full buffering; (d) keep `net_safety`'s
+documented per-call host-resolution model (D-05).
 
 ### 3. Introduce typed connector errors; map to `AppError` once at the port
 **CONFIRMED:** six distinct failures all become `DomainError::InvalidName`. Change: a private
@@ -105,12 +104,12 @@ the credential-bearing adapter; (d) cheap counters/timings must not become a DoS
 ## Risks & ordering
 
 - #3 and #1 are behavior-preserving if strings/keys stay fixed — do them first (with #4's proptest
-  scaffold), then #2, then #5.
-- Any wire/string/key change is a DEVIATION: record in `docs/PARITY.md` and wait for owner approval
-  (`AGENTS.md`). The spec only mandates catalogue/install behavior (REQ-032), not these internals
-  (**GUESS**), so structural refactors should be invisible to clients.
-- Keep `req_032_*` names and the `lib.rs:44` re-export stable; re-run `cargo fmt --check`,
-  `clippy -D warnings` and tests in the implementing session — none of that was run by this reader.
+  scaffold), then #2, then #5. The spec mandates only catalogue/install behavior (REQ-032), not
+  these internals (**GUESS**), so structural refactors must stay invisible to clients.
+- Any wire/string/key change is a DEVIATION: log in `docs/PARITY.md` and wait for owner approval
+  (`AGENTS.md`). Keep `req_032_*` names and the `lib.rs:44` re-export stable.
+- Re-run `cargo fmt --check`, `clippy -D warnings` and tests in the implementing session — none
+  of that was run by this reader.
 
 ## Tests to add (REQ ids in names)
 
@@ -120,4 +119,4 @@ the credential-bearing adapter; (d) cheap counters/timings must not become a DoS
 - `req_032_feed_parser_never_panics_on_arbitrary_bytes` (proptest) + Atom/RSS entity cases.
 - `req_032_connector_call_emits_structured_span_without_url_or_token`.
 
-Line budget: ~115. Status: proposal only; no code changed (READ-ONLY worker).
+Status: proposal only; no code changed (READ-ONLY worker).
