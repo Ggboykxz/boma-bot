@@ -17,10 +17,9 @@ ADR-002. CONFIRMED = read this session; runtime likelihood/impact = GUESS. Propo
   system with Authentication/AccountExport reasons; `member_ids_of` maps any bad stored id to
   `Unavailable` (:138-142). `find`/`membership` are tenant-scoped JOINs.
 - Schema: `space_members` PK (space_id,user_id), both FKs `ON DELETE CASCADE` (0002_m1.sql:133-139);
-  `space_keys.space_id` is PK/FK `ON DELETE CASCADE` (0026:7-13); `bot_secrets` cascades from space
-  and bot (0025:7-17). DEKs are minted **lazily** by `load_or_create_dek` on first secret
-  write/read, using `ON CONFLICT DO NOTHING` + re-read of the surviving row (space_keys.rs:23-62);
-  `stores/secrets.rs:62-90` keeps a second inline copy "stable for the recorded path".
+  `space_keys.space_id` and `bot_secrets` also cascade from space (0026:7-13, 0025:7-17). DEKs are
+  minted **lazily** by `load_or_create_dek` (`ON CONFLICT DO NOTHING` + survivor re-read,
+  space_keys.rs:23-62); `stores/secrets.rs:62-90` keeps a second inline copy "stable for the recorded path".
 - `spaces_of`/`default_for` order by app-provided `created_at` (`default_for` tie-breaks by `id`, :246);
   all driver errors map to `Unavailable` (tenant.rs:153-156).
 
@@ -40,9 +39,8 @@ created and populated, yet permanently unable to hold secrets if the master key 
 first secret write — the failure surfaces much later and far from its cause. Two independent
 load-or-create copies (shared helper vs inline in `secrets.rs`) both rely on `ON CONFLICT DO NOTHING`
 + survivor re-read (correct shape), but any drift between them can let a first-write race seal a
-secret under a DEK that is discarded, orphaning ciphertext. `open_for_space` also calls
-load-or-create, so a read path can mint a key. Note: casing/nonce scheme must stay identical — verify
-before any dedup.
+secret under a discarded DEK, orphaning ciphertext; `open_for_space` also mints on a read. Verify the
+scheme stays byte-identical before dedup.
 
 ### 2.3 Cascade deletes are broad and irreversible (CONFIRMED shape)
 One `DELETE FROM spaces` cascades memberships, bots, threads, `space_keys`, `bot_secrets` and every
@@ -60,18 +58,16 @@ index enforces one default space per organization, so `default_for` resolves tie
   poisoning). FK makes this unlikely in normal operation, but restores/imports can bypass it.
 - Every driver error — FK violation, unique violation, lock timeout, corrupt row — is `Unavailable`
   (a transient class clients retry). Permanent corruption never heals and retries amplify load.
-- No structured tenant/actor fields in the warn logs, and no per-statement timeout: a lock wait on a
-  big cascade can hang a request with little diagnostic context.
-- `create`/`add_member` trust app-provided `created_at`/`now`; other tables use DB `now()`. Ordering
-  in `spaces_of`/`default_for` can be skewed by a drifted client clock.
+- No structured tenant fields or statement timeout: a big-cascade lock wait hangs a request with no
+  context. App `created_at`/`now` vs DB `now()` elsewhere can skew `spaces_of`/`default_for` ordering.
 
 ## 3. Concrete hardening for v0.4.0 (ordered by value/risk)
 
 - **A. Provision the DEK in `create` (medium-high).** Pass `SecretBox` into the store and insert a
   wrapped key in the same transaction (or verify presence before returning success), so a created
-  space is always secret-ready. *Risk:* master-key/secrets outage now fails space creation — decide
-  whether that coupling is acceptable; ADR + REQ-046 sign-off. Lighter alternative: keep lazy mint
-  but make `create_space` provision idempotently with a bounded retry.
+  space is always secret-ready. *Risk:* a secrets outage now fails space creation — decide if
+  acceptable (ADR + REQ-046 sign-off). Lighter: keep lazy mint but let `create_space` provision
+  idempotently.
 - **B. Last-owner guard + memberless-space reaper (medium).** Add `member_count`/`delete` support in
   this store; forbid removing the final owner (domain rule) and periodically flag/purge zero-member
   spaces. *Risk:* deletion policy is a REQ-044/045 question — do not guess; STATE + ADR.

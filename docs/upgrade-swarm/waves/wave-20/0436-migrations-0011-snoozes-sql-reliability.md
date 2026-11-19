@@ -15,18 +15,16 @@ boma.current_space_id() OR boma.is_system()`. The deadline is **not** enforced b
 filters at read time with `LEFT JOIN thread_snoozes ... s.snoozed_until > now()`
 (`roster.rs:56-57`); clearing deletes the row (`roster.rs:88`); snoozing upserts with
 `INSERT ... ON CONFLICT DO UPDATE` guarded by `WHERE EXISTS (thread in caller space)`
-(`roster.rs:106-112`). RLS is defence in depth; the SQL predicates are defence in fact
-(`roster.rs:43-44,103-105`). Everything below is a *later* migration / config change; the file itself
-is untouched (additive-only).
+(`roster.rs:106-112`). RLS is defence in depth; SQL predicates are defence in fact
+(`roster.rs:43-44,103-105`). Everything below is a *later* migration/config change; the file is untouched.
 
 ## What is already right (keep)
 
-- FORCE RLS + a closed-form policy: no tenant set ⇒ `current_space_id()` is NULL ⇒ comparison false,
-  so a member context fails closed; only an explicit `boma.system_reason` crosses tenants
-  (`0002_m1.sql:30-42`). CONFIRMED.
+- FORCE RLS + a closed-form policy: no tenant set ⇒ `current_space_id()` NULL ⇒ comparison false, so a
+  member context fails closed; only an explicit `boma.system_reason` crosses tenants (`0002_m1.sql:30-42`). CONFIRMED.
 - Three `ON DELETE CASCADE` FKs mean a deleted thread/space/user cannot leave an orphan snooze that
   hides a chat forever. CONFIRMED.
-- `timestamptz` + `boma.rfc3339()` (`0002_m1.sql:49-53`) give one canonical UTC wire shape. CONFIRMED.
+- `timestamptz` + `boma.rfc3339()` give one canonical UTC wire shape (`0002_m1.sql:49-53`). CONFIRMED.
 
 ## Failure-mode inventory
 
@@ -56,16 +54,14 @@ grows without bound on a busy deployment — contrary to the REQ-009 "at scale" 
 index on `snoozed_until` or `space_id`, so a future cleanup scan would be a full sequential scan.
 
 F5 — Write races and error classification (CONFIRMED in app, migration-adjacent). `ON CONFLICT DO
-UPDATE` has no `updated_at` guard, so an older snooze can overwrite a newer one under interleaved
-requests (last-write-wins, no lost-update check). A malformed `until` reaches `$4::timestamptz` and a
-cast error is mapped through `tenant::unavailable` (likely 503) instead of a 400 — an input error
-wearing an outage's costume. `now()` is transaction-start time, so very long transactions can act on
-a slightly stale expiry.
+UPDATE` has no `updated_at` guard, so an older snooze can overwrite a newer one (last-write-wins). A
+malformed `until` reaches `$4::timestamptz` and a cast error is mapped through `tenant::unavailable`
+(likely 503) instead of a 400 — an input error wearing an outage's costume. `now()` is
+transaction-start time, so long transactions can act on a slightly stale expiry.
 
 F6 — Migration mechanics (CONFIRMED). The single-element `FOREACH` loop is a copy-paste pattern from
-0010/0018/etc. and adds nothing; there is no `IF NOT EXISTS` idempotency guard, so a re-run against a
-tracked DB fails on `CREATE TABLE`. Low severity (the migration tracker prevents re-runs) but worth a
-note for disaster recovery.
+0010/0018/etc.; there is no `IF NOT EXISTS` guard, so a re-run fails on `CREATE TABLE`. Low severity
+(the tracker prevents re-runs) but note it for disaster recovery.
 
 ## Concrete hardening (prioritized, all additive)
 

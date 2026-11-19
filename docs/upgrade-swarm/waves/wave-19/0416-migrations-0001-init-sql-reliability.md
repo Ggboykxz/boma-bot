@@ -116,5 +116,4 @@ claim CONFIRMED only after that output exists.
 
 _Scope note: references are against `before-m5` as read this session; no CI, DB or test command was
 run in this READ-ONLY pass. P4/P5/P7–P10 assume the 0002 helpers and system-role conventions above
-(CONFIRMED from source); exact client-role names and any reader of the `schema` marker remain GUESS
-pending the greps noted in P5/R5._
+(CONFIRMED); client-role names and any reader of the `schema` marker remain GUESS pending P5/R5._
