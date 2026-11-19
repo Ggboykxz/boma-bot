@@ -8,4 +8,6 @@ no product code is edited by agents.
 Ideas, not imports: no upstream content enters; everything proposed must preserve our spec,
 charter and BoardUI rules.
 
-Status: waves 1-3 dispatched (briefs 1-48); 350 briefs queued. Wave = module batch.
+Status: **COMPLETE** — 530/530 briefs delivered (265 modules x 2 lenses), waves 1-22.
+Synthesis: `PLAN-v0.4.0.md` (12 cross-cutting themes, P0/P1/P2 roadmap, owner-decision register).
+Wave = module batch. All briefs are read-only proposals; no product code was edited.

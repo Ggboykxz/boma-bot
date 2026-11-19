@@ -1842,3 +1842,20 @@ for that session's pushes only, never written to any file, log or commit; the ow
 
 Row order matches implementation order.
 
+
+## Upgrade swarm (2026-11-19) — CONFIRMED
+
+- **500+ specialised workers** (530 briefs) read every module of this repo (265 modules x 2 lenses:
+  architecture, reliability) and wrote read-only v0.4.0 upgrade proposals under
+  `docs/upgrade-swarm/waves/` (wave-1..wave-22). Verified: 530 files, ids 0001-0530, all present.
+- Synthesis: `docs/upgrade-swarm/PLAN-v0.4.0.md` — 12 cross-cutting themes, P0/P1/P2 roadmap,
+  owner-decision register (RLS system binding, wire/status changes, public-share semantics,
+  signup.closed, macOS/arm64, attachments #20, additive constraint rewrites), coverage table.
+- Highest-signal recurring findings (CONFIRMED by source reads in the briefs, NOT yet fixed):
+  system-context RLS keyed on a plain GUC string with no tenant bound (`0412`, `0266`, `0432`);
+  validity checked at write but not read (`0236`, `0388`); error taxonomy collapse into
+  `Unavailable`/400 (`0136`, `0388`); O(N2) per-subscriber heartbeat storms (`0148`, `0147`);
+  serde/wire drift with a hollow OpenAPI contract (`0158`, `0142`).
+- No product code, spec, golden, dependency, gate or migration was edited — docs only. All schema
+  ideas are additive-only (sqlx checksum freeze, `0485`). This is a plan, not shipped behavior.
+- Next: owner picks items from the P0 list and the decision register; implement test-first with REQ-named tests.
