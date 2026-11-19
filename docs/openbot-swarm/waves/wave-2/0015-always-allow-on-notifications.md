@@ -1,7 +1,7 @@
 # 0015 — always-allow-on × notifications (parity proposal, Boma Bot)
 
-- Brief id 15, area `always-allow-on`, lens `notifications`. **PROPOSAL only** — no product code,
-  spec, golden, catalogue or traceability row changed.
+- Brief id 15, area `always-allow-on`, lens `notifications`. **PROPOSAL only** — no product code, spec,
+  golden, catalogue or traceability row changed.
 - Provenance: upstream read as **data** (HEAD `386085ff`) in `/tmp/opencode/openbot-parity/docs/
   architecture/{agents,channels-and-messaging}.md`; our side in REQ-064/065, `crates/domain/src/
   notification.rs`, `crates/app/src/{push,usecases}.rs`, `apps/web/components/thread/notifications-panel.tsx`,
@@ -13,21 +13,18 @@
 Some hosts let a person record a standing "always allow" choice for a class of tool call so later
 calls of that class proceed without a card. The notification corollary is what this lens cares about:
 
-- A client notifies when an agent **waits for the user** (question, approval, browser takeover) and
-  when a turn finishes or errors. One shared decision path combines a server level (`all` vs
-  `needs-me` for wait-events), a per-agent member level, the agent's switch and quiet routines; a
-  failed turn does not notify at `needs-me`.
+- A client notifies when an agent **waits for the user** (question, approval, browser takeover) or a
+  turn finishes/errors. One shared path combines a server level (`all` vs `needs-me`), a per-agent
+  level, the agent's switch and quiet routines; a failed turn does not notify at `needs-me`.
 - A request notification is **closed when answered**, even from another device. With previews on its
-  text is a short redacted lead of the action; with them off, a fixed generic sentence — a
-  deliberately content-light channel.
+  text is a short redacted lead; with them off, a fixed generic sentence — a content-light channel.
 - "Always allow" is stored with notification/approval preferences; an import from a less-trusted
   source downgrades an on-state to a **warning**, never a silent grant.
 
-Key insight is negative: an always-allowed call never *waits*, so it produces no `needs-me`
-notification; completion/error notifications are a separate axis. GUESS: no notification is
-manufactured for the mode switch. **Permissive defaults stay out** — no client-side stored consent,
-free-text tool keys, preview text in a push or downgrading-by-import. Always-allow is a named,
-reversible policy; pushes stay content-free.
+Key insight is negative: an always-allowed call never *waits*, so no `needs-me` notification;
+completion/error pushes are a separate axis. GUESS: none for the mode switch. **Permissive defaults
+stay out** — no client-side consent, free-text tool keys, preview text or downgrade-by-import;
+always-allow is a reversible policy and pushes stay content-free.
 
 ## 2. Notification parity, grounded in REQ-064/065 and approval cards
 
@@ -103,8 +100,7 @@ test("REQ-064 an auto-approved run sends no waiting push and keeps completion pu
 });
 ```
 
-It pins the silence, no policy mutation, completion enabled and no content leak; the name carries
-`REQ-064` so `tools/trace_check.py` counts it (a TRACEABILITY row follows only after the test exists).
+It pins the silence, no policy mutation, completion, no leak; `REQ-064` makes `tools/trace_check.py` count it.
 
 ## 5. First slice
 
@@ -112,13 +108,12 @@ It pins the silence, no policy mutation, completion enabled and no content leak;
 2. In `NotificationsPanel` only, render the read-only named note; leave checkboxes, cap, destination
    form and RPC calls untouched.
 3. **Do not** add an always-allow control, policy write RPC, `notify_waiting=false` side effect or
-   push dismiss/close — those change permission semantics and need a new REQ id, an ADR and owner
-   approval (`AGENTS.md`). Record them in `docs/STATE.md` as a later slice.
-4. Gates: web typecheck, lint, build, this test plus notifications-panel/golden/axe clusters
-   (light, dark, RTL, 360 px); update `docs/STATE.md` and `docs/UI.md`; no dependency change.
+   push dismiss/close — those change permission semantics and need a new REQ id, ADR and owner approval
+   (`AGENTS.md`); record in `docs/STATE.md` as a later slice.
+4. Gates: typecheck, lint, build, this test plus notifications-panel/golden/axe clusters (light, dark,
+   RTL, 360 px); update `docs/STATE.md`/`docs/UI.md`; no dependency change.
 
 ## Guardrails
 
-No upstream code, asset, wording, brand or preview text reproduced; inspiration only. No Pro; one
-design system, BoardUI free/installed components only. CONFIRMED only after a command actually ran;
-this document ran no build or test.
+No upstream code, asset, wording, brand or preview text; inspiration only. No Pro; one BoardUI
+design system. CONFIRMED only after a command ran; this document ran no build or test.
